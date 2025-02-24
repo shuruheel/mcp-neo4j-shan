@@ -14,8 +14,8 @@ import { Neo4jMemory } from './neo4j-memory.js'
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  'neo4j+s://d52d525b.databases.neo4j.io',
-  Neo4jAuth.basic('neo4j', 'W08NkzBnSPr2qTQ6YYGSJmzTHImKsn6FSOzTjpMOjAA')
+  'neo4j+s://x.databases.neo4j.io',
+  Neo4jAuth.basic('neo4j', 'pwd')
 )
 
 const knowledgeGraphMemory:KnowledgeGraphMemory = new Neo4jMemory(neo4jDriver);
