@@ -14,6 +14,8 @@ This lets you use Claude Desktop, or any MCP Client, to use natural language to 
 
 ### `mcp-json-memory` - knowledge graph memory stored in a file
 
+### `mcp-neo4j-shan` - knowledge graph memory stored in Neo4j with node types and relations
+
 A reference server for modeling memory as a knowledge graph.
 
 ## Contributing
