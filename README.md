@@ -18,6 +18,19 @@ This lets you use Claude Desktop, or any MCP Client, to use natural language to 
 
 A reference server for modeling memory as a knowledge graph.
 
+## Environment Setup
+
+Each server that connects to Neo4j requires environment variables for database connection. Follow these steps:
+
+1. Copy the `.env.example` file in the server directory to `.env`
+2. Update the values in the `.env` file with your Neo4j database credentials:
+   ```
+   NEO4J_URI=neo4j+s://your-instance.databases.neo4j.io
+   NEO4J_USER=your_username
+   NEO4J_PASSWORD=your_password
+   ```
+3. The `.env` file is ignored by git to prevent committing sensitive information
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

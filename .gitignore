@@ -43,3 +43,10 @@ Thumbs.db
 
 .nx/cache
 .nx/workspace-data
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production
