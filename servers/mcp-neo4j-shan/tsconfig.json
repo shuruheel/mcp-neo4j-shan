@@ -11,10 +11,6 @@
     }
   ],
   "compilerOptions": {
-    "esModuleInterop": true,
-    "moduleResolution": "NodeNext",
-    "module": "NodeNext",
-    "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true
+    "esModuleInterop": true
   }
 }
