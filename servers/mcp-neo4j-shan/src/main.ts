@@ -9,6 +9,7 @@ import { driver as connectToNeo4j, auth as Neo4jAuth } from 'neo4j-driver'
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 
 import { KnowledgeGraphMemory, Entity, KnowledgeGraph, Relation } from "@neo4j/graphrag-memory";
 import { Neo4jMemory } from './neo4j-memory.js'
@@ -16,13 +17,12 @@ import { Neo4jMemory } from './neo4j-memory.js'
 // Load environment variables from .env file
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  process.env.NEO4J_URI,
-  Neo4jAuth.basic(process.env.NEO4J_USER, process.env.NEO4J_PASSWORD)
+  'neo4j://localhost:7687',
+  Neo4jAuth.basic('neo4j', 'marwhompa')
 )
 
 const knowledgeGraphMemory:KnowledgeGraphMemory = new Neo4jMemory(neo4jDriver);
