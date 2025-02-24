@@ -1,0 +1,39 @@
+{
+  "version": "6.0",
+  "nxVersion": "20.4.6",
+  "pathMappings": {},
+  "nxJsonPlugins": [],
+  "fileMap": {
+    "projectFileMap": {},
+    "nonProjectFiles": [
+      {
+        "file": ".editorconfig",
+        "hash": "5443105041930014821"
+      },
+      {
+        "file": ".gitignore",
+        "hash": "12474917728722778441"
+      },
+      {
+        "file": ".vscode/extensions.json",
+        "hash": "3833545590435012078"
+      },
+      {
+        "file": "README.md",
+        "hash": "12645951342822030859"
+      },
+      {
+        "file": "nx.json",
+        "hash": "651289373180679645"
+      },
+      {
+        "file": "package-lock.json",
+        "hash": "1910472542558555341"
+      },
+      {
+        "file": "package.json",
+        "hash": "9342558960126389220"
+      }
+    ]
+  }
+}

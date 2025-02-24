@@ -1,0 +1,65 @@
+{
+  "name": "mcp-neo4j-shan",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "servers/mcp-neo4j-shan/src",
+  "projectType": "application",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/esbuild:esbuild",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "platform": "node",
+        "outputPath": "dist/servers/mcp-neo4j-shan",
+        "format": ["esm"],
+        "bundle": false,
+        "main": "servers/mcp-neo4j-shan/src/main.ts",
+        "tsConfig": "servers/mcp-neo4j-shan/tsconfig.app.json",
+        "assets": ["servers/mcp-neo4j-shan/src/assets"],
+        "generatePackageJson": true,
+        "esbuildOptions": {
+          "sourcemap": true,
+          "outExtension": {
+            ".js": ".js"
+          }
+        }
+      },
+      "configurations": {
+        "development": {},
+        "production": {
+          "esbuildOptions": {
+            "sourcemap": false,
+            "outExtension": {
+              ".js": ".js"
+            }
+          }
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/js:node",
+      "defaultConfiguration": "development",
+      "dependsOn": ["build"],
+      "options": {
+        "buildTarget": "mcp-neo4j-shan:build",
+        "runBuildTargetDependencies": false
+      },
+      "configurations": {
+        "development": {
+          "buildTarget": "mcp-neo4j-shan:build:development"
+        },
+        "production": {
+          "buildTarget": "mcp-neo4j-shan:build:production"
+        }
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "outputs": ["{options.outputFile}"],
+      "options": {
+        "lintFilePatterns": ["servers/mcp-neo4j-shan/**/*.ts"]
+      }
+    }
+  }
+}
