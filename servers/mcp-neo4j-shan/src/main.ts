@@ -16,16 +16,13 @@ import { Neo4jMemory } from './neo4j-memory.js'
 // Load environment variables from .env file
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  process.env.NEO4J_URI || 'neo4j+s://x.databases.neo4j.io',
-  Neo4jAuth.basic(
-    process.env.NEO4J_USER || 'neo4j', 
-    process.env.NEO4J_PASSWORD || 'pwd'
-  )
+  process.env.NEO4J_URI,
+  Neo4jAuth.basic(process.env.NEO4J_USER, process.env.NEO4J_PASSWORD)
 )
 
 const knowledgeGraphMemory:KnowledgeGraphMemory = new Neo4jMemory(neo4jDriver);
