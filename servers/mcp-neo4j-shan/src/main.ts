@@ -40,7 +40,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "explore_context",
-        description: "Whenever the user shows interest in exploring a topic, use this tool FIRST to explore the complete context around relevant Entity, Event, Concept, Scientific Insight, or Law nodes in the knowledge graph. This tool reveals the neighborhood of relationships and connected nodes surrounding the specified node, providing deeper contextual understanding. Useful for building a comprehensive picture. Use this tool for all node types extracted from the user's query.",
+        description: "Whenever the user shows interest in exploring a topic, use this tool FIRST to explore the complete context around relevant Entity, Event, Concept, Scientific Insight, or Law nodes in the knowledge graph. This tool reveals the neighborhood of relationships and connected nodes surrounding the specified node, providing deeper contextual understanding with enhanced information:\n\n- For Entity nodes: Includes biographical information and key contributions when available\n- For Concept nodes: Includes definitions, examples, and multiple perspectives on the concept\n- For relationships: Includes explanatory context about how and why nodes are related\n\nUse this tool for all node types extracted from the user's query to build a comprehensive picture with rich contextual details.",
         inputSchema: {
           type: "object",
           properties: {
@@ -74,6 +74,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     description: "Node Type: Entity, Event, Concept, ScientificInsight, Law, Thought",
                     enum: ["Entity", "Event", "Concept", "ScientificInsight", "Law", "Thought"]
                   },
+                  // Fields for Entity type
+                  description: { type: "string", description: "Brief description of the entity" },
+                  biography: { type: "string", description: "Biographical information for people or historical background for organizations/objects" },
+                  keyContributions: { 
+                    type: "array", 
+                    items: { type: "string" },
+                    description: "Key contributions or significance of this entity" 
+                  },
                   // Fields for Node Type: Event
                   startDate: { type: "string", description: "Start date of the event (YYYY-MM-DD or descriptive)" },
                   endDate: { type: "string", description: "End date of the event (YYYY-MM-DD or descriptive)" },
@@ -85,13 +93,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   },
                   outcome: { type: "string", description: "Outcome of the event" },
                   // Fields for Node Type: Concept
-                  definition: { type: "string", description: "A brief definition of the concept" },
+                  definition: { type: "string", description: "A brief definition of the concept (1-2 concise sentences)" },
                   examples: {
                     type: "array",
                     items: { type: "string" },
                     description: "Examples for Concept type"
                   },
                   domain: { type: "string", description: "Domain of the Node Type (if any)" },
+                  perspectives: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Different viewpoints or perspectives on this concept"
+                  },
+                  historicalDevelopment: {
+                    type: "array",
+                    items: { 
+                      type: "object",
+                      properties: {
+                        period: { type: "string", description: "Time period or era" },
+                        development: { type: "string", description: "How the concept evolved during this period" }
+                      }
+                    },
+                    description: "How this concept has evolved over time"
+                  },
                   // Fields for Node Type: Scientific Insight
                   hypothesis: { type: "string", description: "Describe the hypothesis for the Scientific Insight node" },
                   evidence: {
@@ -131,7 +155,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
       {
         name: "create_relations",
-        description: "Whenever you create new nodes, always create any relevant new relations between nodes in the knowledge graph. Relations should be semantically meaningful and use active voice. Example relations between different node types:\n- Entity -> Concept: ADVOCATES, SUPPORTS, UNDERSTANDS\n- Entity -> Event: PARTICIPATED_IN, ORGANIZED, WITNESSED\n- Concept -> Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS\n- Event -> ScientificInsight: LED_TO, DISPROVED, REINFORCED\n- ScientificInsight -> Law: SUPPORTS, CHALLENGES, REFINES",
+        description: "Whenever you create new nodes, always create any relevant new relations between nodes in the knowledge graph. Relations should be semantically meaningful and use active voice. IMPORTANT: Always include a brief explanation (context field) for each relationship that describes how and why the nodes are connected (30-50 words).\n\nExample relations between different node types:\n- Entity -> Concept: ADVOCATES, SUPPORTS, UNDERSTANDS\n- Entity -> Event: PARTICIPATED_IN, ORGANIZED, WITNESSED\n- Concept -> Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS\n- Event -> ScientificInsight: LED_TO, DISPROVED, REINFORCED\n- ScientificInsight -> Law: SUPPORTS, CHALLENGES, REFINES\n\nWhen appropriate, include a confidence score (0.0-1.0) and citation sources for the relationship.",
         inputSchema: {
           type: "object",
           properties: {
@@ -145,6 +169,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   to: { type: "string", description: "The name of the node where the relation ends" },
                   toType: { type: "string", description: "The type of the node where the relation ends" },
                   relationType: { type: "string", description: "The type of the relation" },
+                  context: { type: "string", description: "Brief explanation (30-50 words) of how and why these nodes are related" },
+                  confidenceScore: { type: "number", description: "Confidence score for this relationship (0.0-1.0)" },
+                  sources: { 
+                    type: "array", 
+                    items: { type: "string" },
+                    description: "Citation sources supporting this relationship" 
+                  },
                 },
                 required: ["from", "to", "relationType"],
               },
@@ -155,7 +186,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "create_thoughts",
-        description: "When updating the knowledge graph, create Thought nodes representing an analysis, interpretation, or insight about the conversation. Use this tool to document your reasoning, connect ideas across different nodes, or capture important observations that should be preserved. Thoughts should be linked to relevant entities, concepts, events, scientific insights, laws, and other thoughts, building a network of connected insights. Each thought should have clear content and, when possible, include confidence level.",
+        description: "Only when specifically asked to add your thoughts to the knowledge graph, create Thought nodes representing an analysis, interpretation, or insight about the conversation. Use this tool to document your reasoning, connect ideas across different nodes, or capture important observations that should be preserved. Thoughts should be linked to relevant entities, concepts, events, scientific insights, laws, and other thoughts, building a network of connected insights. Each thought should have clear content and, when possible, include confidence level.",
         inputSchema: {
           type: "object",
           properties: {

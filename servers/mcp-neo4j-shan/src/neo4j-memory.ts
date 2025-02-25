@@ -20,6 +20,8 @@ interface EnhancedEntity extends BaseNode {
   confidence?: number;
   source?: string;
   description?: string;
+  biography?: string;  // Added field for biographical information
+  keyContributions?: string[];  // Added field for key contributions
 }
 
 interface Event extends BaseNode {
@@ -37,12 +39,14 @@ interface Event extends BaseNode {
 
 interface Concept extends BaseNode {
   nodeType: 'Concept';
-  definition: string;
+  definition: string;  // Required concise explanation of the concept (1-2 sentences)
   description?: string;
   examples: string[];
   relatedConcepts: string[];
   domain: string;
   significance?: string;
+  perspectives?: string[];  // Added field for multiple viewpoints on the concept
+  historicalDevelopment?: {period: string, development: string}[];  // Added field for temporal evolution
 }
 
 interface Thought extends BaseNode {
@@ -82,6 +86,9 @@ type EntityNode = Node<Integer, KnowledgeNode>
 interface EnhancedRelation extends Relation {
   fromType?: string;
   toType?: string;
+  context?: string;  // Added field for explanatory context of the relationship (30-50 words)
+  confidenceScore?: number;  // Added field for confidence scoring
+  sources?: string[];  // Added field for citation sources
 }
 
 type EntityRelationship = Relationship<Integer, Relation>
@@ -175,6 +182,8 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
                   node.confidence = entity.confidence,
                   node.source = entity.source,
                   node.description = entity.description,
+                  node.biography = entity.biography,
+                  node.keyContributions = entity.keyContributions,
                   node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
@@ -208,6 +217,8 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
                   node.relatedConcepts = COALESCE(entity.relatedConcepts, []),
                   node.domain = entity.domain,
                   node.significance = entity.significance,
+                  node.perspectives = $perspectives,
+                  node.historicalDevelopment = $historicalDevelopment,
                   node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
@@ -330,6 +341,8 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
                 node.confidence = $confidence,
                 node.source = $source,
                 node.description = $description,
+                node.biography = $biography,
+                node.keyContributions = $keyContributions,
                 node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             RETURN node
           `, {
@@ -337,7 +350,9 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
             observations: entity.observations || [],
             confidence: (entity as any).confidence || null,
             source: (entity as any).source || null,
-            description: (entity as any).description || null
+            description: (entity as any).description || null,
+            biography: (entity as any).biography || null,
+            keyContributions: (entity as any).keyContributions || []
           }));
           
           console.error(`Entity creation result: ${result.records.length > 0 ? 'Success' : 'Failed'}`);
@@ -387,6 +402,8 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
                 node.relatedConcepts = $relatedConcepts,
                 node.domain = $domain,
                 node.significance = $significance,
+                node.perspectives = $perspectives,
+                node.historicalDevelopment = $historicalDevelopment,
                 node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             RETURN node
           `, {
@@ -396,7 +413,9 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
             examples: (entity as any).examples || [],
             relatedConcepts: (entity as any).relatedConcepts || [],
             domain: (entity as any).domain || null,
-            significance: (entity as any).significance || null
+            significance: (entity as any).significance || null,
+            perspectives: (entity as any).perspectives || [],
+            historicalDevelopment: (entity as any).historicalDevelopment || []
           }));
           
           console.error(`Concept creation result: ${result.records.length > 0 ? 'Success' : 'Failed'}`);
@@ -556,7 +575,10 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
                                      {
                                        lastUpdated: datetime(),
                                        fromType: $fromNodeType,
-                                       toType: $toNodeType
+                                       toType: $toNodeType,
+                                       context: $context,
+                                       confidenceScore: $confidenceScore,
+                                       sources: $sources
                                      }, to, {})
           YIELD rel
           RETURN rel
@@ -565,7 +587,10 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
           toName: relation.to,
           relType: relation.relationType,
           fromNodeType: fromNodeType,
-          toNodeType: toNodeType
+          toNodeType: toNodeType,
+          context: (enhancedRelation as any).context || null,
+          confidenceScore: (enhancedRelation as any).confidenceScore || null,
+          sources: (enhancedRelation as any).sources || []
         }));
         
         if (result.records.length > 0) {
@@ -853,7 +878,8 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
                    any(obs IN entity.observations WHERE 
                      obs IS NOT NULL AND toLower(obs) CONTAINS toLower(token)
                    )
-              )
+                 )
+               )
             
             // Get relationships
             WITH entity
@@ -1403,11 +1429,31 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
       }
       
       // Convert nodes and relationships to entities and relations
-      const entities: Entity[] = allNodes.map(node => ({
-        name: node.properties.name,
-        entityType: node.properties.nodeType || 'Entity',
-        observations: node.properties.observations || []
-      }));
+      const entities: Entity[] = allNodes.map(node => {
+        // Create a basic entity with required properties
+        const entity: Entity = {
+          name: node.properties.name,
+          entityType: node.properties.nodeType || 'Entity',
+          observations: node.properties.observations || []
+        };
+        
+        // Add additional fields based on entity type
+        if (node.properties.nodeType === 'Entity') {
+          (entity as any).description = node.properties.description;
+          (entity as any).biography = node.properties.biography;
+          (entity as any).keyContributions = node.properties.keyContributions;
+          (entity as any).confidence = node.properties.confidence;
+        } 
+        else if (node.properties.nodeType === 'Concept') {
+          (entity as any).definition = node.properties.definition;
+          (entity as any).examples = node.properties.examples;
+          (entity as any).domain = node.properties.domain;
+          (entity as any).perspectives = node.properties.perspectives;
+          (entity as any).historicalDevelopment = node.properties.historicalDevelopment;
+        }
+        
+        return entity;
+      });
       
       const relations: Relation[] = allRelationships.map(rel => ({
         from: rel.startNodeElementId ? 
@@ -1561,21 +1607,59 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
       console.error(`Found ${allNodes.length} nodes and ${uniqueRelationships.length} relationships in context`);
       
       // Convert to entities and relations format for return
-      const entities: Entity[] = allNodes.map(node => ({
-        name: node.properties.name,
-        entityType: node.properties.nodeType || 'Entity',
-        observations: node.properties.observations || []
-      }));
+      const entities: Entity[] = allNodes.map(node => {
+        // Create a basic entity with required properties
+        const entity: Entity = {
+          name: node.properties.name,
+          entityType: node.properties.nodeType || 'Entity',
+          observations: node.properties.observations || []
+        };
+        
+        // Add additional fields based on entity type
+        if (node.properties.nodeType === 'Entity') {
+          (entity as any).description = node.properties.description;
+          (entity as any).biography = node.properties.biography;
+          (entity as any).keyContributions = node.properties.keyContributions;
+          (entity as any).confidence = node.properties.confidence;
+        } 
+        else if (node.properties.nodeType === 'Concept') {
+          (entity as any).definition = node.properties.definition;
+          (entity as any).examples = node.properties.examples;
+          (entity as any).domain = node.properties.domain;
+          (entity as any).perspectives = node.properties.perspectives;
+          (entity as any).historicalDevelopment = node.properties.historicalDevelopment;
+        }
+        
+        return entity;
+      });
       
-      const relations: Relation[] = uniqueRelationships.map(rel => ({
-        from: rel.startNodeElementId ? 
-          allNodes.find(n => n.elementId === rel.startNodeElementId)?.properties.name : 
-          rel.startNode.properties.name,
-        to: rel.endNodeElementId ? 
-          allNodes.find(n => n.elementId === rel.endNodeElementId)?.properties.name : 
-          rel.endNode.properties.name,
-        relationType: rel.type
-      }));
+      const relations: Relation[] = uniqueRelationships.map(rel => {
+        // Basic relation properties
+        const relation: Relation = {
+          from: rel.startNodeElementId ? 
+            allNodes.find(n => n.elementId === rel.startNodeElementId)?.properties.name : 
+            rel.startNode.properties.name,
+          to: rel.endNodeElementId ? 
+            allNodes.find(n => n.elementId === rel.endNodeElementId)?.properties.name : 
+            rel.endNode.properties.name,
+          relationType: rel.type
+        };
+        
+        // Add enhanced relation properties if they exist
+        if (rel.properties) {
+          if (rel.properties.context) {
+            (relation as any).context = rel.properties.context;
+          }
+          if (rel.properties.confidenceScore) {
+            (relation as any).confidenceScore = rel.properties.confidenceScore;
+          }
+          if (rel.properties.sources) {
+            (relation as any).sources = rel.properties.sources;
+          }
+        }
+        
+        return relation;
+      });
       
       return { entities, relations };
     } catch (error) {
