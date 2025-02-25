@@ -169,6 +169,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "The type of nodes to find",
               enum: ["Entity", "Event", "Concept", "ScientificInsight", "Law", "Thought"]
             },
+            query: {
+              type: "string",
+              description: "Optional search query to filter nodes of the specified type"
+            }
           },
           required: ["nodeType"],
         },
@@ -308,30 +312,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Here we're using the same pattern used in create_entities
       const searchQuery = args.query as string;
       
-      // Simplified approach: treat the entire query as all potential entity types
-      // This assumes Claude will have already identified the entity types in the query
-      const searchTerms = {
-        entities: [searchQuery],
-        concepts: [searchQuery],
-        events: [searchQuery],
-        scientificInsights: [searchQuery],
-        laws: [searchQuery],
-        thoughts: [searchQuery],
-        fuzzyThreshold: 0.6  // Lower threshold to ensure we get results
-      };
-      
+      // Use the robust search method that combines fuzzy matching with fallbacks
       return { 
         content: [{ 
           type: "text", 
           text: JSON.stringify(
-            await (knowledgeGraphMemory as Neo4jMemory).searchNodesWithFuzzyMatching(searchTerms), 
+            await (knowledgeGraphMemory as Neo4jMemory).robustSearch(searchQuery), 
             null, 
             2
           ) 
         }] 
       };
     case "search_nodes_by_type":
-      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).findNodesByType(args.nodeType as string), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).findNodesByType(args.nodeType as string, args.query as string), null, 2) }] };
     case "create_thoughts":
       return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).createThought(args as { 
         entityName?: string; 
