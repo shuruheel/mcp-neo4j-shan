@@ -748,34 +748,78 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
       
     case "explore_context":
-      result = await (knowledgeGraphMemory as Neo4jMemory).exploreContext(
-        args.nodeName as string,
-        args.maxDepth as number || 2
-      );
-      
-      // Ensure result is not undefined
-      if (!result) {
-        result = { entities: [], relations: [] };
+      try {
+        // Log the input parameters for debugging
+        console.error(`Exploring context for node: ${args.nodeName}, maxDepth: ${args.maxDepth || 2}`);
+        
+        result = await (knowledgeGraphMemory as Neo4jMemory).exploreContext(
+          args.nodeName as string,
+          args.maxDepth as number || 2
+        );
+        
+        // Ensure result has the expected structure even if null/undefined is returned
+        if (!result) {
+          console.error(`exploreContext returned undefined for node: ${args.nodeName}`);
+          result = { entities: [], relations: [] };
+        }
+        
+        // Ensure entities and relations are always arrays
+        if (!Array.isArray(result.entities)) {
+          result.entities = [];
+        }
+        
+        if (!Array.isArray(result.relations)) {
+          result.relations = [];
+        }
+        
+        // Get the correct tool prompt with fallback to system prompt
+        const promptToUse = TOOL_PROMPTS["explore_context"] || SYSTEM_PROMPT;
+        
+        return { 
+          content: [
+            {
+              role: "system",
+              content: {
+                type: "text",
+                text: promptToUse
+              }
+            },
+            {
+              role: "assistant",
+              content: {
+                type: "text",
+                text: JSON.stringify(result, null, 2)
+              }
+            }
+          ] 
+        };
+      } catch (error) {
+        console.error(`Error in explore_context tool: ${error}`);
+        
+        // Return a graceful error response with the same structure
+        return { 
+          content: [
+            {
+              role: "system",
+              content: {
+                type: "text",
+                text: TOOL_PROMPTS["explore_context"] || SYSTEM_PROMPT
+              }
+            },
+            {
+              role: "assistant",
+              content: {
+                type: "text",
+                text: JSON.stringify({
+                  error: `Error exploring context for node "${args.nodeName}": ${error}`,
+                  entities: [],
+                  relations: []
+                }, null, 2)
+              }
+            }
+          ] 
+        };
       }
-      
-      return { 
-        content: [
-          {
-            role: "system",
-            content: {
-              type: "text",
-              text: toolPrompt || SYSTEM_PROMPT
-            }
-          },
-          {
-            role: "assistant",
-            content: {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          }
-        ] 
-      };
       
     case "trace_evidence":
       result = await (knowledgeGraphMemory as Neo4jMemory).traceEvidence(
