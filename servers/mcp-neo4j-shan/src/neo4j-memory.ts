@@ -22,6 +22,9 @@ interface EnhancedEntity extends BaseNode {
   description?: string;
   biography?: string;  // Added field for biographical information
   keyContributions?: string[];  // Added field for key contributions
+  // Cognitive enhancement fields
+  emotionalValence?: number;  // -1.0 to 1.0 (negative to positive)
+  emotionalArousal?: number;  // 0.0-3.0 scale of emotional intensity
 }
 
 interface Event extends BaseNode {
@@ -35,6 +38,11 @@ interface Event extends BaseNode {
   participants: string[];
   outcome: string;
   significance?: string;
+  // Cognitive enhancement fields
+  emotionalValence?: number;  // -1.0 to 1.0 (negative to positive)
+  emotionalArousal?: number;  // 0.0-3.0 scale of emotional intensity
+  causalPredecessors?: string[];  // Events that directly led to this event
+  causalSuccessors?: string[];  // Events directly resulting from this event
 }
 
 interface Concept extends BaseNode {
@@ -47,17 +55,29 @@ interface Concept extends BaseNode {
   significance?: string;
   perspectives?: string[];  // Added field for multiple viewpoints on the concept
   historicalDevelopment?: {period: string, development: string}[];  // Added field for temporal evolution
+  // Cognitive enhancement fields
+  emotionalValence?: number;  // -1.0 to 1.0 (negative to positive)
+  emotionalArousal?: number;  // 0.0-3.0 scale of emotional intensity
+  abstractionLevel?: number;  // 0.0-1.0 scale (concrete to abstract)
+  metaphoricalMappings?: string[];  // Conceptual metaphors used to explain this concept
 }
 
 interface Thought extends BaseNode {
   nodeType: 'Thought';
-  content: string;         // The main thought/observation content
+  thoughtContent: string;         // The main thought/observation content
   references: string[];    // Names of entities/concepts/events referenced
   confidence?: number;     // How confident is this thought (0-1)
   source?: string;         // Where did this thought come from (person, document)
   createdBy?: string;      // Who created this thought
   tags?: string[];         // Classification tags 
   impact?: string;         // Potential impact or importance
+  // Cognitive enhancement fields
+  emotionalValence?: number;  // -1.0 to 1.0 (negative to positive)
+  emotionalArousal?: number;  // 0.0-3.0 scale of emotional intensity
+  evidentialBasis?: string[];  // Nodes supporting this thought
+  thoughtCounterarguments?: string[];  // Potential challenges to the thought
+  implications?: string[];  // Logical consequences of the thought
+  thoughtConfidenceScore?: number;  // 0.0-1.0 scale of certainty
 }
 
 interface ScientificInsight extends BaseNode {
@@ -68,6 +88,14 @@ interface ScientificInsight extends BaseNode {
   confidence: number;
   field: string;
   publications?: string[];
+  // Cognitive enhancement fields
+  emotionalValence?: number;  // -1.0 to 1.0 (negative to positive)
+  emotionalArousal?: number;  // 0.0-3.0 scale of emotional intensity
+  evidenceStrength?: number;  // Overall strength of evidential support (0.0-1.0)
+  scientificCounterarguments?: string[];  // Known challenges to this insight
+  applicationDomains?: string[];  // Practical areas where insight applies
+  replicationStatus?: string;  // Current scientific consensus on replication
+  surpriseValue?: number;  // How unexpected this insight is (0.0-1.0)
 }
 
 interface Law extends BaseNode {
@@ -77,6 +105,13 @@ interface Law extends BaseNode {
   exceptions: string[];
   domain: string;
   proofs?: string[];
+  // Cognitive enhancement fields
+  emotionalValence?: number;  // -1.0 to 1.0 (negative to positive)
+  emotionalArousal?: number;  // 0.0-3.0 scale of emotional intensity
+  domainConstraints?: string[];  // Limitations on where law applies
+  historicalPrecedents?: string[];  // Earlier formulations or precursors
+  counterexamples?: string[];  // Instances that challenge or limit the law
+  formalRepresentation?: string;  // Mathematical or logical formulation when applicable
 }
 
 type KnowledgeNode = EnhancedEntity | Event | Concept | ScientificInsight | Law | Thought;
@@ -228,7 +263,7 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
               SET node.nodeType = 'Thought',
                   node:Thought,
                   node.lastUpdated = datetime(),
-                  node.content = entity.content,
+                  node.thoughtContent = entity.thoughtContent,
                   node.references = COALESCE(entity.references, []),
                   node.confidence = entity.confidence,
                   node.source = entity.source,
@@ -478,7 +513,7 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
             SET node.nodeType = 'Thought',
                 node:Thought,
                 node.lastUpdated = datetime(),
-                node.content = $content,
+                node.thoughtContent = $thoughtContent,
                 node.references = $references,
                 node.confidence = $confidence,
                 node.source = $source,
@@ -878,7 +913,6 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
                    any(obs IN entity.observations WHERE 
                      obs IS NOT NULL AND toLower(obs) CONTAINS toLower(token)
                    )
-                 )
                )
             
             // Get relationships
@@ -929,7 +963,7 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
   async createThought(thought: { 
     entityName?: string; // Now optional
     title: string;
-    content: string;
+    thoughtContent: string;
     entities?: string[];
     concepts?: string[];
     events?: string[];
@@ -941,13 +975,20 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
     createdBy?: string;
     tags?: string[];
     impact?: string;
+    // Cognitive enhancement fields
+    emotionalValence?: number;
+    emotionalArousal?: number;
+    evidentialBasis?: string[];
+    thoughtCounterarguments?: string[];
+    implications?: string[];
+    thoughtConfidenceScore?: number;
   }): Promise<Entity> {
     const session = this.neo4jDriver.session();
     
     try {
       // Use title as the thought name, or generate one if not provided
       const thoughtName = thought.title || 
-                        `Thought: ${thought.content.substring(0, 30)}...`;
+                        `Thought: ${thought.thoughtContent.substring(0, 30)}...`;
       
       // Collect all referenced node names for the references array
       const allReferences = [
@@ -970,7 +1011,7 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
         CREATE (t:Memory:Thought {
           name: $thoughtName,
           nodeType: 'Thought',
-          content: $content,
+          thoughtContent: $thoughtContent,
           createdAt: datetime(),
           lastUpdated: datetime(),
           references: $allReferences,
@@ -978,19 +1019,33 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
           source: $source,
           createdBy: $createdBy,
           tags: $tags,
-          impact: $impact
+          impact: $impact,
+          // Cognitive enhancement fields
+          emotionalValence: $emotionalValence,
+          emotionalArousal: $emotionalArousal,
+          evidentialBasis: $evidentialBasis,
+          thoughtCounterarguments: $thoughtCounterarguments,
+          implications: $implications,
+          thoughtConfidenceScore: $thoughtConfidenceScore
         })
         
         RETURN t
       `, { 
         thoughtName,
-        content: thought.content,
+        thoughtContent: thought.thoughtContent,
         allReferences,
         confidence: thought.confidence || null,
         source: thought.source || null,
         createdBy: thought.createdBy || 'System',
         tags: thought.tags || [],
-        impact: thought.impact || null
+        impact: thought.impact || null,
+        // Cognitive enhancement fields
+        emotionalValence: thought.emotionalValence || null,
+        emotionalArousal: thought.emotionalArousal || null,
+        evidentialBasis: thought.evidentialBasis || [],
+        thoughtCounterarguments: thought.thoughtCounterarguments || [],
+        implications: thought.implications || [],
+        thoughtConfidenceScore: thought.thoughtConfidenceScore || null
       }));
       
       if (result.records.length === 0) {

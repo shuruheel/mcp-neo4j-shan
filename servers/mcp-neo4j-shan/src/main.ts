@@ -20,8 +20,8 @@ const __dirname = path.dirname(__filename);
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  'neo4j+s://x.databases.neo4j.io',
-  Neo4jAuth.basic('neo4j', 'pwd')
+  'neo4j+s://9df4bc56.databases.neo4j.io',
+  Neo4jAuth.basic('neo4j', 'jrOZqvLnVYUQ7OF0JdmuOo4PqSlbGfvD50HXVXZrmEE')
 )
 
 const knowledgeGraphMemory:Neo4jMemory = new Neo4jMemory(neo4jDriver);
@@ -95,48 +95,77 @@ The knowledge graph is designed to build connections between ideas over time. Yo
 
 // Define tool-specific prompts
 const TOOL_PROMPTS = {
-  "explore_context": `You are a knowledge graph exploration assistant. When presenting exploration results:
+  "explore_context": `You are a knowledge graph exploration assistant with cognitive neuroscience capabilities. When presenting exploration results:
   1. Organize information clearly by node types (Entity, Event, Concept, ScientificInsight, Law, Thought)
   2. Format relationships with direction indicators (→) showing the connection between nodes
   3. Highlight the most important connections based on relationship types and context
   4. Summarize key insights from the graph structure
   5. Present node properties according to their type (e.g., for Entities: description, biography; for Events: dates, locations)
+  6. Emphasize cognitive dimensions when available:
+     - Emotional valence and arousal ratings across all node types
+     - Causal relationships for Events (predecessors/successors)
+     - Abstraction level and metaphorical mappings for Concepts
+     - Evidence strength and surprise value for ScientificInsights
+     - Domain constraints and counterexamples for Laws
+     - Evidential basis and implication chains for Thoughts
   
   The input parameters for this tool are:
   - nodeName (required): The exact name of the node to explore
-  - maxDepth (optional, default: 2): Maximum number of relationship hops to include`,
+  - maxDepth (optional, default: 2): Maximum number of relationship hops to include
+  
+  When cognitive dimensions are present, analyze their implications for the node's significance, memorability, and contextual importance. Explain how these dimensions enhance understanding of the node and its connections.`,
 
-  "create_nodes": `You are a knowledge graph creation assistant. When creating nodes:
+  "create_nodes": `You are a knowledge graph creation assistant with cognitive neuroscience capabilities. When creating nodes:
   1. Create nodes with detailed, complete attributes based on their type
   2. Ensure node names are concise, specific, and uniquely identifiable
   3. Organize output by node type for clarity
   4. Provide confirmation of what was created
+  5. Extract cognitive and emotional dimensions for each node
   
-  Interface for each node type:
+  For ALL node types, extract these cognitive dimensions:
+  - emotionalValence: Analyze the emotional tone from -1.0 (negative) to 1.0 (positive)
+  - emotionalArousal: Assess emotional intensity from 0.0 (calm) to 3.0 (highly arousing)
+  
+  Type-specific cognitive extraction:
   
   - Entity (People, organizations, products, physical objects):
-    * Required: name, entityType="Entity"
-    * Optional: description, biography, keyContributions (array)
+    * Core fields: name, entityType="Entity", description, biography, keyContributions
+    * Extract emotional dimensions based on linguistic cues in descriptions and user sentiment
   
   - Event (Time-bound occurrences):
-    * Required: name, entityType="Event" 
-    * Optional: description, startDate, endDate, location, participants (array), outcome
+    * Core fields: name, entityType="Event", description, dates, location, participants, outcome
+    * Extract causalPredecessors: Events that directly led to this event
+    * Extract causalSuccessors: Events directly resulting from this event
+    * Identify emotional significance of the event
   
   - Concept (Abstract ideas, theories, frameworks):
-    * Required: name, entityType="Concept"
-    * Optional: description, definition, domain, perspectives (array), historicalDevelopment (array of {period, development})
+    * Core fields: name, entityType="Concept", definition, domain, perspectives, historicalDevelopment
+    * Extract abstractionLevel: How abstract (1.0) vs. concrete (0.0) the concept is
+    * Identify metaphoricalMappings: Conceptual metaphors used to explain this concept
   
   - ScientificInsight (Research findings with evidence):
-    * Required: name, entityType="ScientificInsight"
-    * Optional: description, hypothesis, evidence (array), methodology, confidence, field, publications (array)
+    * Core fields: name, entityType="ScientificInsight", hypothesis, evidence, methodology, confidence
+    * Extract evidenceStrength: Assess overall strength of evidence (0.0-1.0)
+    * Identify scientificCounterarguments: Known challenges to this insight
+    * Determine applicationDomains: Practical areas where insight applies
+    * Note replicationStatus: Current scientific consensus on replication
+    * Assess surpriseValue: How unexpected this insight is (0.0-1.0)
   
   - Law (Established principles or rules):
-    * Required: name, entityType="Law"
-    * Optional: description, content, legalDocument, legalDocumentJurisdiction, legalDocumentReference, entities (array), concepts (array)
+    * Core fields: name, entityType="Law", description, content
+    * Identify domainConstraints: Limitations on where law applies
+    * Find historicalPrecedents: Earlier formulations or precursors
+    * Extract counterexamples: Cases that challenge or limit the law
+    * Capture formalRepresentation: Mathematical/logical formulation when applicable
   
   - Thought (Analyses or interpretations):
-    * Required: name, entityType="Thought"
-    * Optional: description, content`,
+    * Core fields: name, entityType="Thought", title, thoughtContent
+    * Identify evidentialBasis: Nodes supporting this thought
+    * Extract thoughtCounterarguments: Potential challenges to this thought
+    * Determine implications: Logical consequences of this thought
+    * Assess thoughtConfidenceScore: Level of certainty (0.0-1.0)
+    
+  Focus on extracting these cognitive dimensions naturally from context rather than asking the user directly. Use linguistic cues, semantic analysis, and contextual understanding to determine these values.`,
 
   "create_relations": `You are a knowledge graph relation assistant. When creating relations:
   1. Use active voice verbs for relationTypes that clearly indicate the semantic connection
@@ -162,77 +191,36 @@ const TOOL_PROMPTS = {
   - Event → ScientificInsight: LED_TO, DISPROVED, REINFORCED
   - ScientificInsight → Law: SUPPORTS, CHALLENGES, REFINES`,
 
-  "create_thoughts": `You are a knowledge graph thought assistant. When creating thought nodes:
+  "create_thoughts": `You are a knowledge graph thought assistant with cognitive neuroscience capabilities. When creating thought nodes:
   1. Create detailed thought content that represents analysis, interpretation, or insight
   2. Connect the thought to relevant entities, concepts, events, scientific insights, laws, and other thoughts
   3. Include a clear title that summarizes the thought
   4. Explain how this thought enhances the knowledge graph
+  5. Extract cognitive and emotional dimensions for the thought
   
-  Interface for Thought creation:
+  Interface for Thought creation with cognitive enhancements:
   - Required fields:
     * title: Brief descriptive title
-    * content: Detailed thought content
+    * thoughtContent: Detailed thought content
   
-  - Optional fields:
+  - Cognitive dimensions to extract:
+    * emotionalValence: Analyze emotional tone from -1.0 (negative) to 1.0 (positive)
+    * emotionalArousal: Assess emotional intensity from 0.0 (calm) to 3.0 (arousing)
+    * evidentialBasis: Identify nodes that support or provide evidence for this thought
+    * thoughtCounterarguments: Extract potential challenges or counterarguments
+    * implications: Determine logical consequences or implications
+    * thoughtConfidenceScore: Assess level of certainty (0.0-1.0)
+  
+  - Optional fields for connections:
     * entityName: Primary Entity this Thought relates to
     * entities: Array of related entity names
     * concepts: Array of related concept names
     * events: Array of related event names
     * scientificInsights: Array of related scientific insight names
     * laws: Array of related law names
-    * thoughts: Array of related thought names`,
-
-  "search_nodes": `You are a knowledge graph search assistant. When presenting search results:
-  1. Organize results in a clear, hierarchical structure
-  2. Highlight the most relevant matches at the top
-  3. Group results by node type (Entity, Event, Concept, etc.)
-  4. For each result, show key properties based on node type
-  5. Explain why each result matches the query
-  6. Suggest related searches if appropriate
-  
-  The search is performed using fuzzy matching combined with fallback strategies to ensure the best possible results.`,
-
-  "search_nodes_by_type": `You are a knowledge graph type-specific search assistant. When presenting search results:
-  1. Organize results for the specific requested node type
-  2. Show properties relevant to that node type:
-     - For Entity: description, biography, keyContributions
-     - For Event: dates, location, participants, outcome
-     - For Concept: definition, domain, perspectives
-     - For ScientificInsight: hypothesis, evidence, methodology
-     - For Law: content, legal references
-     - For Thought: content, connected nodes
-  3. Highlight the most relevant matches
-  4. Explain why each result is significant
-  5. Suggest related searches within the same node type`,
-
-  "find_concept_connections": `You are a knowledge graph connection explorer. When showing connections between concepts:
-  1. Present the path(s) between the source and target nodes
-  2. Show each step in the path with the connecting relationship type
-  3. Explain the significance of each connection in the path
-  4. Highlight the shortest or most meaningful paths
-  5. Include relevant properties of intermediary nodes
-  6. Evaluate the strength of the connection based on path length and relationship types
-  
-  The input parameters for this tool are:
-  - sourceNodeName (required): Name of the starting node
-  - targetNodeName (required): Name of the ending node
-  - maxDepth (optional, default: 3): Maximum path length to consider`,
-
-  "trace_evidence": `You are a knowledge graph evidence tracer. When presenting evidence chains:
-  1. Start with the target claim or node
-  2. Show all supporting evidence in a tree structure
-  3. For each evidence node, display:
-     - Node name and type
-     - Relationship type to parent (usually SUPPORTS)
-     - Confidence score when available
-     - Key properties based on node type
-  4. Evaluate the strength of each evidence branch
-  5. Highlight any gaps in the evidence chain
-  6. Provide an overall assessment of the evidence quality
-  
-  The input parameters for this tool are:
-  - targetNodeName (required): The name of the node to trace evidence for
-  - relationshipType (optional, default: "SUPPORTS"): Type of relationship to trace`
+    * thoughts: Array of related thought names
+    
+  Focus on extracting cognitive dimensions naturally from context rather than asking the user directly. Use linguistic cues, semantic analysis, and contextual understanding to determine these values.`,
 };
 
 // Define the PROMPTS constant that's used in the GetPromptRequestSchema handler
@@ -285,7 +273,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "create_nodes",
-        description: "IF the explore_context tool does not return any nodes OR the user specifically asks for the knowledge graph to be updated, create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
+        description: "IF the explore_context tool does not return any nodes OR the user specifically asks for the knowledge graph to be updated, create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific cognitive attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
         inputSchema: {
           type: "object",
           properties: {
@@ -300,6 +288,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     description: "Node Type: Entity, Event, Concept, ScientificInsight, Law, Thought",
                     enum: ["Entity", "Event", "Concept", "ScientificInsight", "Law", "Thought"]
                   },
+                  // Common cognitive fields for all node types
+                  emotionalValence: { 
+                    type: "number", 
+                    description: "Emotional tone from -1.0 (negative) to 1.0 (positive)" 
+                  },
+                  emotionalArousal: { 
+                    type: "number", 
+                    description: "Emotional intensity from 0.0 (calm) to 3.0 (highly arousing)" 
+                  },
+                  
                   // Fields for Entity type
                   description: { type: "string", description: "Brief description of the entity" },
                   biography: { type: "string", description: "Biographical information for people or historical background for organizations/objects" },
@@ -308,6 +306,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     items: { type: "string" },
                     description: "Key contributions or significance of this entity" 
                   },
+                  
                   // Fields for Node Type: Event
                   startDate: { type: "string", description: "Start date of the event (YYYY-MM-DD or descriptive)" },
                   endDate: { type: "string", description: "End date of the event (YYYY-MM-DD or descriptive)" },
@@ -318,6 +317,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     description: "Entities that participated in the event"
                   },
                   outcome: { type: "string", description: "Outcome of the event" },
+                  causalPredecessors: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Events that directly led to this event"
+                  },
+                  causalSuccessors: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Events directly resulting from this event"
+                  },
+                  
                   // Fields for Node Type: Concept
                   definition: { type: "string", description: "A brief definition of the concept (1-2 concise sentences)" },
                   discoveryDate: { type: "string", description: "Date of discovery of the concept" },
@@ -337,6 +347,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                       }
                     }
                   },
+                  abstractionLevel: {
+                    type: "number",
+                    description: "How abstract vs. concrete the concept is (0.0 = very concrete, 1.0 = highly abstract)"
+                  },
+                  metaphoricalMappings: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Conceptual metaphors used to explain this concept (e.g., 'Time is Money')"
+                  },
+                  
                   // Fields for Node Type: Scientific Insight
                   hypothesis: { type: "string", description: "Describe the hypothesis for the Scientific Insight node" },
                   evidence: {
@@ -352,6 +372,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     items: { type: "string" },
                     description: "Academic publications such as scientific papers, books, or articles"
                   },
+                  evidenceStrength: {
+                    type: "number",
+                    description: "Overall strength of evidential support (0.0-1.0)"
+                  },
+                  scientificCounterarguments: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Known challenges or counter-arguments to this insight"
+                  },
+                  applicationDomains: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Practical areas where insight applies"
+                  },
+                  replicationStatus: {
+                    type: "string",
+                    description: "Current replication status (e.g., 'Replicated', 'Mixed', 'Failed', 'Unreplicated')"
+                  },
+                  surpriseValue: {
+                    type: "number",
+                    description: "How unexpected this insight is given prior knowledge (0.0-1.0)"
+                  },
+                  
                   // Fields for Node Type: Law
                   legalDocument: { type: "string", description: "Legal document that the law is derived from e.g., 'US Constitution'" },
                   legalDocumentJurisdiction: { type: "string", description: "Jurisdiction of the legal document e.g., 'United States'" },
@@ -367,13 +410,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     items: { type: "string" },
                     description: "Concepts that the law is related to"
                   },
+                  domainConstraints: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Limitations or boundaries where this law applies"
+                  },
+                  historicalPrecedents: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Earlier formulations or precursors to this law"
+                  },
+                  counterexamples: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Cases or instances that challenge or limit this law"
+                  },
+                  formalRepresentation: {
+                    type: "string",
+                    description: "Mathematical or logical formulation of the law when applicable"
+                  },
+                  
+                  // Fields for Thought node type
+                  title: { type: "string", description: "Brief title for the thought" },
+                  thoughtContent: { type: "string", description: "Content of the thought in detail" },
+                  evidentialBasis: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Nodes that support or provide evidence for this thought"
+                  },
+                  thoughtCounterarguments: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Potential challenges or counterarguments to this thought"
+                  },
+                  implications: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Logical consequences or implications of this thought"
+                  },
+                  thoughtConfidenceScore: {
+                    type: "number", 
+                    description: "Level of certainty in this thought (0.0-1.0)"
+                  },
+                },
+                required: ["name", "entityType"],
               },
             },
           },
           required: ["nodes"],
         },
-      }
-    },
+      },
       {
         name: "create_relations",
         description: "Whenever you create new nodes, always create any relevant new relations between nodes in the knowledge graph. Relations should be semantically meaningful and use active voice. IMPORTANT: Always include a brief explanation (context field) for each relationship that describes how and why the nodes are connected (30-50 words).\n\nExample relations between different node types:\n- Entity -> Concept: ADVOCATES, SUPPORTS, UNDERSTANDS\n- Entity -> Event: PARTICIPATED_IN, ORGANIZED, WITNESSED\n- Concept -> Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS\n- Event -> ScientificInsight: LED_TO, DISPROVED, REINFORCED\n- ScientificInsight -> Law: SUPPORTS, CHALLENGES, REFINES\n\nWhen appropriate, include a confidence score (0.0-1.0) and citation sources for the relationship.",
@@ -419,7 +505,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "Brief title for the thought"
             },
-            content: {
+            thoughtContent: {
               type: "string", 
               description: "Articulate the thought in the best way possible"
             },
@@ -452,9 +538,37 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "array",
               items: { type: "string" },
               description: "Names of thoughts that the thought is related to"
+            },
+            // Cognitive enhancement fields
+            emotionalValence: { 
+              type: "number", 
+              description: "Emotional tone from -1.0 (negative) to 1.0 (positive)" 
+            },
+            emotionalArousal: { 
+              type: "number", 
+              description: "Emotional intensity from 0.0 (calm) to 3.0 (arousing)" 
+            },
+            evidentialBasis: {
+              type: "array",
+              items: { type: "string" },
+              description: "Nodes that support or provide evidence for this thought"
+            },
+            thoughtCounterarguments: {
+              type: "array",
+              items: { type: "string" },
+              description: "Potential challenges or counterarguments to this thought"
+            },
+            implications: {
+              type: "array",
+              items: { type: "string" },
+              description: "Logical consequences or implications of this thought"
+            },
+            thoughtConfidenceScore: {
+              type: "number", 
+              description: "Level of certainty in this thought (0.0-1.0)"
             }
           },
-          required: ["title", "content"],
+          required: ["title", "thoughtContent"],
         },
       }
     ],
@@ -560,10 +674,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
       
     case "create_thoughts":
+      // Map content to thoughtContent for backward compatibility
+      if (args.content && !args.thoughtContent) {
+        args.thoughtContent = args.content;
+      }
+      
       result = await (knowledgeGraphMemory as Neo4jMemory).createThought(args as { 
         entityName?: string; 
         title: string;
-        content: string;
+        thoughtContent: string;
         entities?: string[];
         concepts?: string[];
         events?: string[];
@@ -575,6 +694,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         createdBy?: string;
         tags?: string[];
         impact?: string;
+        // Cognitive enhancement fields
+        emotionalValence?: number;
+        emotionalArousal?: number;
+        evidentialBasis?: string[];
+        thoughtCounterarguments?: string[];
+        implications?: string[];
+        thoughtConfidenceScore?: number;
       });
       return { 
         content: [
