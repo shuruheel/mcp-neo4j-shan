@@ -1269,30 +1269,32 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       const actualTargetName = nodesCheck.records[0].get('target').properties.name;
       console.error(`Found source node: "${actualSourceName}" and target node: "${actualTargetName}"`);
       
-      // Find paths between the source and target nodes using case-insensitive matching
+      // Try to find paths without APOC using standard Cypher path finding
+      // Note: We use bidirectional relationship finding with -[*1..maxDepth]- to find any path
       const result = await session.executeRead(tx => tx.run(`
         // Find source and target nodes with case-insensitive matching
         MATCH (source:Memory), (target:Memory)
         WHERE toLower(source.name) = toLower($sourceName)
         AND toLower(target.name) = toLower($targetName)
         
-        // Find the shortest path between them
+        // Find shortest path in ANY direction between nodes
         WITH source, target
-        CALL apoc.algo.dijkstra(source, target, "", "", $maxDepth) 
-        YIELD path, weight
+        MATCH p = shortestPath((source)-[*1..$maxDepth]-(target))
         
-        // Process path nodes
-        WITH nodes(path) as pathNodes
+        // Process all nodes in the path
+        WITH nodes(p) as pathNodes, relationships(p) as pathRels
         UNWIND pathNodes as node
-        WITH collect(DISTINCT node) as nodes
+        WITH collect(DISTINCT node) as allNodes, pathRels
         
-        // Get all relationships between these nodes
-        UNWIND nodes as n1
-        UNWIND nodes as n2
+        // Get all relationships between these nodes (not just those in the path)
+        UNWIND allNodes as n1
+        UNWIND allNodes as n2
         OPTIONAL MATCH (n1)-[r]->(n2)
         WHERE n1 <> n2
         
-        RETURN nodes, collect(DISTINCT r) as rels
+        RETURN allNodes as nodes, 
+               collect(DISTINCT r) as directRels, 
+               pathRels
       `, {
         sourceName: sourceNodeName,
         targetName: targetNodeName,
@@ -1302,37 +1304,79 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       if (result.records.length === 0) {
         console.error(`No path found between "${sourceNodeName}" and "${targetNodeName}" within ${maxDepth} hops`);
         
-        // Try an alternative approach with allShortestPaths
-        const altResult = await session.executeRead(tx => tx.run(`
+        // Try with a deeper search in case there's a longer path
+        if (maxDepth < 6) {
+          console.error(`Trying with increased depth (${maxDepth + 2})`);
+          
+          const deeperResult = await session.executeRead(tx => tx.run(`
+            MATCH (source:Memory), (target:Memory)
+            WHERE toLower(source.name) = toLower($sourceName)
+            AND toLower(target.name) = toLower($targetName)
+            
+            // Try with variable-length path
+            MATCH path = (source)-[*1..$maxDepth]-(target)
+            RETURN path 
+            LIMIT 1
+          `, {
+            sourceName: sourceNodeName,
+            targetName: targetNodeName,
+            maxDepth: maxDepth + 2
+          }));
+          
+          if (deeperResult.records.length > 0) {
+            const path = deeperResult.records[0].get('path');
+            console.error(`Found longer path with ${path.segments.length + 1} nodes`);
+            
+            // Extract nodes and relationships from path
+            const nodes = path.segments.map((seg: any) => seg.start).concat([path.end]);
+            const rels = path.segments.map((seg: any) => seg.relationship);
+            
+            // Map nodes to entities
+            const entities: Entity[] = nodes.map((node: any) => ({
+              name: node.properties.name,
+              entityType: node.properties.nodeType || 'Entity',
+              observations: 'observations' in node.properties ? 
+                node.properties.observations : []
+            }));
+            
+            // Map relationships to relations
+            const relations: Relation[] = rels.map((rel: any) => ({
+              from: rel.startNode.properties.name,
+              to: rel.endNode.properties.name,
+              relationType: rel.type
+            }));
+            
+            return {
+              entities,
+              relations
+            };
+          }
+        }
+        
+        // If still not found, try to find any common connections (nodes that connect to both)
+        console.error(`No direct path found. Looking for common connections...`);
+        const commonConnectionsResult = await session.executeRead(tx => tx.run(`
           MATCH (source:Memory), (target:Memory)
           WHERE toLower(source.name) = toLower($sourceName)
           AND toLower(target.name) = toLower($targetName)
           
-          // Try to find any path up to the specified depth
-          CALL apoc.path.expandConfig(source, {
-            minLevel: 1,
-            maxLevel: $maxDepth,
-            terminatorNodes: [target],
-            uniqueness: "NODE_GLOBAL"
-          })
-          YIELD path
-          WHERE last(nodes(path)) = target
+          // Find nodes that connect to both source and target
+          MATCH (source)-[r1]-(common)-[r2]-(target)
           
-          RETURN path
-          ORDER BY length(path)
-          LIMIT 1
+          // Return all relevant nodes and their relationships
+          RETURN collect(DISTINCT source) + collect(DISTINCT common) + collect(DISTINCT target) as nodes,
+                 collect(DISTINCT r1) + collect(DISTINCT r2) as rels
         `, {
           sourceName: sourceNodeName,
-          targetName: targetNodeName,
-          maxDepth
+          targetName: targetNodeName
         }));
         
-        if (altResult.records.length > 0) {
-          const path = altResult.records[0].get('path');
-          const nodes = path.segments.map((seg: any) => seg.start).concat([path.end]);
-          const rels = path.segments.map((seg: any) => seg.relationship);
+        if (commonConnectionsResult.records.length > 0 && 
+            commonConnectionsResult.records[0].get('nodes').length > 2) {
+          const nodes = commonConnectionsResult.records[0].get('nodes');
+          const relationships = commonConnectionsResult.records[0].get('rels');
           
-          console.error(`Found alternative path with ${nodes.length} nodes and ${rels.length} relationships`);
+          console.error(`Found ${nodes.length} nodes with common connections`);
           
           // Map nodes to entities
           const entities: Entity[] = nodes.map((node: any) => ({
@@ -1343,7 +1387,7 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
           }));
           
           // Map relationships to relations
-          const relations: Relation[] = rels.map((rel: any) => ({
+          const relations: Relation[] = relationships.map((rel: any) => ({
             from: rel.startNode.properties.name,
             to: rel.endNode.properties.name,
             relationType: rel.type
@@ -1358,12 +1402,18 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
         return { entities: [], relations: [] };
       }
       
-      // Process the nodes
+      // Process the nodes and relationships from the path
       const record = result.records[0];
       const nodes = record.get('nodes');
-      const relationships = record.get('rels');
+      const directRels = record.get('directRels');
+      const pathRels = record.get('pathRels');
       
-      console.error(`Found path with ${nodes.length} nodes and ${relationships.length} relationships`);
+      // Combine both sets of relationships
+      const allRels = [...directRels, ...pathRels].filter((rel, index, self) => 
+        index === self.findIndex(r => r.identity.equals(rel.identity))
+      );
+      
+      console.error(`Found path with ${nodes.length} nodes and ${allRels.length} relationships`);
       
       // Map nodes to entities
       const entities: Entity[] = nodes.map((node: any) => ({
@@ -1374,7 +1424,7 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       }));
       
       // Map relationships to relations
-      const relations: Relation[] = relationships.map((rel: any) => ({
+      const relations: Relation[] = allRels.map((rel: any) => ({
         from: rel.startNode.properties.name,
         to: rel.endNode.properties.name,
         relationType: rel.type
@@ -1386,6 +1436,12 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       };
     } catch (error) {
       console.error(`Error finding concept connections: ${error}`);
+      
+      // Specific error handling for common Neo4j errors
+      if (error.message && error.message.includes('not supported')) {
+        console.error('This appears to be a Neo4j procedure availability issue');
+      }
+      
       return { entities: [], relations: [] };
     } finally {
       await session.close();
@@ -1428,39 +1484,143 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       const actualNodeName = nodeCheck.records[0].get('center').properties.name;
       console.error(`Found node with name: "${actualNodeName}"`);
       
-      // Find the neighborhood subgraph
+      // Find the neighborhood using standard Cypher path matching (no APOC)
+      // This uses variable length path matching to find all nodes within maxDepth hops
       const result = await session.executeRead(tx => tx.run(`
+        // Match the central node with case-insensitive name matching
         MATCH (center:Memory)
         WHERE toLower(center.name) = toLower($nodeName)
-        CALL apoc.path.subgraphNodes(center, {
-          maxLevel: $maxDepth,
-          relationshipFilter: '*'
-        }) YIELD node
-        WITH collect(DISTINCT node) as nodes
         
-        // Find all relationships between these nodes
-        UNWIND nodes as n1
-        UNWIND nodes as n2
+        // Find all nodes within specified distance using variable length path
+        // The path can go in any direction (both incoming and outgoing)
+        MATCH path = (center)-[*0..$maxDepth]-(connected)
+        
+        // Collect all unique nodes and the paths between them
+        WITH collect(DISTINCT connected) + collect(DISTINCT center) as allNodes
+        
+        // Get all direct relationships between these nodes
+        UNWIND allNodes as n1
+        UNWIND allNodes as n2
         OPTIONAL MATCH (n1)-[r]->(n2)
         WHERE n1 <> n2
         
-        RETURN nodes, collect(DISTINCT r) as relationships
+        RETURN allNodes as nodes, collect(DISTINCT r) as rels
       `, {
         nodeName,
         maxDepth
       }));
       
-      if (result.records.length === 0) {
-        console.error(`No subgraph found for node "${nodeName}"`);
-        return { entities: [], relations: [] };
+      if (result.records.length === 0 || result.records[0].get('nodes').length <= 1) {
+        console.error(`No connected nodes found for "${nodeName}"`);
+        
+        // If no connections found, try again with reduced depth but returning the node itself
+        const fallbackResult = await session.executeRead(tx => tx.run(`
+          MATCH (center:Memory)
+          WHERE toLower(center.name) = toLower($nodeName)
+          
+          // Check for any single-hop relationships
+          OPTIONAL MATCH (center)-[r]-(neighbor)
+          
+          RETURN 
+            CASE WHEN count(neighbor) > 0 
+              THEN collect(DISTINCT center) + collect(DISTINCT neighbor) 
+              ELSE [center] 
+            END as nodes,
+            collect(DISTINCT r) as rels
+        `, { nodeName }));
+        
+        if (fallbackResult.records.length > 0) {
+          const nodes = fallbackResult.records[0].get('nodes');
+          const relationships = fallbackResult.records[0].get('rels');
+          
+          console.error(`Fallback query found ${nodes.length} nodes with ${relationships.length} direct relationships`);
+          
+          // Map nodes to entities
+          const entities: Entity[] = nodes.map((node: any) => ({
+            name: node.properties.name,
+            entityType: node.properties.nodeType || 'Entity',
+            observations: 'observations' in node.properties ? 
+              node.properties.observations : []
+          }));
+          
+          // Map relationships to relations
+          const relations: Relation[] = relationships.map((rel: any) => ({
+            from: rel.startNode.properties.name,
+            to: rel.endNode.properties.name,
+            relationType: rel.type
+          }));
+          
+          return {
+            entities,
+            relations
+          };
+        }
+        
+        // If still nothing, just return the node itself
+        const centerNode = nodeCheck.records[0].get('center');
+        return {
+          entities: [{
+            name: centerNode.properties.name,
+            entityType: centerNode.properties.nodeType || 'Entity',
+            observations: 'observations' in centerNode.properties ? 
+              centerNode.properties.observations : []
+          }],
+          relations: []
+        };
       }
       
       // Process the nodes
       const record = result.records[0];
       const nodes = record.get('nodes');
-      const relationships = record.get('relationships');
+      const relationships = record.get('rels');
       
       console.error(`Found ${nodes.length} nodes and ${relationships.length} relationships in context`);
+      
+      // Check for empty relationships
+      if (relationships.length === 0 && nodes.length > 1) {
+        console.error(`Found nodes but no relationships - attempting to fix...`);
+        
+        // Try to find relationships with a more direct query
+        const relationshipQuery = await session.executeRead(tx => tx.run(`
+          MATCH (center:Memory)
+          WHERE toLower(center.name) = toLower($nodeName)
+          
+          // Find directly connected nodes
+          MATCH (center)-[r]-(neighbor)
+          
+          RETURN collect(DISTINCT center) + collect(DISTINCT neighbor) as nodes,
+                 collect(DISTINCT r) as rels
+        `, { nodeName }));
+        
+        if (relationshipQuery.records.length > 0 && 
+            relationshipQuery.records[0].get('rels').length > 0) {
+          
+          const directNodes = relationshipQuery.records[0].get('nodes');
+          const directRels = relationshipQuery.records[0].get('rels');
+          
+          console.error(`Direct relationship query found ${directRels.length} relationships`);
+          
+          // Map nodes to entities
+          const entities: Entity[] = directNodes.map((node: any) => ({
+            name: node.properties.name,
+            entityType: node.properties.nodeType || 'Entity',
+            observations: 'observations' in node.properties ? 
+              node.properties.observations : []
+          }));
+          
+          // Map relationships to relations
+          const relations: Relation[] = directRels.map((rel: any) => ({
+            from: rel.startNode.properties.name,
+            to: rel.endNode.properties.name,
+            relationType: rel.type
+          }));
+          
+          return {
+            entities,
+            relations
+          };
+        }
+      }
       
       // Map nodes to entities
       const entities: Entity[] = nodes.map((node: any) => ({
@@ -1483,6 +1643,12 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       };
     } catch (error) {
       console.error(`Error exploring context: ${error}`);
+      
+      // Specific error handling for common Neo4j errors
+      if (error.message && error.message.includes('not supported')) {
+        console.error('This appears to be a Neo4j procedure availability issue');
+      }
+      
       return { entities: [], relations: [] };
     } finally {
       await session.close();
