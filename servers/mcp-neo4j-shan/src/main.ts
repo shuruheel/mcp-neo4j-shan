@@ -57,12 +57,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     description: "Node Type: Entity, Event, Concept, ScientificInsight, Law, Thought",
                     enum: ["Entity", "Event", "Concept", "ScientificInsight", "Law", "Thought"]
                   },
-                  observations: { 
-                    type: "array", 
-                    items: { type: "string" },
-                    description: "An array of observation contents for each Node Type"
-                  },
-                  // Event specific fields
+                  // Fields for Node Type: Event
                   startDate: { type: "string", description: "Start date of the event (YYYY-MM-DD or descriptive)" },
                   endDate: { type: "string", description: "End date of the event (YYYY-MM-DD or descriptive)" },
                   location: { type: "string", description: "Location of the event" },
@@ -72,7 +67,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     description: "Entities that participated in the event"
                   },
                   outcome: { type: "string", description: "Outcome of the event" },
-                  // Concept specific fields
+                  // Fields for Node Type: Concept
                   definition: { type: "string", description: "A brief definition of the concept" },
                   examples: {
                     type: "array",
@@ -80,7 +75,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     description: "Examples for Concept type"
                   },
                   domain: { type: "string", description: "Domain of the Node Type (if any)" },
-                  // Scientific Insight specific fields
+                  // Fields for Node Type: Scientific Insight
                   hypothesis: { type: "string", description: "Describe the hypothesis for the Scientific Insight node" },
                   evidence: {
                     type: "array",
@@ -95,45 +90,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     items: { type: "string" },
                     description: "Academic publications such as scientific papers, books, or articles"
                   },
-                  // Law specific fields
-                  statement: { type: "string", description: "Statement for Law type" },
-                  conditions: {
+                  // Fields for Node Type: Law
+                  legalDocument: { type: "string", description: "Legal document that the law is derived from e.g., 'US Constitution'" },
+                  legalDocumentJurisdiction: { type: "string", description: "Jurisdiction of the legal document e.g., 'United States'" },
+                  legalDocumentReference: { type: "string", description: "Reference to the specific article and/or section of the legal document e.g., 'Article 1, Section 8'" },
+                  content: { type: "string", description: "Content of the law" },
+                  entities: {
                     type: "array",
                     items: { type: "string" },
-                    description: "Conditions for Law type"
+                    description: "Entities that the law is related to"
                   },
-                  exceptions: {
+                  concepts: {
                     type: "array",
                     items: { type: "string" },
-                    description: "Exceptions for Law type"
+                    description: "Concepts that the law is related to"
                   },
-                  proofs: {
-                    type: "array",
-                    items: { type: "string" },
-                    description: "Proofs for Law type"
-                  },
-                  // Thought specific fields
-                  content: { type: "string", description: "Summarize the thought in a concise manner" },
-                  references: {
-                    type: "array",
-                    items: { type: "string" },
-                    description: "List the entities, concepts, events, or scientific insights that are referenced in the thought"
-                  },
-                  createdBy: { type: "string", description: "Creator for Thought type" },
-                  tags: {
-                    type: "array",
-                    items: { type: "string" },
-                    description: "Classification tags for Thought type"
-                  },
-                  impact: { type: "string", description: "Potential impact for Thought type" }
-                },
-                required: ["name", "entityType"],
               },
             },
           },
           required: ["nodes"],
         },
-      },
+      }
+    },
       {
         name: "create_relations",
         description: "Create multiple new relations between nodes in the knowledge graph. Relations should be semantically meaningful and use active voice. Example relations between different node types:\n- Entity -> Concept: ADVOCATES, SUPPORTS, UNDERSTANDS\n- Entity -> Event: PARTICIPATED_IN, ORGANIZED, WITNESSED\n- Concept -> Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS\n- Event -> ScientificInsight: LED_TO, DISPROVED, REINFORCED\n- ScientificInsight -> Law: SUPPORTS, CHALLENGES, REFINES",
@@ -146,7 +124,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 type: "object",
                 properties: {
                   from: { type: "string", description: "The name of the node where the relation starts" },
+                  fromType: { type: "string", description: "The type of the node where the relation starts" },
                   to: { type: "string", description: "The name of the node where the relation ends" },
+                  toType: { type: "string", description: "The type of the node where the relation ends" },
                   relationType: { type: "string", description: "The type of the relation" },
                 },
                 required: ["from", "to", "relationType"],
@@ -158,17 +138,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "search_nodes",
-        description: "Search for nodes in the knowledge graph based on a query",
+        description: "Search for nodes in the knowledge graph based on entities, concepts, events, scientific insights, laws, or thoughts discussed in the conversation. The search uses fuzzy matching to find relevant nodes even with slight naming variations.",
         inputSchema: {
           type: "object",
           properties: {
-            query: { type: "string", description: "The search query to match against entity names, types, and observation content" },
+            query: { 
+              type: "string", 
+              description: "The search query to match against node names and content" 
+            },
+            entityTypes: {
+              type: "array",
+              items: { 
+                type: "string",
+                enum: ["Entity", "Event", "Concept", "ScientificInsight", "Law", "Thought"]
+              },
+              description: "Optional: Specific node types to search (defaults to all types)"
+            }
           },
           required: ["query"],
         },
       },
       {
-        name: "find_by_type",
+        name: "search_nodes_by_type",
         description: "Find nodes of a specific type in the knowledge graph (Entity, Event, Concept, ScientificInsight, Law, or Thought)",
         inputSchema: {
           type: "object",
@@ -188,9 +179,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            entityName: { // We may need to remove this and update code elsewhere because I added a separate field to allow for multiple entities and other node types
+            entityName: { 
               type: "string",
-              description: "The name of the Entity that the Thought is related to"
+              description: "The name of the primary Entity that the Thought is related to"
             },
             title: {
               type: "string",
@@ -229,12 +220,75 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "array",
               items: { type: "string" },
               description: "Names of thoughts that the thought is related to"
+            }
           },
           required: ["title", "content"],
         },
       },
-    }
-  ],
+      // New traversal tools
+      {
+        name: "find_concept_connections",
+        description: "Find how two nodes in the knowledge graph are connected through relationships. This tool discovers paths between nodes, revealing how concepts, entities, or other nodes relate to each other through direct or indirect connections. Especially useful for understanding how different ideas are linked.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sourceNodeName: { 
+              type: "string", 
+              description: "Name of the source node to start the path from" 
+            },
+            targetNodeName: { 
+              type: "string", 
+              description: "Name of the target node to find a path to" 
+            },
+            maxDepth: { 
+              type: "number", 
+              description: "Maximum number of relationship hops to consider (default: 3)",
+              default: 3 
+            }
+          },
+          required: ["sourceNodeName", "targetNodeName"],
+        },
+      },
+      {
+        name: "explore_context",
+        description: "Explore the complete context around a node in the knowledge graph. This tool reveals the neighborhood of relationships and connected nodes surrounding the specified node, providing deeper contextual understanding. Useful for building a comprehensive picture of how a concept, entity, event, or thought relates to other knowledge.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeName: { 
+              type: "string", 
+              description: "Name of the node to explore the context around" 
+            },
+            maxDepth: { 
+              type: "number", 
+              description: "Maximum number of relationship hops to include (default: 2)",
+              default: 2 
+            }
+          },
+          required: ["nodeName"],
+        },
+      },
+      {
+        name: "trace_evidence",
+        description: "Trace evidence chains that support or contradict a node in the knowledge graph. This tool follows specific relationship types (like SUPPORTS, CONTRADICTS) to identify the network of evidence for or against laws, scientific insights, or concepts. Useful for validating claims and understanding the foundation of knowledge.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            targetNodeName: { 
+              type: "string", 
+              description: "Name of the target node to find evidence for/against" 
+            },
+            relationshipType: { 
+              type: "string", 
+              description: "Type of relationship to trace (default: SUPPORTS)",
+              enum: ["SUPPORTS", "CONTRADICTS", "VALIDATES", "CHALLENGES", "REFINES"],
+              default: "SUPPORTS"
+            }
+          },
+          required: ["targetNodeName"],
+        },
+      }
+    ],
 }});
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -250,8 +304,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "create_relations":
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.createRelations(args.relations as Relation[]), null, 2) }] };
     case "search_nodes":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.searchNodes(args.query as string), null, 2) }] };
-    case "find_by_type":
+      // Parse the query to extract different types of entities
+      // Here we're using the same pattern used in create_entities
+      const searchQuery = args.query as string;
+      
+      // Simplified approach: treat the entire query as all potential entity types
+      // This assumes Claude will have already identified the entity types in the query
+      const searchTerms = {
+        entities: [searchQuery],
+        concepts: [searchQuery],
+        events: [searchQuery],
+        scientificInsights: [searchQuery],
+        laws: [searchQuery],
+        thoughts: [searchQuery],
+        fuzzyThreshold: 0.6  // Lower threshold to ensure we get results
+      };
+      
+      return { 
+        content: [{ 
+          type: "text", 
+          text: JSON.stringify(
+            await (knowledgeGraphMemory as Neo4jMemory).searchNodesWithFuzzyMatching(searchTerms), 
+            null, 
+            2
+          ) 
+        }] 
+      };
+    case "search_nodes_by_type":
       return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).findNodesByType(args.nodeType as string), null, 2) }] };
     case "create_thoughts":
       return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).createThought(args as { 
@@ -270,6 +349,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         tags?: string[];
         impact?: string;
       }), null, 2) }] };
+    // New handlers for traversal tools
+    case "find_concept_connections":
+      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).findConceptConnections(
+        args.sourceNodeName as string,
+        args.targetNodeName as string,
+        args.maxDepth as number || 3
+      ), null, 2) }] };
+    case "explore_context":
+      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).exploreContext(
+        args.nodeName as string,
+        args.maxDepth as number || 2
+      ), null, 2) }] };
+    case "trace_evidence":
+      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).traceEvidence(
+        args.targetNodeName as string,
+        args.relationshipType as string || "SUPPORTS"
+      ), null, 2) }] };
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

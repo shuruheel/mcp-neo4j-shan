@@ -79,6 +79,11 @@ type KnowledgeNode = EnhancedEntity | Event | Concept | ScientificInsight | Law 
 
 type EntityNode = Node<Integer, KnowledgeNode>
 
+interface EnhancedRelation extends Relation {
+  fromType?: string;
+  toType?: string;
+}
+
 type EntityRelationship = Relationship<Integer, Relation>
 
 type EntityWithRelationsResult = {
@@ -186,16 +191,16 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
             
             // For Concept nodes
             FOREACH (ignore IN CASE WHEN entity.entityType = 'Concept' THEN [1] ELSE [] END | 
-              MERGE (node:Memory {name: $name})
+              MERGE (node:Memory {name: entity.name})
               SET node.nodeType = 'Concept',
                   node:Concept,
                   node.lastUpdated = datetime(),
-                  node.definition = $definition,
-                  node.description = $description,
-                  node.examples = $examples,
-                  node.relatedConcepts = $relatedConcepts,
-                  node.domain = $domain,
-                  node.significance = $significance,
+                  node.definition = entity.definition,
+                  node.description = entity.description,
+                  node.examples = COALESCE(entity.examples, []),
+                  node.relatedConcepts = COALESCE(entity.relatedConcepts, []),
+                  node.domain = entity.domain,
+                  node.significance = entity.significance,
                   node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
@@ -236,11 +241,12 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
               SET node.nodeType = 'Law',
                   node:Law,
                   node.lastUpdated = datetime(),
-                  node.statement = entity.statement,
-                  node.conditions = COALESCE(entity.conditions, []),
-                  node.exceptions = COALESCE(entity.exceptions, []),
-                  node.domain = entity.domain,
-                  node.proofs = COALESCE(entity.proofs, []),
+                  node.legalDocument = entity.legalDocument,
+                  node.legalDocumentJurisdiction = entity.legalDocumentJurisdiction,
+                  node.legalDocumentReference = entity.legalDocumentReference,
+                  node.content = entity.content,
+                  node.entities = COALESCE(entity.entities, []),
+                  node.concepts = COALESCE(entity.concepts, []),
                   node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
@@ -388,6 +394,86 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
           
           console.error(`Concept creation result: ${result.records.length > 0 ? 'Success' : 'Failed'}`);
         }
+        else if (entity.entityType === 'ScientificInsight') {
+          const result = await session.executeWrite(tx => tx.run(`
+            MERGE (node:Memory {name: $name})
+            SET node.nodeType = 'ScientificInsight',
+                node:ScientificInsight,
+                node.lastUpdated = datetime(),
+                node.hypothesis = $hypothesis,
+                node.evidence = $evidence,
+                node.methodology = $methodology,
+                node.confidence = $confidence,
+                node.field = $field,
+                node.publications = $publications,
+                node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+            RETURN node
+          `, {
+            name: entity.name,
+            hypothesis: (entity as any).hypothesis || null,
+            evidence: (entity as any).evidence || [],
+            methodology: (entity as any).methodology || null,
+            confidence: (entity as any).confidence || null,
+            field: (entity as any).field || null,
+            publications: (entity as any).publications || []
+          }));
+          
+          console.error(`ScientificInsight creation result: ${result.records.length > 0 ? 'Success' : 'Failed'}`);
+        }
+        else if (entity.entityType === 'Law') {
+          const result = await session.executeWrite(tx => tx.run(`
+            MERGE (node:Memory {name: $name})
+            SET node.nodeType = 'Law',
+                node:Law,
+                node.lastUpdated = datetime(),
+                node.legalDocument = $legalDocument,
+                node.legalDocumentJurisdiction = $legalDocumentJurisdiction,
+                node.legalDocumentReference = $legalDocumentReference,
+                node.content = $content,
+                node.entities = $entities,
+                node.concepts = $concepts,
+                node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+            RETURN node
+          `, {
+            name: entity.name,
+            legalDocument: (entity as any).legalDocument || null,
+            legalDocumentJurisdiction: (entity as any).legalDocumentJurisdiction || null,
+            legalDocumentReference: (entity as any).legalDocumentReference || null,
+            content: (entity as any).content || null,
+            entities: (entity as any).entities || [],
+            concepts: (entity as any).concepts || []
+          }));
+          
+          console.error(`Law creation result: ${result.records.length > 0 ? 'Success' : 'Failed'}`);
+        }
+        else if (entity.entityType === 'Thought') {
+          const result = await session.executeWrite(tx => tx.run(`
+            MERGE (node:Memory {name: $name})
+            SET node.nodeType = 'Thought',
+                node:Thought,
+                node.lastUpdated = datetime(),
+                node.content = $content,
+                node.references = $references,
+                node.confidence = $confidence,
+                node.source = $source,
+                node.createdBy = $createdBy,
+                node.tags = $tags,
+                node.impact = $impact,
+                node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+            RETURN node
+          `, {
+            name: entity.name,
+            content: (entity as any).content || null,
+            references: (entity as any).references || [],
+            confidence: (entity as any).confidence || null,
+            source: (entity as any).source || null,
+            createdBy: (entity as any).createdBy || null,
+            tags: (entity as any).tags || [],
+            impact: (entity as any).impact || null
+          }));
+          
+          console.error(`Thought creation result: ${result.records.length > 0 ? 'Success' : 'Failed'}`);
+        }
         else {
           // For other entity types, use the existing approach via saveGraph
           const graph = {
@@ -425,12 +511,13 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       
       // Process each relation separately for better debugging
       for (const relation of relations) {
+        const enhancedRelation = relation as EnhancedRelation;
         console.error(`Processing relation: ${relation.from} --[${relation.relationType}]--> ${relation.to}`);
         
-        // Check if the source and target nodes exist
+        // First check if both nodes exist and get their types
         const nodesExist = await session.executeRead(tx => tx.run(`
           MATCH (from:Memory {name: $fromName}), (to:Memory {name: $toName})
-          RETURN from, to
+          RETURN from.nodeType as fromNodeType, to.nodeType as toNodeType
         `, { 
           fromName: relation.from,
           toName: relation.to
@@ -441,23 +528,44 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
           continue;
         }
         
-        // Create the relationship
+        // Check if node types match the specified types (if provided)
+        const fromNodeType = nodesExist.records[0].get('fromNodeType');
+        const toNodeType = nodesExist.records[0].get('toNodeType');
+        
+        if (enhancedRelation.fromType && fromNodeType !== enhancedRelation.fromType) {
+          console.error(`Type mismatch for source node. Expected: ${enhancedRelation.fromType}, Actual: ${fromNodeType}`);
+          continue;
+        }
+        
+        if (enhancedRelation.toType && toNodeType !== enhancedRelation.toType) {
+          console.error(`Type mismatch for target node. Expected: ${enhancedRelation.toType}, Actual: ${toNodeType}`);
+          continue;
+        }
+        
+        // Create the relationship and store node types as relationship properties
         const result = await session.executeWrite(tx => tx.run(`
           MATCH (from:Memory {name: $fromName}), (to:Memory {name: $toName})
-          CALL apoc.merge.relationship(from, $relType, {}, {lastUpdated: datetime()}, to, {})
+          CALL apoc.merge.relationship(from, $relType, {}, 
+                                     {
+                                       lastUpdated: datetime(),
+                                       fromType: $fromNodeType,
+                                       toType: $toNodeType
+                                     }, to, {})
           YIELD rel
           RETURN rel
         `, {
           fromName: relation.from,
           toName: relation.to,
-          relType: relation.relationType
+          relType: relation.relationType,
+          fromNodeType: fromNodeType,
+          toNodeType: toNodeType
         }));
         
         if (result.records.length > 0) {
-          console.error(`Relationship created successfully: ${relation.from} --[${relation.relationType}]--> ${relation.to}`);
+          console.error(`Relationship created successfully: ${relation.from} (${fromNodeType}) --[${relation.relationType}]--> ${relation.to} (${toNodeType})`);
           createdRelations.push(relation);
         } else {
-          console.error(`Failed to create relationship: ${relation.from} --[${relation.relationType}]--> ${relation.to}`);
+          console.error(`Failed to create relationship: ${relation.from} (${fromNodeType}) --[${relation.relationType}]--> ${relation.to} (${toNodeType})`);
         }
       }
       
@@ -591,6 +699,137 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       return kgMemory;
     } catch (error) {
       console.error("Error searching nodes:", error);
+      return { entities: [], relations: [] };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async searchNodesWithFuzzyMatching(searchTerms: {
+    entities?: string[],
+    concepts?: string[],
+    events?: string[],
+    scientificInsights?: string[],
+    laws?: string[],
+    thoughts?: string[],
+    fuzzyThreshold?: number
+  }): Promise<KnowledgeGraph> {
+    const session = this.neo4jDriver.session();
+    const threshold = searchTerms.fuzzyThreshold || 0.7; // Default threshold
+    
+    try {
+      // Initialize results arrays
+      let matchedEntities: Entity[] = [];
+      let matchedRelations: Relation[] = [];
+      
+      // Function to run fuzzy search for a specific node type
+      const searchNodeType = async (nodeType: string, searchTerms: string[]) => {
+        if (!searchTerms || searchTerms.length === 0) return;
+        
+        // Execute fuzzy search against specific node type
+        const result = await session.executeRead(tx => tx.run(`
+          MATCH (entity:Memory)
+          WHERE entity.nodeType = $nodeType
+          
+          // For each search term, check for fuzzy matches
+          WITH entity, [term in $searchTerms | 
+            CASE
+              WHEN apoc.text.fuzzyMatch(entity.name, term) > $threshold THEN 
+                apoc.text.fuzzyMatch(entity.name, term) * 2
+              WHEN entity.content IS NOT NULL AND apoc.text.fuzzyMatch(entity.content, term) > $threshold THEN
+                apoc.text.fuzzyMatch(entity.content, term) * 1.5
+              WHEN entity.definition IS NOT NULL AND apoc.text.fuzzyMatch(entity.definition, term) > $threshold THEN
+                apoc.text.fuzzyMatch(entity.definition, term) * 1.5
+              ELSE 0
+            END
+          ] AS scores
+          
+          // Calculate overall match score
+          WITH entity, reduce(s = 0, score in scores | CASE WHEN score > s THEN score ELSE s END) as matchScore
+          
+          // Filter and order by score
+          WHERE matchScore > 0
+          ORDER BY matchScore DESC
+          
+          // Get relationships
+          WITH entity
+          OPTIONAL MATCH (entity)-[r]->(other)
+          WITH entity, collect(r) as outRels
+          OPTIONAL MATCH (other)-[inRel]->(entity)
+          
+          RETURN entity, outRels as relations, collect(inRel) as inRelations
+        `, { nodeType, searchTerms, threshold }));
+        
+        // Process results
+        result.records.forEach(record => {
+          const entityNode = record.get('entity');
+          const outRelationships = record.get('relations');
+          const inRelationships = record.get('inRelations');
+          
+          // Convert Neo4j node to Entity format
+          const entity: Entity = {
+            name: entityNode.properties.name,
+            entityType: entityNode.properties.nodeType || 'Entity',
+            observations: 'observations' in entityNode.properties ? 
+              entityNode.properties.observations : []
+          };
+          
+          // Add to matched entities if not already included
+          if (!matchedEntities.some(e => e.name === entity.name)) {
+            matchedEntities.push(entity);
+          }
+          
+          // Add outgoing relationships
+          if (outRelationships && Array.isArray(outRelationships)) {
+            outRelationships.forEach(rel => {
+              if (rel && rel.properties) {
+                const relation = rel.properties as unknown as Relation;
+                if (!matchedRelations.some(r => 
+                  r.from === relation.from && 
+                  r.to === relation.to && 
+                  r.relationType === relation.relationType
+                )) {
+                  matchedRelations.push(relation);
+                }
+              }
+            });
+          }
+          
+          // Add incoming relationships
+          if (inRelationships && Array.isArray(inRelationships)) {
+            inRelationships.forEach(rel => {
+              if (rel && rel.properties) {
+                const relation = {
+                  ...rel.properties as unknown as Relation,
+                  relationDirection: 'incoming'
+                };
+                if (!matchedRelations.some(r => 
+                  r.from === relation.from && 
+                  r.to === relation.to && 
+                  r.relationType === relation.relationType
+                )) {
+                  matchedRelations.push(relation);
+                }
+              }
+            });
+          }
+        });
+      };
+      
+      // Execute search for each node type with corresponding search terms
+      await searchNodeType('Entity', searchTerms.entities || []);
+      await searchNodeType('Concept', searchTerms.concepts || []);
+      await searchNodeType('Event', searchTerms.events || []);
+      await searchNodeType('ScientificInsight', searchTerms.scientificInsights || []);
+      await searchNodeType('Law', searchTerms.laws || []);
+      await searchNodeType('Thought', searchTerms.thoughts || []);
+      
+      return {
+        entities: matchedEntities,
+        relations: matchedRelations
+      };
+    } catch (error) {
+      console.error("Error in fuzzy search:", error);
       return { entities: [], relations: [] };
     } finally {
       await session.close();
@@ -910,6 +1149,190 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
     } catch (error) {
       console.error(`Error creating thought:`, error);
       throw error;
+    } finally {
+      await session.close();
+    }
+  }
+
+  // Find paths connecting two nodes (especially useful for concepts)
+  async findConceptConnections(sourceNodeName: string, targetNodeName: string, maxDepth: number = 3): Promise<KnowledgeGraph> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      // Find paths between the source and target nodes
+      const result = await session.executeRead(tx => tx.run(`
+        MATCH path = shortestPath((source:Memory {name: $sourceName})-[*1..$maxDepth]-(target:Memory {name: $targetName}))
+        UNWIND nodes(path) as node
+        WITH collect(DISTINCT node) as nodes, relationships(path) as pathRels
+        
+        // Get all relationships between the nodes in the path
+        UNWIND nodes as n1
+        UNWIND nodes as n2
+        OPTIONAL MATCH (n1)-[r]->(n2)
+        WHERE n1 <> n2
+        
+        RETURN nodes, collect(DISTINCT r) as rels
+      `, {
+        sourceName: sourceNodeName,
+        targetName: targetNodeName,
+        maxDepth
+      }));
+      
+      if (result.records.length === 0) {
+        console.error(`No path found between ${sourceNodeName} and ${targetNodeName} within ${maxDepth} hops`);
+        return { entities: [], relations: [] };
+      }
+      
+      // Process the nodes
+      const record = result.records[0];
+      const nodes = record.get('nodes');
+      const relationships = record.get('rels');
+      
+      // Map nodes to entities
+      const entities: Entity[] = nodes.map((node: any) => ({
+        name: node.properties.name,
+        entityType: node.properties.nodeType || 'Entity',
+        observations: 'observations' in node.properties ? 
+          node.properties.observations : []
+      }));
+      
+      // Map relationships to relations
+      const relations: Relation[] = relationships.map((rel: any) => ({
+        from: rel.startNode.properties.name,
+        to: rel.endNode.properties.name,
+        relationType: rel.type
+      }));
+      
+      return {
+        entities,
+        relations
+      };
+    } catch (error) {
+      console.error(`Error finding concept connections: ${error}`);
+      return { entities: [], relations: [] };
+    } finally {
+      await session.close();
+    }
+  }
+  
+  // Explore the neighborhood context around a node
+  async exploreContext(nodeName: string, maxDepth: number = 2): Promise<KnowledgeGraph> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      // Find the neighborhood subgraph
+      const result = await session.executeRead(tx => tx.run(`
+        MATCH (center:Memory {name: $nodeName})
+        CALL apoc.path.subgraphNodes(center, {
+          maxLevel: $maxDepth,
+          relationshipFilter: '*'
+        }) YIELD node
+        WITH collect(DISTINCT node) as nodes
+        
+        // Find all relationships between these nodes
+        UNWIND nodes as n1
+        UNWIND nodes as n2
+        MATCH (n1)-[r]->(n2)
+        WHERE n1 <> n2
+        
+        RETURN nodes, collect(DISTINCT r) as relationships
+      `, {
+        nodeName,
+        maxDepth
+      }));
+      
+      if (result.records.length === 0) {
+        console.error(`No node found with name ${nodeName}`);
+        return { entities: [], relations: [] };
+      }
+      
+      // Process the nodes
+      const record = result.records[0];
+      const nodes = record.get('nodes');
+      const relationships = record.get('relationships');
+      
+      // Map nodes to entities
+      const entities: Entity[] = nodes.map((node: any) => ({
+        name: node.properties.name,
+        entityType: node.properties.nodeType || 'Entity',
+        observations: 'observations' in node.properties ? 
+          node.properties.observations : []
+      }));
+      
+      // Map relationships to relations
+      const relations: Relation[] = relationships.map((rel: any) => ({
+        from: rel.startNode.properties.name,
+        to: rel.endNode.properties.name,
+        relationType: rel.type
+      }));
+      
+      return {
+        entities,
+        relations
+      };
+    } catch (error) {
+      console.error(`Error exploring context: ${error}`);
+      return { entities: [], relations: [] };
+    } finally {
+      await session.close();
+    }
+  }
+  
+  // Trace evidence chains that support or contradict a node
+  async traceEvidence(targetNodeName: string, relationshipType: string = "SUPPORTS"): Promise<KnowledgeGraph> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      // Find evidence paths
+      const result = await session.executeRead(tx => tx.run(`
+        MATCH path = (source:Memory)-[:${relationshipType}*1..3]->(target:Memory {name: $targetName})
+        WHERE source <> target
+        UNWIND nodes(path) as node
+        WITH collect(DISTINCT node) as nodes, relationships(path) as pathRels
+        
+        // Get additional relationships between these nodes
+        UNWIND nodes as n1
+        UNWIND nodes as n2
+        OPTIONAL MATCH (n1)-[r]->(n2)
+        WHERE n1 <> n2
+        
+        RETURN nodes, collect(DISTINCT r) as rels
+      `, {
+        targetName: targetNodeName
+      }));
+      
+      // Process the nodes
+      let entities: Entity[] = [];
+      let relations: Relation[] = [];
+      
+      if (result.records.length > 0) {
+        const record = result.records[0];
+        const nodes = record.get('nodes');
+        const relationships = record.get('rels');
+        
+        // Map nodes to entities
+        entities = nodes.map((node: any) => ({
+          name: node.properties.name,
+          entityType: node.properties.nodeType || 'Entity',
+          observations: 'observations' in node.properties ? 
+            node.properties.observations : []
+        }));
+        
+        // Map relationships to relations
+        relations = relationships.map((rel: any) => ({
+          from: rel.startNode.properties.name,
+          to: rel.endNode.properties.name,
+          relationType: rel.type
+        }));
+      }
+      
+      return {
+        entities,
+        relations
+      };
+    } catch (error) {
+      console.error(`Error tracing evidence: ${error}`);
+      return { entities: [], relations: [] };
     } finally {
       await session.close();
     }
