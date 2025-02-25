@@ -729,29 +729,45 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
 
   // Create a single Thought node and connect it to an entity
   async createThought(thought: { 
-    entityName: string; 
+    entityName?: string; // Now optional
+    title: string;
     content: string;
-    references?: string[];
+    entities?: string[];
+    concepts?: string[];
+    events?: string[];
+    scientificInsights?: string[];
+    laws?: string[];
+    thoughts?: string[];
     confidence?: number;
     source?: string;
     createdBy?: string;
     tags?: string[];
     impact?: string;
-    title?: string; // Optional title for the thought
   }): Promise<Entity> {
     const session = this.neo4jDriver.session();
     
     try {
-      // Generate a better name for the thought - use title if provided or create a short summary
+      // Use title as the thought name, or generate one if not provided
       const thoughtName = thought.title || 
-                        `Thought about ${thought.entityName}` + 
-                        (thought.tags && thought.tags.length > 0 ? ` (${thought.tags[0]})` : '');
+                        `Thought: ${thought.content.substring(0, 30)}...`;
       
-      // Create the Thought node and relationship to the entity
+      // Collect all referenced node names for the references array
+      const allReferences = [
+        ...(thought.entities || []),
+        ...(thought.concepts || []),
+        ...(thought.events || []),
+        ...(thought.scientificInsights || []),
+        ...(thought.laws || []),
+        ...(thought.thoughts || [])
+      ];
+      
+      // For backward compatibility
+      if (thought.entityName && !allReferences.includes(thought.entityName)) {
+        allReferences.push(thought.entityName);
+      }
+      
+      // Create the Thought node
       const result = await session.executeWrite(tx => tx.run(`
-        // Match the entity
-        MATCH (e:Memory {name: $entityName})
-        
         // Create the Thought node with appropriate labels
         CREATE (t:Memory:Thought {
           name: $thoughtName,
@@ -759,7 +775,7 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
           content: $content,
           createdAt: datetime(),
           lastUpdated: datetime(),
-          references: $references,
+          references: $allReferences,
           confidence: $confidence,
           source: $source,
           createdBy: $createdBy,
@@ -767,16 +783,11 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
           impact: $impact
         })
         
-        // Create relationship from Entity to Thought
-        CREATE (e)-[r:HAS_OBSERVATION]->(t)
-        SET r.lastUpdated = datetime()
-        
         RETURN t
       `, { 
-        entityName: thought.entityName,
         thoughtName,
         content: thought.content,
-        references: thought.references || [thought.entityName],
+        allReferences,
         confidence: thought.confidence || null,
         source: thought.source || null,
         createdBy: thought.createdBy || 'System',
@@ -785,10 +796,108 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       }));
       
       if (result.records.length === 0) {
-        throw new Error(`Failed to create Thought for entity ${thought.entityName}`);
+        throw new Error(`Failed to create Thought node`);
       }
       
       const thoughtNode = result.records[0].get('t');
+      
+      // Now create relationships to all referenced nodes
+      // For entities
+      if (thought.entities && thought.entities.length > 0) {
+        await session.executeWrite(tx => tx.run(`
+          MATCH (t:Thought:Memory {name: $thoughtName})
+          UNWIND $nodeNames as nodeName
+          MATCH (e:Entity:Memory {name: nodeName})
+          CREATE (t)-[r:REFERENCES]->(e)
+          SET r.lastUpdated = datetime()
+        `, {
+          thoughtName,
+          nodeNames: thought.entities
+        }));
+      }
+      
+      // For concepts
+      if (thought.concepts && thought.concepts.length > 0) {
+        await session.executeWrite(tx => tx.run(`
+          MATCH (t:Thought:Memory {name: $thoughtName})
+          UNWIND $nodeNames as nodeName
+          MATCH (c:Concept:Memory {name: nodeName})
+          CREATE (t)-[r:REFERENCES]->(c)
+          SET r.lastUpdated = datetime()
+        `, {
+          thoughtName,
+          nodeNames: thought.concepts
+        }));
+      }
+      
+      // For events
+      if (thought.events && thought.events.length > 0) {
+        await session.executeWrite(tx => tx.run(`
+          MATCH (t:Thought:Memory {name: $thoughtName})
+          UNWIND $nodeNames as nodeName
+          MATCH (e:Event:Memory {name: nodeName})
+          CREATE (t)-[r:REFERENCES]->(e)
+          SET r.lastUpdated = datetime()
+        `, {
+          thoughtName,
+          nodeNames: thought.events
+        }));
+      }
+      
+      // For scientific insights
+      if (thought.scientificInsights && thought.scientificInsights.length > 0) {
+        await session.executeWrite(tx => tx.run(`
+          MATCH (t:Thought:Memory {name: $thoughtName})
+          UNWIND $nodeNames as nodeName
+          MATCH (s:ScientificInsight:Memory {name: nodeName})
+          CREATE (t)-[r:REFERENCES]->(s)
+          SET r.lastUpdated = datetime()
+        `, {
+          thoughtName,
+          nodeNames: thought.scientificInsights
+        }));
+      }
+      
+      // For laws
+      if (thought.laws && thought.laws.length > 0) {
+        await session.executeWrite(tx => tx.run(`
+          MATCH (t:Thought:Memory {name: $thoughtName})
+          UNWIND $nodeNames as nodeName
+          MATCH (l:Law:Memory {name: nodeName})
+          CREATE (t)-[r:REFERENCES]->(l)
+          SET r.lastUpdated = datetime()
+        `, {
+          thoughtName,
+          nodeNames: thought.laws
+        }));
+      }
+      
+      // For thoughts
+      if (thought.thoughts && thought.thoughts.length > 0) {
+        await session.executeWrite(tx => tx.run(`
+          MATCH (t:Thought:Memory {name: $thoughtName})
+          UNWIND $nodeNames as nodeName
+          MATCH (ot:Thought:Memory {name: nodeName})
+          CREATE (t)-[r:REFERENCES]->(ot)
+          SET r.lastUpdated = datetime()
+        `, {
+          thoughtName,
+          nodeNames: thought.thoughts
+        }));
+      }
+      
+      // For backward compatibility - handle entityName
+      if (thought.entityName) {
+        await session.executeWrite(tx => tx.run(`
+          MATCH (t:Thought:Memory {name: $thoughtName})
+          MATCH (e:Memory {name: $entityName})
+          CREATE (t)-[r:REFERENCES]->(e)
+          SET r.lastUpdated = datetime()
+        `, {
+          thoughtName,
+          entityName: thought.entityName
+        }));
+      }
       
       // Convert to Entity format
       const thoughtEntity: Entity = {

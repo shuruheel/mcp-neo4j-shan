@@ -42,11 +42,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "create_nodes",
-        description: "Create multiple new nodes in the knowledge graph. When analyzing conversations, identify and create nodes of these types:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
+        description: "Create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
         inputSchema: {
           type: "object",
           properties: {
-            entities: {
+            nodes: {
               type: "array",
               items: {
                 type: "object",
@@ -131,7 +131,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               },
             },
           },
-          required: ["entities"],
+          required: ["nodes"],
         },
       },
       {
@@ -183,12 +183,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: "create_thought",
-        description: "Create a Thought node representing an analysis, interpretation, or insight about entities in the knowledge graph. Use this tool to document your reasoning, connect ideas across different nodes, or capture important observations that should be preserved. Thoughts should be linked to relevant entities and can reference other nodes to build a network of connected insights. Each thought should have clear content and, when possible, include confidence level, references to supporting nodes, and relevant tags for future retrieval.",
+        name: "create_thoughts",
+        description: "Create Thought nodes representing an analysis, interpretation, or insight about the conversation. Use this tool to document your reasoning, connect ideas across different nodes, or capture important observations that should be preserved. Thoughts should be linked to relevant entities, concepts, events, scientific insights, laws, and other thoughts, building a network of connected insights. Each thought should have clear content and, when possible, include confidence level.",
         inputSchema: {
           type: "object",
           properties: {
-            entityName: {
+            entityName: { // We may need to remove this and update code elsewhere because I added a separate field to allow for multiple entities and other node types
               type: "string",
               description: "The name of the Entity that the Thought is related to"
             },
@@ -200,35 +200,42 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string", 
               description: "Articulate the thought in the best way possible"
             },
-            references: {
+            entities: {
               type: "array",
               items: { type: "string" },
-              description: "References to Entity, Concept, Event, ScientificInsight, Law, and other Thought nodes"
+              description: "Names of entities that the thought is related to"
             },
-            confidence: {
-              type: "number",
-              description: "Confidence score for the thought (0-1)"
-            },
-            source: {
-              type: "string",
-              description: "Source of the thought (document, person, etc.)"
-            },
-            tags: {
+            concepts: {
               type: "array",
               items: { type: "string" },
-              description: "Classification tags for the thought (used for categorization)"
+              description: "Names of concepts that the thought is related to"
             },
-            impact: {
-              type: "string",
-              description: "Potential impact or importance of the thought"
+            events: {
+              type: "array",
+              items: { type: "string" },
+              description: "Names of events that the thought is related to"
             },
+            scientificInsights: {
+              type: "array",
+              items: { type: "string" },
+              description: "Names of scientific insights that the thought is related to"
+            },
+            laws: {
+              type: "array",
+              items: { type: "string" },
+              description: "Names of laws that the thought is related to"
+            },
+            thoughts: {
+              type: "array",
+              items: { type: "string" },
+              description: "Names of thoughts that the thought is related to"
           },
-          required: ["entityName", "content"],
+          required: ["title", "content"],
         },
       },
-    ],
-  };
-});
+    }
+  ],
+}});
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
@@ -239,36 +246,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   switch (name) {
     case "create_nodes":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.createEntities(args.entities as Entity[]), null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.createEntities(args.nodes as Entity[]), null, 2) }] };
     case "create_relations":
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.createRelations(args.relations as Relation[]), null, 2) }] };
-    case "add_observations":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.addObservations(args.observations as { entityName: string; contents: string[] }[]), null, 2) }] };
-    case "delete_entities":
-      await knowledgeGraphMemory.deleteEntities(args.entityNames as string[]);
-      return { content: [{ type: "text", text: "Entities deleted successfully" }] };
-    case "delete_observations":
-      await knowledgeGraphMemory.deleteObservations(args.deletions as { entityName: string; observations: string[] }[]);
-      return { content: [{ type: "text", text: "Observations deleted successfully" }] };
-    case "delete_relations":
-      await knowledgeGraphMemory.deleteRelations(args.relations as Relation[]);
-      return { content: [{ type: "text", text: "Relations deleted successfully" }] };
-    case "read_graph":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.readGraph(), null, 2) }] };
     case "search_nodes":
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.searchNodes(args.query as string), null, 2) }] };
-    case "open_nodes":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.openNodes(args.names as string[]), null, 2) }] };
     case "find_by_type":
       return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).findNodesByType(args.nodeType as string), null, 2) }] };
-    case "migrate_observations_to_thoughts":
-      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).migrateObservationsToThoughts(args.entityName as string), null, 2) }] };
-    case "create_thought":
+    case "create_thoughts":
       return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).createThought(args as { 
-        entityName: string; 
+        entityName?: string; 
+        title: string;
         content: string;
-        title?: string;
-        references?: string[];
+        entities?: string[];
+        concepts?: string[];
+        events?: string[];
+        scientificInsights?: string[];
+        laws?: string[];
+        thoughts?: string[];
         confidence?: number;
         source?: string;
         createdBy?: string;
