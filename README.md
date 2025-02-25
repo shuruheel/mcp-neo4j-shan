@@ -40,11 +40,21 @@ A sophisticated knowledge graph memory system that stores interconnected informa
   - Directional relationships with contextual explanations
   - Confidence scores and citation sources for academic claims
 
-- **Exploration Tools**:
-  - `explore_context`: Reveals the neighborhood around nodes with rich contextual information
-  - `create_nodes`: Adds new information to the knowledge graph with appropriate node types
-  - `create_relations`: Establishes meaningful connections between nodes
-  - `create_thoughts`: Captures AI analysis and insights about the conversation
+- **Available Tools**:
+  - **Graph Exploration**:
+    - `explore_context`: Reveals the neighborhood around nodes with rich contextual information
+    - `explore_weighted_context`: Prioritizes important connections based on relationship weights
+    - `robust_search`: Performs multi-strategy searches with fallback options
+  
+  - **Knowledge Creation**:
+    - `create_nodes`: Adds new information to the graph with specialized node types
+    - `create_relations`: Establishes meaningful connections between nodes with metadata
+    - `create_thoughts`: Captures AI analysis and insights about the conversation
+  
+  - **Search and Analysis**:
+    - `search_nodes`: Finds nodes matching specific text patterns
+    - `search_nodes_with_fuzzy_matching`: Uses fuzzy text matching for more flexible searches
+    - `generate_narrative`: Creates coherent narratives based on graph knowledge
 
 #### Use Cases
 
