@@ -20,8 +20,8 @@ const __dirname = path.dirname(__filename);
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  'neo4j+s://x.databases.neo4j.io',
-  Neo4jAuth.basic('neo4j', 'pwd')
+  'neo4j+s://9df4bc56.databases.neo4j.io',
+  Neo4jAuth.basic('neo4j', 'jrOZqvLnVYUQ7OF0JdmuOo4PqSlbGfvD50HXVXZrmEE')
 )
 
 const knowledgeGraphMemory:Neo4jMemory = new Neo4jMemory(neo4jDriver);
@@ -723,29 +723,64 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       
     // New handlers for traversal tools
     case "find_concept_connections":
-      result = await (knowledgeGraphMemory as Neo4jMemory).findConceptConnections(
-        args.sourceNodeName as string,
-        args.targetNodeName as string,
-        args.maxDepth as number || 3
-      );
-      return { 
-        content: [
-          {
-            role: "system",
-            content: {
-              type: "text",
-              text: toolPrompt
+      try {
+        result = await (knowledgeGraphMemory as Neo4jMemory).findConceptConnections(
+          args.sourceNodeName as string,
+          args.targetNodeName as string,
+          args.maxDepth as number || 3
+        );
+        
+        // Basic validation and cleanup
+        if (!result) result = { entities: [], relations: [] };
+        const cleanResult = {
+          entities: Array.isArray(result.entities) ? result.entities : [],
+          relations: Array.isArray(result.relations) ? result.relations : []
+        };
+        
+        return { 
+          content: [
+            {
+              role: "system",
+              content: {
+                type: "text",
+                text: toolPrompt
+              }
+            },
+            {
+              role: "assistant",
+              content: {
+                type: "text",
+                text: JSON.stringify(cleanResult, null, 2)
+              }
             }
-          },
-          {
-            role: "assistant",
-            content: {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
+          ] 
+        };
+      } catch (error) {
+        console.error(`Error in find_concept_connections tool: ${error}`);
+        
+        return { 
+          content: [
+            {
+              role: "system",
+              content: {
+                type: "text",
+                text: toolPrompt
+              }
+            },
+            {
+              role: "assistant",
+              content: {
+                type: "text",
+                text: JSON.stringify({
+                  error: `Error finding concept connections: ${error}`,
+                  entities: [],
+                  relations: []
+                }, null, 2)
+              }
             }
-          }
-        ] 
-      };
+          ] 
+        };
+      }
       
     case "explore_context":
       try {
@@ -763,32 +798,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           result = { entities: [], relations: [] };
         }
         
-        // Ensure entities and relations are always arrays
-        if (!Array.isArray(result.entities)) {
-          result.entities = [];
-        }
-        
-        if (!Array.isArray(result.relations)) {
-          result.relations = [];
-        }
-        
-        // Get the correct tool prompt with fallback to system prompt
-        const promptToUse = TOOL_PROMPTS["explore_context"] || SYSTEM_PROMPT;
-        
+        // Basic validation and cleanup
+        const cleanResult = {
+          entities: Array.isArray(result.entities) ? result.entities : [],
+          relations: Array.isArray(result.relations) ? result.relations : []
+        };
+
         return { 
           content: [
             {
               role: "system",
               content: {
                 type: "text",
-                text: promptToUse
+                text: toolPrompt
               }
             },
             {
               role: "assistant",
               content: {
                 type: "text",
-                text: JSON.stringify(result, null, 2)
+                text: JSON.stringify(cleanResult, null, 2)
               }
             }
           ] 
@@ -796,14 +825,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       } catch (error) {
         console.error(`Error in explore_context tool: ${error}`);
         
-        // Return a graceful error response with the same structure
+        // Return a graceful error response
         return { 
           content: [
             {
               role: "system",
               content: {
                 type: "text",
-                text: TOOL_PROMPTS["explore_context"] || SYSTEM_PROMPT
+                text: toolPrompt
               }
             },
             {
@@ -822,28 +851,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       
     case "trace_evidence":
-      result = await (knowledgeGraphMemory as Neo4jMemory).traceEvidence(
-        args.targetNodeName as string,
-        args.relationshipType as string || "SUPPORTS"
-      );
-      return { 
-        content: [
-          {
-            role: "system",
-            content: {
-              type: "text",
-              text: toolPrompt
+      try {
+        result = await (knowledgeGraphMemory as Neo4jMemory).traceEvidence(
+          args.targetNodeName as string,
+          args.relationshipType as string || "SUPPORTS"
+        );
+        
+        // Basic validation and cleanup
+        if (!result) result = { entities: [], relations: [] };
+        const cleanResult = {
+          entities: Array.isArray(result.entities) ? result.entities : [],
+          relations: Array.isArray(result.relations) ? result.relations : []
+        };
+        
+        return { 
+          content: [
+            {
+              role: "system",
+              content: {
+                type: "text",
+                text: toolPrompt
+              }
+            },
+            {
+              role: "assistant",
+              content: {
+                type: "text",
+                text: JSON.stringify(cleanResult, null, 2)
+              }
             }
-          },
-          {
-            role: "assistant",
-            content: {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
+          ] 
+        };
+      } catch (error) {
+        console.error(`Error in trace_evidence tool: ${error}`);
+        
+        return { 
+          content: [
+            {
+              role: "system",
+              content: {
+                type: "text",
+                text: toolPrompt
+              }
+            },
+            {
+              role: "assistant",
+              content: {
+                type: "text",
+                text: JSON.stringify({
+                  error: `Error tracing evidence: ${error}`,
+                  entities: [],
+                  relations: []
+                }, null, 2)
+              }
             }
-          }
-        ] 
-      };
+          ] 
+        };
+      }
       
     default:
       throw new Error(`Unknown tool: ${name}`);

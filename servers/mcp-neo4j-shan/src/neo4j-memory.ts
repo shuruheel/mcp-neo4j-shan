@@ -354,6 +354,319 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
     }
   }
 
+    // Explore the neighborhood context around a node
+    async exploreContext(nodeName: string, maxDepth: number = 2): Promise<KnowledgeGraph> {
+      const session = this.neo4jDriver.session();
+      
+      try {
+        console.error(`Exploring context for node: "${nodeName}" with maxDepth: ${maxDepth}`);
+        
+        // First check if the node exists with direct lookup
+        const nodeCheck = await session.executeRead(tx => tx.run(`
+          MATCH (n:Memory {name: $nodeName})
+          RETURN n
+        `, { nodeName }));
+        
+        // If not found by exact match, try case-insensitive
+        if (nodeCheck.records.length === 0) {
+          console.error(`Node not found with exact name "${nodeName}", trying case-insensitive match`);
+          
+          const caseInsensitiveCheck = await session.executeRead(tx => tx.run(`
+            MATCH (n:Memory)
+            WHERE toLower(n.name) = toLower($nodeName)
+            RETURN n
+          `, { nodeName }));
+          
+          if (caseInsensitiveCheck.records.length === 0) {
+            console.error(`No node found with name "${nodeName}" (case-insensitive check)`);
+            return { entities: [], relations: [] };
+          }
+          
+          // Use the actual node name
+          nodeName = caseInsensitiveCheck.records[0].get('n').properties.name;
+          console.error(`Found node with case-insensitive match: "${nodeName}"`);
+        } else {
+          nodeName = nodeCheck.records[0].get('n').properties.name;
+        }
+        
+        // Build the result incrementally, starting with the center node
+        let allNodes: any[] = [];
+        let allRelationships: any[] = [];
+        let uniqueNodeIds = new Set<string>();
+        
+        // Get the center node
+        const centerNodeResult = await session.executeRead(tx => tx.run(`
+          MATCH (center:Memory {name: $nodeName})
+          RETURN center
+        `, { nodeName }));
+        
+        if (centerNodeResult.records.length === 0) {
+          console.error(`Center node "${nodeName}" not found even after confirmation`);
+          return { entities: [], relations: [] };
+        }
+        
+        const centerNode = centerNodeResult.records[0].get('center');
+        allNodes.push(centerNode);
+        uniqueNodeIds.add(centerNode.elementId || centerNode.identity.toString());
+        
+        // Get immediate neighbors (depth 1)
+        if (maxDepth >= 1) {
+          console.error(`Getting depth 1 neighbors for "${nodeName}"`);
+          
+          const depth1Result = await session.executeRead(tx => tx.run(`
+            MATCH (center:Memory {name: $nodeName})-[r]-(neighbor)
+            RETURN neighbor, r
+          `, { nodeName }));
+          
+          console.error(`Found ${depth1Result.records.length} direct neighbors`);
+          
+          // Process depth 1 relationships
+          for (const record of depth1Result.records) {
+            const neighbor = record.get('neighbor');
+            const relationship = record.get('r');
+            
+            // Add neighbor if not already included
+            const neighborId = neighbor.elementId || neighbor.identity.toString();
+            if (!uniqueNodeIds.has(neighborId)) {
+              allNodes.push(neighbor);
+              uniqueNodeIds.add(neighborId);
+            }
+            
+            // Add relationship
+            allRelationships.push(relationship);
+          }
+        }
+        
+        // Get depth 2 neighbors if needed
+        if (maxDepth >= 2) {
+          console.error(`Getting depth 2 neighbors for "${nodeName}"`);
+          
+          const depth2Result = await session.executeRead(tx => tx.run(`
+            MATCH (center:Memory {name: $nodeName})-[r1]-(depth1)-[r2]-(depth2)
+            WHERE depth2 <> center AND depth1 <> depth2
+            RETURN depth1, depth2, r1, r2
+          `, { nodeName }));
+          
+          console.error(`Found connections to ${depth2Result.records.length} depth-2 neighbors`);
+          
+          // Process depth 2 relationships
+          for (const record of depth2Result.records) {
+            const depth1 = record.get('depth1');
+            const depth2 = record.get('depth2');
+            const rel1 = record.get('r1');
+            const rel2 = record.get('r2');
+            
+            // Add depth1 node if not already included
+            const depth1Id = depth1.elementId || depth1.identity.toString();
+            if (!uniqueNodeIds.has(depth1Id)) {
+              allNodes.push(depth1);
+              uniqueNodeIds.add(depth1Id);
+            }
+            
+            // Add depth2 node if not already included
+            const depth2Id = depth2.elementId || depth2.identity.toString();
+            if (!uniqueNodeIds.has(depth2Id)) {
+              allNodes.push(depth2);
+              uniqueNodeIds.add(depth2Id);
+            }
+            
+            // Add relationships (avoiding duplicates by simply adding them all for now)
+            allRelationships.push(rel1);
+            allRelationships.push(rel2);
+          }
+        }
+        
+        // If we found relationships, deduplicate them by their identity
+        const uniqueRelationships = allRelationships.filter((rel, index, self) => 
+          index === self.findIndex(r => 
+            (r.identity && rel.identity && r.identity.equals(rel.identity)) || 
+            r === rel
+          )
+        );
+        
+        console.error(`Found ${allNodes.length} nodes and ${uniqueRelationships.length} relationships in context`);
+        
+        // Convert to entities and relations format for return
+        const entities: Entity[] = allNodes.map(node => {
+          try {
+            // Make sure properties exist
+            const nodeProps = node.properties || {};
+            
+            // Create a basic entity with required properties, with fallbacks for missing values
+            const entity: any = {
+              name: nodeProps.name || 'Unnamed Node',
+              entityType: nodeProps.nodeType || 'Entity',
+              observations: Array.isArray(nodeProps.observations) ? nodeProps.observations : []
+            };
+            
+            // Safely add additional fields based on entity type
+            if (nodeProps.nodeType === 'Entity') {
+              if (nodeProps.description !== undefined && nodeProps.description !== null) entity.description = nodeProps.description;
+              if (nodeProps.biography !== undefined && nodeProps.biography !== null) entity.biography = nodeProps.biography;
+              if (nodeProps.keyContributions !== undefined && nodeProps.keyContributions !== null) 
+                entity.keyContributions = Array.isArray(nodeProps.keyContributions) ? nodeProps.keyContributions : [];
+              if (nodeProps.confidence !== undefined && nodeProps.confidence !== null) entity.confidence = nodeProps.confidence;
+              
+              // Add cognitive enhancement fields if they exist
+              if (nodeProps.emotionalValence !== undefined && nodeProps.emotionalValence !== null) entity.emotionalValence = nodeProps.emotionalValence;
+              if (nodeProps.emotionalArousal !== undefined && nodeProps.emotionalArousal !== null) entity.emotionalArousal = nodeProps.emotionalArousal;
+            } 
+            else if (nodeProps.nodeType === 'Concept') {
+              if (nodeProps.definition) entity.definition = nodeProps.definition;
+              if (nodeProps.examples) entity.examples = Array.isArray(nodeProps.examples) ? nodeProps.examples : [];
+              if (nodeProps.domain) entity.domain = nodeProps.domain;
+              if (nodeProps.perspectives) entity.perspectives = Array.isArray(nodeProps.perspectives) ? nodeProps.perspectives : [];
+              if (nodeProps.historicalDevelopment) entity.historicalDevelopment = Array.isArray(nodeProps.historicalDevelopment) ? nodeProps.historicalDevelopment : [];
+              
+              // Add cognitive enhancement fields if they exist
+              if (nodeProps.emotionalValence !== undefined && nodeProps.emotionalValence !== null) entity.emotionalValence = nodeProps.emotionalValence;
+              if (nodeProps.emotionalArousal !== undefined && nodeProps.emotionalArousal !== null) entity.emotionalArousal = nodeProps.emotionalArousal;
+              if (nodeProps.abstractionLevel !== undefined && nodeProps.abstractionLevel !== null) entity.abstractionLevel = nodeProps.abstractionLevel;
+              if (nodeProps.metaphoricalMappings) entity.metaphoricalMappings = Array.isArray(nodeProps.metaphoricalMappings) ? nodeProps.metaphoricalMappings : [];
+            }
+            else if (nodeProps.nodeType === 'Event') {
+              if (nodeProps.startDate) entity.startDate = nodeProps.startDate;
+              if (nodeProps.endDate) entity.endDate = nodeProps.endDate;
+              if (nodeProps.location) entity.location = nodeProps.location;
+              if (nodeProps.participants) entity.participants = Array.isArray(nodeProps.participants) ? nodeProps.participants : [];
+              if (nodeProps.outcome) entity.outcome = nodeProps.outcome;
+              
+              // Add cognitive enhancement fields if they exist
+              if (nodeProps.emotionalValence !== undefined && nodeProps.emotionalValence !== null) entity.emotionalValence = nodeProps.emotionalValence;
+              if (nodeProps.emotionalArousal !== undefined && nodeProps.emotionalArousal !== null) entity.emotionalArousal = nodeProps.emotionalArousal;
+              if (nodeProps.causalPredecessors) entity.causalPredecessors = Array.isArray(nodeProps.causalPredecessors) ? nodeProps.causalPredecessors : [];
+              if (nodeProps.causalSuccessors) entity.causalSuccessors = Array.isArray(nodeProps.causalSuccessors) ? nodeProps.causalSuccessors : [];
+            }
+            else if (nodeProps.nodeType === 'Thought') {
+              if (nodeProps.thoughtContent) entity.thoughtContent = nodeProps.thoughtContent;
+              if (nodeProps.content && !nodeProps.thoughtContent) entity.thoughtContent = nodeProps.content; // Backward compatibility
+              if (nodeProps.references) entity.references = Array.isArray(nodeProps.references) ? nodeProps.references : [];
+              if (nodeProps.confidence !== undefined && nodeProps.confidence !== null) entity.confidence = nodeProps.confidence;
+              
+              // Add cognitive enhancement fields if they exist
+              if (nodeProps.emotionalValence !== undefined && nodeProps.emotionalValence !== null) entity.emotionalValence = nodeProps.emotionalValence;
+              if (nodeProps.emotionalArousal !== undefined && nodeProps.emotionalArousal !== null) entity.emotionalArousal = nodeProps.emotionalArousal;
+              if (nodeProps.evidentialBasis) entity.evidentialBasis = Array.isArray(nodeProps.evidentialBasis) ? nodeProps.evidentialBasis : [];
+              if (nodeProps.thoughtCounterarguments) entity.thoughtCounterarguments = Array.isArray(nodeProps.thoughtCounterarguments) ? nodeProps.thoughtCounterarguments : [];
+              if (nodeProps.implications) entity.implications = Array.isArray(nodeProps.implications) ? nodeProps.implications : [];
+              if (nodeProps.thoughtConfidenceScore !== undefined && nodeProps.thoughtConfidenceScore !== null) entity.thoughtConfidenceScore = nodeProps.thoughtConfidenceScore;
+            }
+            else if (nodeProps.nodeType === 'ScientificInsight') {
+              if (nodeProps.hypothesis) entity.hypothesis = nodeProps.hypothesis;
+              if (nodeProps.evidence) entity.evidence = Array.isArray(nodeProps.evidence) ? nodeProps.evidence : [];
+              if (nodeProps.methodology) entity.methodology = nodeProps.methodology;
+              if (nodeProps.confidence !== undefined && nodeProps.confidence !== null) entity.confidence = nodeProps.confidence;
+              
+              // Add cognitive enhancement fields if they exist
+              if (nodeProps.emotionalValence !== undefined && nodeProps.emotionalValence !== null) entity.emotionalValence = nodeProps.emotionalValence;
+              if (nodeProps.emotionalArousal !== undefined && nodeProps.emotionalArousal !== null) entity.emotionalArousal = nodeProps.emotionalArousal;
+              if (nodeProps.evidenceStrength !== undefined && nodeProps.evidenceStrength !== null) entity.evidenceStrength = nodeProps.evidenceStrength;
+              if (nodeProps.scientificCounterarguments) entity.scientificCounterarguments = Array.isArray(nodeProps.scientificCounterarguments) ? nodeProps.scientificCounterarguments : [];
+              if (nodeProps.applicationDomains) entity.applicationDomains = Array.isArray(nodeProps.applicationDomains) ? nodeProps.applicationDomains : [];
+              if (nodeProps.replicationStatus) entity.replicationStatus = nodeProps.replicationStatus;
+              if (nodeProps.surpriseValue !== undefined && nodeProps.surpriseValue !== null) entity.surpriseValue = nodeProps.surpriseValue;
+            }
+            else if (nodeProps.nodeType === 'Law') {
+              if (nodeProps.statement) entity.statement = nodeProps.statement;
+              if (nodeProps.conditions) entity.conditions = Array.isArray(nodeProps.conditions) ? nodeProps.conditions : [];
+              if (nodeProps.exceptions) entity.exceptions = Array.isArray(nodeProps.exceptions) ? nodeProps.exceptions : [];
+              if (nodeProps.domain) entity.domain = nodeProps.domain;
+              
+              // Add cognitive enhancement fields if they exist
+              if (nodeProps.emotionalValence !== undefined && nodeProps.emotionalValence !== null) entity.emotionalValence = nodeProps.emotionalValence;
+              if (nodeProps.emotionalArousal !== undefined && nodeProps.emotionalArousal !== null) entity.emotionalArousal = nodeProps.emotionalArousal;
+              if (nodeProps.domainConstraints) entity.domainConstraints = Array.isArray(nodeProps.domainConstraints) ? nodeProps.domainConstraints : [];
+              if (nodeProps.historicalPrecedents) entity.historicalPrecedents = Array.isArray(nodeProps.historicalPrecedents) ? nodeProps.historicalPrecedents : [];
+              if (nodeProps.counterexamples) entity.counterexamples = Array.isArray(nodeProps.counterexamples) ? nodeProps.counterexamples : [];
+              if (nodeProps.formalRepresentation) entity.formalRepresentation = nodeProps.formalRepresentation;
+            }
+            
+            return entity;
+          } catch (error) {
+            console.error(`Error processing node: ${error}`);
+            // Return a minimal valid entity if there's an error
+            return {
+              name: 'Error Processing Node',
+              entityType: 'Entity',
+              observations: []
+            };
+          }
+        });
+        
+        const relations: Relation[] = uniqueRelationships.map(rel => {
+          try {
+            // Make sure properties exist
+            const relProps = rel.properties || {};
+            
+            // Find start and end node names with fallbacks
+            let fromName = 'Unknown';
+            let toName = 'Unknown';
+            
+            try {
+              // Try to get the start node name
+              if (rel.startNodeElementId) {
+                const startNode = allNodes.find(n => n.elementId === rel.startNodeElementId);
+                if (startNode && startNode.properties && startNode.properties.name) {
+                  fromName = startNode.properties.name;
+                }
+              } else if (rel.startNode && rel.startNode.properties && rel.startNode.properties.name) {
+                fromName = rel.startNode.properties.name;
+              }
+              
+              // Try to get the end node name
+              if (rel.endNodeElementId) {
+                const endNode = allNodes.find(n => n.elementId === rel.endNodeElementId);
+                if (endNode && endNode.properties && endNode.properties.name) {
+                  toName = endNode.properties.name;
+                }
+              } else if (rel.endNode && rel.endNode.properties && rel.endNode.properties.name) {
+                toName = rel.endNode.properties.name;
+              }
+            } catch (e) {
+              console.error(`Error retrieving node names for relationship: ${e}`);
+            }
+            
+            // Basic relation properties
+            const relation: any = {
+              from: fromName,
+              to: toName,
+              relationType: rel.type || 'RELATED_TO'
+            };
+            
+            // Add enhanced relation properties if they exist
+            if (relProps) {
+              if (relProps.context !== undefined && relProps.context !== null) {
+                relation.context = relProps.context;
+              }
+              if (relProps.confidenceScore !== undefined && relProps.confidenceScore !== null) {
+                relation.confidenceScore = relProps.confidenceScore;
+              }
+              if (relProps.sources !== undefined && relProps.sources !== null) {
+                relation.sources = Array.isArray(relProps.sources) ? relProps.sources : [];
+              }
+            }
+            
+            return relation;
+          } catch (error) {
+            console.error(`Error processing relationship: ${error}`);
+            // Return a minimal valid relation if there's an error
+            return {
+              from: 'Unknown',
+              to: 'Unknown',
+              relationType: 'ERROR_PROCESSING'
+            };
+          }
+        });
+        
+        return { entities, relations };
+      } catch (error) {
+        console.error(`Error exploring context: ${error}`);
+        return { entities: [], relations: [] };
+      } finally {
+        await session.close();
+      }
+    }
+
   async createEntities(entities: Entity[]): Promise<Entity[]> {
     const session = this.neo4jDriver.session();
     
@@ -1523,318 +1836,6 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
       return { entities, relations };
     } catch (error) {
       console.error(`Error finding concept connections: ${error}`);
-      return { entities: [], relations: [] };
-    } finally {
-      await session.close();
-    }
-  }
-
-  // Explore the neighborhood context around a node
-  async exploreContext(nodeName: string, maxDepth: number = 2): Promise<KnowledgeGraph> {
-    const session = this.neo4jDriver.session();
-    
-    try {
-      console.error(`Exploring context for node: "${nodeName}" with maxDepth: ${maxDepth}`);
-      
-      // First check if the node exists with direct lookup
-      const nodeCheck = await session.executeRead(tx => tx.run(`
-        MATCH (n:Memory {name: $nodeName})
-        RETURN n
-      `, { nodeName }));
-      
-      // If not found by exact match, try case-insensitive
-      if (nodeCheck.records.length === 0) {
-        console.error(`Node not found with exact name "${nodeName}", trying case-insensitive match`);
-        
-        const caseInsensitiveCheck = await session.executeRead(tx => tx.run(`
-          MATCH (n:Memory)
-          WHERE toLower(n.name) = toLower($nodeName)
-          RETURN n
-        `, { nodeName }));
-        
-        if (caseInsensitiveCheck.records.length === 0) {
-          console.error(`No node found with name "${nodeName}" (case-insensitive check)`);
-          return { entities: [], relations: [] };
-        }
-        
-        // Use the actual node name
-        nodeName = caseInsensitiveCheck.records[0].get('n').properties.name;
-        console.error(`Found node with case-insensitive match: "${nodeName}"`);
-      } else {
-        nodeName = nodeCheck.records[0].get('n').properties.name;
-      }
-      
-      // Build the result incrementally, starting with the center node
-      let allNodes: any[] = [];
-      let allRelationships: any[] = [];
-      let uniqueNodeIds = new Set<string>();
-      
-      // Get the center node
-      const centerNodeResult = await session.executeRead(tx => tx.run(`
-        MATCH (center:Memory {name: $nodeName})
-        RETURN center
-      `, { nodeName }));
-      
-      if (centerNodeResult.records.length === 0) {
-        console.error(`Center node "${nodeName}" not found even after confirmation`);
-        return { entities: [], relations: [] };
-      }
-      
-      const centerNode = centerNodeResult.records[0].get('center');
-      allNodes.push(centerNode);
-      uniqueNodeIds.add(centerNode.elementId || centerNode.identity.toString());
-      
-      // Get immediate neighbors (depth 1)
-      if (maxDepth >= 1) {
-        console.error(`Getting depth 1 neighbors for "${nodeName}"`);
-        
-        const depth1Result = await session.executeRead(tx => tx.run(`
-          MATCH (center:Memory {name: $nodeName})-[r]-(neighbor)
-          RETURN neighbor, r
-        `, { nodeName }));
-        
-        console.error(`Found ${depth1Result.records.length} direct neighbors`);
-        
-        // Process depth 1 relationships
-        for (const record of depth1Result.records) {
-          const neighbor = record.get('neighbor');
-          const relationship = record.get('r');
-          
-          // Add neighbor if not already included
-          const neighborId = neighbor.elementId || neighbor.identity.toString();
-          if (!uniqueNodeIds.has(neighborId)) {
-            allNodes.push(neighbor);
-            uniqueNodeIds.add(neighborId);
-          }
-          
-          // Add relationship
-          allRelationships.push(relationship);
-        }
-      }
-      
-      // Get depth 2 neighbors if needed
-      if (maxDepth >= 2) {
-        console.error(`Getting depth 2 neighbors for "${nodeName}"`);
-        
-        const depth2Result = await session.executeRead(tx => tx.run(`
-          MATCH (center:Memory {name: $nodeName})-[r1]-(depth1)-[r2]-(depth2)
-          WHERE depth2 <> center AND depth1 <> depth2
-          RETURN depth1, depth2, r1, r2
-        `, { nodeName }));
-        
-        console.error(`Found connections to ${depth2Result.records.length} depth-2 neighbors`);
-        
-        // Process depth 2 relationships
-        for (const record of depth2Result.records) {
-          const depth1 = record.get('depth1');
-          const depth2 = record.get('depth2');
-          const rel1 = record.get('r1');
-          const rel2 = record.get('r2');
-          
-          // Add depth1 node if not already included
-          const depth1Id = depth1.elementId || depth1.identity.toString();
-          if (!uniqueNodeIds.has(depth1Id)) {
-            allNodes.push(depth1);
-            uniqueNodeIds.add(depth1Id);
-          }
-          
-          // Add depth2 node if not already included
-          const depth2Id = depth2.elementId || depth2.identity.toString();
-          if (!uniqueNodeIds.has(depth2Id)) {
-            allNodes.push(depth2);
-            uniqueNodeIds.add(depth2Id);
-          }
-          
-          // Add relationships (avoiding duplicates by simply adding them all for now)
-          allRelationships.push(rel1);
-          allRelationships.push(rel2);
-        }
-      }
-      
-      // If we found relationships, deduplicate them by their identity
-      const uniqueRelationships = allRelationships.filter((rel, index, self) => 
-        index === self.findIndex(r => 
-          (r.identity && rel.identity && r.identity.equals(rel.identity)) || 
-          r === rel
-        )
-      );
-      
-      console.error(`Found ${allNodes.length} nodes and ${uniqueRelationships.length} relationships in context`);
-      
-      // Convert to entities and relations format for return
-      const entities: Entity[] = allNodes.map(node => {
-        try {
-          // Make sure properties exist
-          const nodeProps = node.properties || {};
-          
-          // Create a basic entity with required properties, with fallbacks for missing values
-          const entity: any = {
-            name: nodeProps.name || 'Unnamed Node',
-            entityType: nodeProps.nodeType || 'Entity',
-            observations: Array.isArray(nodeProps.observations) ? nodeProps.observations : []
-          };
-          
-          // Safely add additional fields based on entity type
-          if (nodeProps.nodeType === 'Entity') {
-            if (nodeProps.description) entity.description = nodeProps.description;
-            if (nodeProps.biography) entity.biography = nodeProps.biography;
-            if (nodeProps.keyContributions) entity.keyContributions = nodeProps.keyContributions;
-            if (nodeProps.confidence !== undefined) entity.confidence = nodeProps.confidence;
-            
-            // Add cognitive enhancement fields if they exist
-            if (nodeProps.emotionalValence !== undefined) entity.emotionalValence = nodeProps.emotionalValence;
-            if (nodeProps.emotionalArousal !== undefined) entity.emotionalArousal = nodeProps.emotionalArousal;
-          } 
-          else if (nodeProps.nodeType === 'Concept') {
-            if (nodeProps.definition) entity.definition = nodeProps.definition;
-            if (nodeProps.examples) entity.examples = Array.isArray(nodeProps.examples) ? nodeProps.examples : [];
-            if (nodeProps.domain) entity.domain = nodeProps.domain;
-            if (nodeProps.perspectives) entity.perspectives = Array.isArray(nodeProps.perspectives) ? nodeProps.perspectives : [];
-            if (nodeProps.historicalDevelopment) entity.historicalDevelopment = Array.isArray(nodeProps.historicalDevelopment) ? nodeProps.historicalDevelopment : [];
-            
-            // Add cognitive enhancement fields if they exist
-            if (nodeProps.emotionalValence !== undefined) entity.emotionalValence = nodeProps.emotionalValence;
-            if (nodeProps.emotionalArousal !== undefined) entity.emotionalArousal = nodeProps.emotionalArousal;
-            if (nodeProps.abstractionLevel !== undefined) entity.abstractionLevel = nodeProps.abstractionLevel;
-            if (nodeProps.metaphoricalMappings) entity.metaphoricalMappings = Array.isArray(nodeProps.metaphoricalMappings) ? nodeProps.metaphoricalMappings : [];
-          }
-          else if (nodeProps.nodeType === 'Event') {
-            if (nodeProps.startDate) entity.startDate = nodeProps.startDate;
-            if (nodeProps.endDate) entity.endDate = nodeProps.endDate;
-            if (nodeProps.location) entity.location = nodeProps.location;
-            if (nodeProps.participants) entity.participants = Array.isArray(nodeProps.participants) ? nodeProps.participants : [];
-            if (nodeProps.outcome) entity.outcome = nodeProps.outcome;
-            
-            // Add cognitive enhancement fields if they exist
-            if (nodeProps.emotionalValence !== undefined) entity.emotionalValence = nodeProps.emotionalValence;
-            if (nodeProps.emotionalArousal !== undefined) entity.emotionalArousal = nodeProps.emotionalArousal;
-            if (nodeProps.causalPredecessors) entity.causalPredecessors = Array.isArray(nodeProps.causalPredecessors) ? nodeProps.causalPredecessors : [];
-            if (nodeProps.causalSuccessors) entity.causalSuccessors = Array.isArray(nodeProps.causalSuccessors) ? nodeProps.causalSuccessors : [];
-          }
-          else if (nodeProps.nodeType === 'Thought') {
-            if (nodeProps.thoughtContent) entity.thoughtContent = nodeProps.thoughtContent;
-            if (nodeProps.content && !nodeProps.thoughtContent) entity.thoughtContent = nodeProps.content; // Backward compatibility
-            if (nodeProps.references) entity.references = Array.isArray(nodeProps.references) ? nodeProps.references : [];
-            if (nodeProps.confidence !== undefined) entity.confidence = nodeProps.confidence;
-            
-            // Add cognitive enhancement fields if they exist
-            if (nodeProps.emotionalValence !== undefined) entity.emotionalValence = nodeProps.emotionalValence;
-            if (nodeProps.emotionalArousal !== undefined) entity.emotionalArousal = nodeProps.emotionalArousal;
-            if (nodeProps.evidentialBasis) entity.evidentialBasis = Array.isArray(nodeProps.evidentialBasis) ? nodeProps.evidentialBasis : [];
-            if (nodeProps.thoughtCounterarguments) entity.thoughtCounterarguments = Array.isArray(nodeProps.thoughtCounterarguments) ? nodeProps.thoughtCounterarguments : [];
-            if (nodeProps.implications) entity.implications = Array.isArray(nodeProps.implications) ? nodeProps.implications : [];
-            if (nodeProps.thoughtConfidenceScore !== undefined) entity.thoughtConfidenceScore = nodeProps.thoughtConfidenceScore;
-          }
-          else if (nodeProps.nodeType === 'ScientificInsight') {
-            if (nodeProps.hypothesis) entity.hypothesis = nodeProps.hypothesis;
-            if (nodeProps.evidence) entity.evidence = Array.isArray(nodeProps.evidence) ? nodeProps.evidence : [];
-            if (nodeProps.methodology) entity.methodology = nodeProps.methodology;
-            if (nodeProps.confidence !== undefined) entity.confidence = nodeProps.confidence;
-            
-            // Add cognitive enhancement fields if they exist
-            if (nodeProps.emotionalValence !== undefined) entity.emotionalValence = nodeProps.emotionalValence;
-            if (nodeProps.emotionalArousal !== undefined) entity.emotionalArousal = nodeProps.emotionalArousal;
-            if (nodeProps.evidenceStrength !== undefined) entity.evidenceStrength = nodeProps.evidenceStrength;
-            if (nodeProps.scientificCounterarguments) entity.scientificCounterarguments = Array.isArray(nodeProps.scientificCounterarguments) ? nodeProps.scientificCounterarguments : [];
-            if (nodeProps.applicationDomains) entity.applicationDomains = Array.isArray(nodeProps.applicationDomains) ? nodeProps.applicationDomains : [];
-            if (nodeProps.replicationStatus) entity.replicationStatus = nodeProps.replicationStatus;
-            if (nodeProps.surpriseValue !== undefined) entity.surpriseValue = nodeProps.surpriseValue;
-          }
-          else if (nodeProps.nodeType === 'Law') {
-            if (nodeProps.statement) entity.statement = nodeProps.statement;
-            if (nodeProps.conditions) entity.conditions = Array.isArray(nodeProps.conditions) ? nodeProps.conditions : [];
-            if (nodeProps.exceptions) entity.exceptions = Array.isArray(nodeProps.exceptions) ? nodeProps.exceptions : [];
-            if (nodeProps.domain) entity.domain = nodeProps.domain;
-            
-            // Add cognitive enhancement fields if they exist
-            if (nodeProps.emotionalValence !== undefined) entity.emotionalValence = nodeProps.emotionalValence;
-            if (nodeProps.emotionalArousal !== undefined) entity.emotionalArousal = nodeProps.emotionalArousal;
-            if (nodeProps.domainConstraints) entity.domainConstraints = Array.isArray(nodeProps.domainConstraints) ? nodeProps.domainConstraints : [];
-            if (nodeProps.historicalPrecedents) entity.historicalPrecedents = Array.isArray(nodeProps.historicalPrecedents) ? nodeProps.historicalPrecedents : [];
-            if (nodeProps.counterexamples) entity.counterexamples = Array.isArray(nodeProps.counterexamples) ? nodeProps.counterexamples : [];
-            if (nodeProps.formalRepresentation) entity.formalRepresentation = nodeProps.formalRepresentation;
-          }
-          
-          return entity;
-        } catch (error) {
-          console.error(`Error processing node: ${error}`);
-          // Return a minimal valid entity if there's an error
-          return {
-            name: 'Error Processing Node',
-            entityType: 'Entity',
-            observations: []
-          };
-        }
-      });
-      
-      const relations: Relation[] = uniqueRelationships.map(rel => {
-        try {
-          // Make sure properties exist
-          const relProps = rel.properties || {};
-          
-          // Find start and end node names with fallbacks
-          let fromName = 'Unknown';
-          let toName = 'Unknown';
-          
-          try {
-            // Try to get the start node name
-            if (rel.startNodeElementId) {
-              const startNode = allNodes.find(n => n.elementId === rel.startNodeElementId);
-              if (startNode && startNode.properties && startNode.properties.name) {
-                fromName = startNode.properties.name;
-              }
-            } else if (rel.startNode && rel.startNode.properties && rel.startNode.properties.name) {
-              fromName = rel.startNode.properties.name;
-            }
-            
-            // Try to get the end node name
-            if (rel.endNodeElementId) {
-              const endNode = allNodes.find(n => n.elementId === rel.endNodeElementId);
-              if (endNode && endNode.properties && endNode.properties.name) {
-                toName = endNode.properties.name;
-              }
-            } else if (rel.endNode && rel.endNode.properties && rel.endNode.properties.name) {
-              toName = rel.endNode.properties.name;
-            }
-          } catch (e) {
-            console.error(`Error retrieving node names for relationship: ${e}`);
-          }
-          
-          // Basic relation properties
-          const relation: any = {
-            from: fromName,
-            to: toName,
-            relationType: rel.type || 'RELATED_TO'
-          };
-          
-          // Add enhanced relation properties if they exist
-          if (relProps) {
-            if (relProps.context) {
-              relation.context = relProps.context;
-            }
-            if (relProps.confidenceScore !== undefined) {
-              relation.confidenceScore = relProps.confidenceScore;
-            }
-            if (relProps.sources) {
-              relation.sources = Array.isArray(relProps.sources) ? relProps.sources : [];
-            }
-          }
-          
-          return relation;
-        } catch (error) {
-          console.error(`Error processing relationship: ${error}`);
-          // Return a minimal valid relation if there's an error
-          return {
-            from: 'Unknown',
-            to: 'Unknown',
-            relationType: 'ERROR_PROCESSING'
-          };
-        }
-      });
-      
-      return { entities, relations };
-    } catch (error) {
-      console.error(`Error exploring context: ${error}`);
       return { entities: [], relations: [] };
     } finally {
       await session.close();
