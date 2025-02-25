@@ -19,8 +19,8 @@ const __dirname = path.dirname(__filename);
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  'neo4j+s://x.databases.neo4j.io',
-  Neo4jAuth.basic('neo4j', 'pwd')
+  'neo4j+s://9df4bc56.databases.neo4j.io',
+  Neo4jAuth.basic('neo4j', 'jrOZqvLnVYUQ7OF0JdmuOo4PqSlbGfvD50HXVXZrmEE')
 )
 
 const knowledgeGraphMemory:Neo4jMemory = new Neo4jMemory(neo4jDriver);
@@ -39,8 +39,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
+        name: "explore_context",
+        description: "Whenever the user shows interest in exploring a topic, use this tool FIRST to explore the complete context around relevant Entity, Event, Concept, Scientific Insight, or Law nodes in the knowledge graph. This tool reveals the neighborhood of relationships and connected nodes surrounding the specified node, providing deeper contextual understanding. Useful for building a comprehensive picture. Use this tool for all node types extracted from the user's query.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeName: { 
+              type: "string", 
+              description: "Name of the node to explore the context around" 
+            },
+            maxDepth: { 
+              type: "number", 
+              description: "Maximum number of relationship hops to include (default: 2)",
+              default: 2 
+            }
+          },
+          required: ["nodeName"],
+        },
+      },
+      {
         name: "create_nodes",
-        description: "Create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
+        description: "IF the explore_context tool does not return any nodes OR the user specifically asks for the knowledge graph to be updated, create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
         inputSchema: {
           type: "object",
           properties: {
@@ -112,7 +131,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
       {
         name: "create_relations",
-        description: "Create multiple new relations between nodes in the knowledge graph. Relations should be semantically meaningful and use active voice. Example relations between different node types:\n- Entity -> Concept: ADVOCATES, SUPPORTS, UNDERSTANDS\n- Entity -> Event: PARTICIPATED_IN, ORGANIZED, WITNESSED\n- Concept -> Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS\n- Event -> ScientificInsight: LED_TO, DISPROVED, REINFORCED\n- ScientificInsight -> Law: SUPPORTS, CHALLENGES, REFINES",
+        description: "Whenever you create new nodes, always create any relevant new relations between nodes in the knowledge graph. Relations should be semantically meaningful and use active voice. Example relations between different node types:\n- Entity -> Concept: ADVOCATES, SUPPORTS, UNDERSTANDS\n- Entity -> Event: PARTICIPATED_IN, ORGANIZED, WITNESSED\n- Concept -> Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS\n- Event -> ScientificInsight: LED_TO, DISPROVED, REINFORCED\n- ScientificInsight -> Law: SUPPORTS, CHALLENGES, REFINES",
         inputSchema: {
           type: "object",
           properties: {
@@ -135,30 +154,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: "search_nodes",
-        description: "Search for nodes in the knowledge graph based on entities, concepts, events, scientific insights, laws, or thoughts discussed in the conversation. The search uses fuzzy matching to find relevant nodes even with slight naming variations.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: { 
-              type: "string", 
-              description: "The search query to match against node names and content" 
-            },
-            entityTypes: {
-              type: "array",
-              items: { 
-                type: "string",
-                enum: ["Entity", "Event", "Concept", "ScientificInsight", "Law", "Thought"]
-              },
-              description: "Optional: Specific node types to search (defaults to all types)"
-            }
-          },
-          required: ["query"],
-        },
-      },
-      {
         name: "create_thoughts",
-        description: "Create Thought nodes representing an analysis, interpretation, or insight about the conversation. Use this tool to document your reasoning, connect ideas across different nodes, or capture important observations that should be preserved. Thoughts should be linked to relevant entities, concepts, events, scientific insights, laws, and other thoughts, building a network of connected insights. Each thought should have clear content and, when possible, include confidence level.",
+        description: "When updating the knowledge graph, create Thought nodes representing an analysis, interpretation, or insight about the conversation. Use this tool to document your reasoning, connect ideas across different nodes, or capture important observations that should be preserved. Thoughts should be linked to relevant entities, concepts, events, scientific insights, laws, and other thoughts, building a network of connected insights. Each thought should have clear content and, when possible, include confidence level.",
         inputSchema: {
           type: "object",
           properties: {
@@ -206,49 +203,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ["title", "content"],
-        },
-      },
-      // New traversal tools
-      {
-        name: "find_concept_connections",
-        description: "Find how two nodes in the knowledge graph are connected through relationships. This tool discovers paths between nodes, revealing how concepts, entities, or other nodes relate to each other through direct or indirect connections. Especially useful for understanding how different ideas are linked.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            sourceNodeName: { 
-              type: "string", 
-              description: "Name of the source node to start the path from" 
-            },
-            targetNodeName: { 
-              type: "string", 
-              description: "Name of the target node to find a path to" 
-            },
-            maxDepth: { 
-              type: "number", 
-              description: "Maximum number of relationship hops to consider (default: 3)",
-              default: 3 
-            }
-          },
-          required: ["sourceNodeName", "targetNodeName"],
-        },
-      },
-      {
-        name: "explore_context",
-        description: "Explore the complete context around a node in the knowledge graph. This tool reveals the neighborhood of relationships and connected nodes surrounding the specified node, providing deeper contextual understanding. Useful for building a comprehensive picture of how a concept, entity, event, or thought relates to other knowledge.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            nodeName: { 
-              type: "string", 
-              description: "Name of the node to explore the context around" 
-            },
-            maxDepth: { 
-              type: "number", 
-              description: "Maximum number of relationship hops to include (default: 2)",
-              default: 2 
-            }
-          },
-          required: ["nodeName"],
         },
       }
     ],
