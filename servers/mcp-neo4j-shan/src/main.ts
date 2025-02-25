@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { driver as connectToNeo4j, auth as Neo4jAuth } from 'neo4j-driver'
@@ -29,11 +30,200 @@ const knowledgeGraphMemory:Neo4jMemory = new Neo4jMemory(neo4jDriver);
 const server = new Server({
   name: "mcp-neo4j-shan",
   version: "1.0.1",
-},    {
-    capabilities: {
-      tools: {},
-    },
-  },);
+  },    {
+      capabilities: {
+        tools: {},
+        prompts: {}
+      },
+    },);
+    
+const SYSTEM_PROMPT = `You are interacting with a Neo4j knowledge graph that stores interconnected information about entities, events, concepts, scientific insights, laws, and thoughts. This knowledge graph helps maintain context between conversations and builds a rich network of related information.
+
+Follow these guidelines when using the available tools:
+
+1. ALWAYS start by using the \`explore_context\` tool to check if relevant nodes already exist in the knowledge graph when the user asks about a topic. This tool reveals the neighborhood around a node including all connected relationships and nodes.
+
+2. If \`explore_context\` doesn't return any nodes OR if the user explicitly asks to update the knowledge graph, use the \`create_nodes\` tool to add new information. Create the following relevant node types from the conversation:
+   - Entity: People, organizations, products, physical objects
+   - Event: Time-bound occurrences
+   - Concept: Abstract ideas, theories, frameworks
+   - ScientificInsight: Research findings with evidence
+   - Law: Established principles or rules
+   - Thought: Analyses or interpretations
+
+3. After creating nodes, ALWAYS use the \`create_relations\` tool to connect them to existing nodes when relevant. Relations should use active voice verbs and include explanatory context about how and why nodes are connected.
+
+4. Only use the \`create_thoughts\` tool when specifically asked to add your thoughts to the knowledge graph. These represent your analysis or insights about the conversation.
+
+The knowledge graph is designed to build connections between ideas over time. Focus on creating high-quality nodes with detailed attributes and meaningful relationships between them.`;
+
+// Define tool-specific prompts
+const TOOL_PROMPTS = {
+  "explore_context": `You are a knowledge graph exploration assistant. When presenting exploration results:
+  1. Organize information clearly by node types (Entity, Event, Concept, ScientificInsight, Law, Thought)
+  2. Format relationships with direction indicators (→) showing the connection between nodes
+  3. Highlight the most important connections based on relationship types and context
+  4. Summarize key insights from the graph structure
+  5. Present node properties according to their type (e.g., for Entities: description, biography; for Events: dates, locations)
+  
+  The input parameters for this tool are:
+  - nodeName (required): The exact name of the node to explore
+  - maxDepth (optional, default: 2): Maximum number of relationship hops to include`,
+
+  "create_nodes": `You are a knowledge graph creation assistant. When creating nodes:
+  1. Create nodes with detailed, complete attributes based on their type
+  2. Ensure node names are concise, specific, and uniquely identifiable
+  3. Organize output by node type for clarity
+  4. Provide confirmation of what was created
+  
+  Interface for each node type:
+  
+  - Entity (People, organizations, products, physical objects):
+    * Required: name, entityType="Entity"
+    * Optional: description, biography, keyContributions (array)
+  
+  - Event (Time-bound occurrences):
+    * Required: name, entityType="Event" 
+    * Optional: description, startDate, endDate, location, participants (array), outcome
+  
+  - Concept (Abstract ideas, theories, frameworks):
+    * Required: name, entityType="Concept"
+    * Optional: description, definition, domain, perspectives (array), historicalDevelopment (array of {period, development})
+  
+  - ScientificInsight (Research findings with evidence):
+    * Required: name, entityType="ScientificInsight"
+    * Optional: description, hypothesis, evidence (array), methodology, confidence, field, publications (array)
+  
+  - Law (Established principles or rules):
+    * Required: name, entityType="Law"
+    * Optional: description, content, legalDocument, legalDocumentJurisdiction, legalDocumentReference, entities (array), concepts (array)
+  
+  - Thought (Analyses or interpretations):
+    * Required: name, entityType="Thought"
+    * Optional: description, content`,
+
+  "create_relations": `You are a knowledge graph relation assistant. When creating relations:
+  1. Use active voice verbs for relationTypes that clearly indicate the semantic connection
+  2. Ensure proper directionality (from → to) with meaningful connections
+  3. Always include a detailed context field (30-50 words) explaining how and why the nodes are related
+  4. Include confidence scores (0.0-1.0) when appropriate
+  5. Add citation sources when available
+  
+  Required fields for each relation:
+  - from: The name of the source node
+  - to: The name of the target node  
+  - relationType: An active voice verb describing the relationship (e.g., ADVOCATES, PARTICIPATED_IN, RELATES_TO)
+  
+  Optional but highly recommended fields:
+  - context: Explanation of how and why these nodes are related (30-50 words)
+  - confidenceScore: Number between 0.0-1.0
+  - sources: Array of citation sources
+  
+  Example relation types between different node types:
+  - Entity → Concept: ADVOCATES, SUPPORTS, UNDERSTANDS
+  - Entity → Event: PARTICIPATED_IN, ORGANIZED, WITNESSED
+  - Concept → Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS
+  - Event → ScientificInsight: LED_TO, DISPROVED, REINFORCED
+  - ScientificInsight → Law: SUPPORTS, CHALLENGES, REFINES`,
+
+  "create_thoughts": `You are a knowledge graph thought assistant. When creating thought nodes:
+  1. Create detailed thought content that represents analysis, interpretation, or insight
+  2. Connect the thought to relevant entities, concepts, events, scientific insights, laws, and other thoughts
+  3. Include a clear title that summarizes the thought
+  4. Explain how this thought enhances the knowledge graph
+  
+  Interface for Thought creation:
+  - Required fields:
+    * title: Brief descriptive title
+    * content: Detailed thought content
+  
+  - Optional fields:
+    * entityName: Primary Entity this Thought relates to
+    * entities: Array of related entity names
+    * concepts: Array of related concept names
+    * events: Array of related event names
+    * scientificInsights: Array of related scientific insight names
+    * laws: Array of related law names
+    * thoughts: Array of related thought names`,
+
+  "search_nodes": `You are a knowledge graph search assistant. When presenting search results:
+  1. Organize results in a clear, hierarchical structure
+  2. Highlight the most relevant matches at the top
+  3. Group results by node type (Entity, Event, Concept, etc.)
+  4. For each result, show key properties based on node type
+  5. Explain why each result matches the query
+  6. Suggest related searches if appropriate
+  
+  The search is performed using fuzzy matching combined with fallback strategies to ensure the best possible results.`,
+
+  "search_nodes_by_type": `You are a knowledge graph type-specific search assistant. When presenting search results:
+  1. Organize results for the specific requested node type
+  2. Show properties relevant to that node type:
+     - For Entity: description, biography, keyContributions
+     - For Event: dates, location, participants, outcome
+     - For Concept: definition, domain, perspectives
+     - For ScientificInsight: hypothesis, evidence, methodology
+     - For Law: content, legal references
+     - For Thought: content, connected nodes
+  3. Highlight the most relevant matches
+  4. Explain why each result is significant
+  5. Suggest related searches within the same node type`,
+
+  "find_concept_connections": `You are a knowledge graph connection explorer. When showing connections between concepts:
+  1. Present the path(s) between the source and target nodes
+  2. Show each step in the path with the connecting relationship type
+  3. Explain the significance of each connection in the path
+  4. Highlight the shortest or most meaningful paths
+  5. Include relevant properties of intermediary nodes
+  6. Evaluate the strength of the connection based on path length and relationship types
+  
+  The input parameters for this tool are:
+  - sourceNodeName (required): Name of the starting node
+  - targetNodeName (required): Name of the ending node
+  - maxDepth (optional, default: 3): Maximum path length to consider`,
+
+  "trace_evidence": `You are a knowledge graph evidence tracer. When presenting evidence chains:
+  1. Start with the target claim or node
+  2. Show all supporting evidence in a tree structure
+  3. For each evidence node, display:
+     - Node name and type
+     - Relationship type to parent (usually SUPPORTS)
+     - Confidence score when available
+     - Key properties based on node type
+  4. Evaluate the strength of each evidence branch
+  5. Highlight any gaps in the evidence chain
+  6. Provide an overall assessment of the evidence quality
+  
+  The input parameters for this tool are:
+  - targetNodeName (required): The name of the node to trace evidence for
+  - relationshipType (optional, default: "SUPPORTS"): Type of relationship to trace`
+};
+
+// Define the PROMPTS constant that's used in the GetPromptRequestSchema handler
+const PROMPTS = {
+  default: SYSTEM_PROMPT,
+  ...TOOL_PROMPTS
+};
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const prompt = PROMPTS[request.params.name];
+  if (!prompt) {
+    throw new Error(`Prompt not found: ${request.params.name}`);
+  }
+
+  // Include the system prompt for all tool-related prompts
+  const messages = [
+    {
+      role: "system",
+      content: {
+        type: "text",
+        text: prompt
+      }
+    }
+  ];
+
+  return { messages };
+});
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
@@ -94,11 +284,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   outcome: { type: "string", description: "Outcome of the event" },
                   // Fields for Node Type: Concept
                   definition: { type: "string", description: "A brief definition of the concept (1-2 concise sentences)" },
-                  examples: {
-                    type: "array",
-                    items: { type: "string" },
-                    description: "Examples for Concept type"
-                  },
+                  discoveryDate: { type: "string", description: "Date of discovery of the concept" },
                   domain: { type: "string", description: "Domain of the Node Type (if any)" },
                   perspectives: {
                     type: "array",
@@ -113,8 +299,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                         period: { type: "string", description: "Time period or era" },
                         development: { type: "string", description: "How the concept evolved during this period" }
                       }
-                    },
-                    description: "How this concept has evolved over time"
+                    }
                   },
                   // Fields for Node Type: Scientific Insight
                   hypothesis: { type: "string", description: "Describe the hypothesis for the Scientific Insight node" },
@@ -241,36 +426,105 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  const toolPrompt = TOOL_PROMPTS[name] || SYSTEM_PROMPT;
 
   if (!args) {
     throw new Error(`No arguments provided for tool: ${name}`);
   }
 
+  let result;
+  
   switch (name) {
     case "create_nodes":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.createEntities(args.nodes as Entity[]), null, 2) }] };
+      result = await knowledgeGraphMemory.createEntities(args.nodes as Entity[]);
+      return { 
+        content: [
+          {
+            role: "system",
+            content: {
+              type: "text",
+              text: toolPrompt
+            }
+          },
+          {
+            role: "assistant",
+            content: {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          }
+        ] 
+      };
+      
     case "create_relations":
-      return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.createRelations(args.relations as Relation[]), null, 2) }] };
+      result = await knowledgeGraphMemory.createRelations(args.relations as Relation[]);
+      return { 
+        content: [
+          {
+            role: "system",
+            content: {
+              type: "text",
+              text: toolPrompt
+            }
+          },
+          {
+            role: "assistant",
+            content: {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          }
+        ] 
+      };
+      
     case "search_nodes":
       // Parse the query to extract different types of entities
-      // Here we're using the same pattern used in create_entities
       const searchQuery = args.query as string;
       
       // Use the robust search method that combines fuzzy matching with fallbacks
+      result = await (knowledgeGraphMemory as Neo4jMemory).robustSearch(searchQuery);
       return { 
-        content: [{ 
-          type: "text", 
-          text: JSON.stringify(
-            await (knowledgeGraphMemory as Neo4jMemory).robustSearch(searchQuery), 
-            null, 
-            2
-          ) 
-        }] 
+        content: [
+          {
+            role: "system",
+            content: {
+              type: "text",
+              text: toolPrompt
+            }
+          },
+          {
+            role: "assistant",
+            content: {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          }
+        ] 
       };
+      
     case "search_nodes_by_type":
-      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).findNodesByType(args.nodeType as string, args.query as string), null, 2) }] };
+      result = await (knowledgeGraphMemory as Neo4jMemory).findNodesByType(args.nodeType as string, args.query as string);
+      return { 
+        content: [
+          {
+            role: "system",
+            content: {
+              type: "text",
+              text: toolPrompt
+            }
+          },
+          {
+            role: "assistant",
+            content: {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          }
+        ] 
+      };
+      
     case "create_thoughts":
-      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).createThought(args as { 
+      result = await (knowledgeGraphMemory as Neo4jMemory).createThought(args as { 
         entityName?: string; 
         title: string;
         content: string;
@@ -285,24 +539,100 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         createdBy?: string;
         tags?: string[];
         impact?: string;
-      }), null, 2) }] };
+      });
+      return { 
+        content: [
+          {
+            role: "system",
+            content: {
+              type: "text",
+              text: toolPrompt
+            }
+          },
+          {
+            role: "assistant",
+            content: {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          }
+        ] 
+      };
+      
     // New handlers for traversal tools
     case "find_concept_connections":
-      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).findConceptConnections(
+      result = await (knowledgeGraphMemory as Neo4jMemory).findConceptConnections(
         args.sourceNodeName as string,
         args.targetNodeName as string,
         args.maxDepth as number || 3
-      ), null, 2) }] };
+      );
+      return { 
+        content: [
+          {
+            role: "system",
+            content: {
+              type: "text",
+              text: toolPrompt
+            }
+          },
+          {
+            role: "assistant",
+            content: {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          }
+        ] 
+      };
+      
     case "explore_context":
-      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).exploreContext(
+      result = await (knowledgeGraphMemory as Neo4jMemory).exploreContext(
         args.nodeName as string,
         args.maxDepth as number || 2
-      ), null, 2) }] };
+      );
+      return { 
+        content: [
+          {
+            role: "system",
+            content: {
+              type: "text",
+              text: toolPrompt
+            }
+          },
+          {
+            role: "assistant",
+            content: {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          }
+        ] 
+      };
+      
     case "trace_evidence":
-      return { content: [{ type: "text", text: JSON.stringify(await (knowledgeGraphMemory as Neo4jMemory).traceEvidence(
+      result = await (knowledgeGraphMemory as Neo4jMemory).traceEvidence(
         args.targetNodeName as string,
         args.relationshipType as string || "SUPPORTS"
-      ), null, 2) }] };
+      );
+      return { 
+        content: [
+          {
+            role: "system",
+            content: {
+              type: "text",
+              text: toolPrompt
+            }
+          },
+          {
+            role: "assistant",
+            content: {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          }
+        ] 
+      };
+      
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
