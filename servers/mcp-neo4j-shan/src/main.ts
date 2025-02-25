@@ -588,43 +588,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "create_nodes":
       result = await knowledgeGraphMemory.createEntities(args.nodes as Entity[]);
       return { 
-        content: [
-          {
-            role: "system",
-            content: {
-              type: "text",
-              text: toolPrompt
-            }
-          },
-          {
-            role: "assistant",
-            content: {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          }
-        ] 
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
       };
       
     case "create_relations":
       result = await knowledgeGraphMemory.createRelations(args.relations as Relation[]);
       return { 
-        content: [
-          {
-            role: "system",
-            content: {
-              type: "text",
-              text: toolPrompt
-            }
-          },
-          {
-            role: "assistant",
-            content: {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          }
-        ] 
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
       };
       
     case "search_nodes":
@@ -634,22 +604,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Use the robust search method that combines fuzzy matching with fallbacks
       result = await (knowledgeGraphMemory as Neo4jMemory).robustSearch(searchQuery);
       return { 
-        content: [
-          {
-            role: "system",
-            content: {
-              type: "text",
-              text: toolPrompt
-            }
-          },
-          {
-            role: "assistant",
-            content: {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          }
-        ] 
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
       };
       
     case "create_thoughts":
@@ -682,22 +637,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         thoughtConfidenceScore?: number;
       });
       return { 
-        content: [
-          {
-            role: "system",
-            content: {
-              type: "text",
-              text: toolPrompt
-            }
-          },
-          {
-            role: "assistant",
-            content: {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          }
-        ] 
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
       };
       
     case "explore_context":
@@ -744,49 +684,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         console.error(`Returning ${cleanResult.entities.length} entities and ${cleanResult.relations.length} relations`);
 
+        // Return properly formatted response with content type explicitly set to "text"
         return { 
-          content: [
-            {
-              role: "system",
-              content: {
-                type: "text",
-                text: toolPrompt
-              }
-            },
-            {
-              role: "assistant",
-              content: {
-                type: "text",
-                text: JSON.stringify(cleanResult, null, 2)
-              }
-            }
-          ] 
+          content: [{ type: "text", text: JSON.stringify(cleanResult, null, 2) }]
         };
       } catch (error) {
         console.error(`Error in explore_context tool: ${error}`);
         
-        // Return a graceful error response
+        // Return a graceful error response with properly formatted content
         return { 
-          content: [
-            {
-              role: "system",
-              content: {
-                type: "text",
-                text: toolPrompt
-              }
-            },
-            {
-              role: "assistant",
-              content: {
-                type: "text",
-                text: JSON.stringify({
-                  error: `Error exploring context for node "${args.nodeName}": ${error}`,
-                  entities: [],
-                  relations: []
-                }, null, 2)
-              }
-            }
-          ] 
+          content: [{ type: "text", text: JSON.stringify({
+            error: `Error exploring context for node "${args.nodeName}": ${error.message || error}`,
+            entities: [],
+            relations: []
+          }, null, 2) }]
         };
       }
             
