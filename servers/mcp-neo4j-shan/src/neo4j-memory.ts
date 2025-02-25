@@ -875,13 +875,66 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
             toLower(entity.name) CONTAINS toLower($query)
             OR (entity.content IS NOT NULL AND toLower(entity.content) CONTAINS toLower($query))
             OR (entity.definition IS NOT NULL AND toLower(entity.definition) CONTAINS toLower($query))
-            OR (entity.nodeType = 'Entity' AND any(obs IN entity.observations WHERE toLower(obs) CONTAINS toLower($query)))
+            OR (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
+                any(obs IN entity.observations WHERE obs IS NOT NULL AND toLower(obs) CONTAINS toLower($query)))
           )
+          WITH entity
           OPTIONAL MATCH (entity)-[r]->(other)
           WITH entity, collect(r) as outRels
           OPTIONAL MATCH (other)-[inRel]->(entity)
           RETURN entity, outRels as relations, collect(inRel) as inRelations
+          ORDER BY entity.name
         `, { nodeType, query }));
+        
+        // Log results for debugging
+        console.error(`Found ${res.records.length} nodes of type ${nodeType} matching "${query}"`);
+        if (res.records.length > 0) {
+          console.error(`First result: ${res.records[0].get('entity').properties.name}`);
+        } else {
+          // Try with individual tokens as fallback
+          const tokens = query.split(/\s+/).filter(token => token.length > 1);
+          if (tokens.length > 1) {
+            console.error(`No direct matches found. Attempting token-based search with: ${tokens.join(', ')}`);
+            
+            const tokenResult = await session.executeRead(tx => tx.run(`
+              MATCH (entity:Memory)
+              WHERE entity.nodeType = $nodeType
+              AND (
+                any(token IN $tokens WHERE 
+                  entity.name IS NOT NULL AND 
+                  toLower(entity.name) CONTAINS toLower(token)
+                )
+                OR 
+                (entity.content IS NOT NULL AND 
+                 any(token IN $tokens WHERE toLower(entity.content) CONTAINS toLower(token)))
+                OR 
+                (entity.definition IS NOT NULL AND 
+                 any(token IN $tokens WHERE toLower(entity.definition) CONTAINS toLower(token)))
+                OR 
+                (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
+                 any(token IN $tokens WHERE 
+                   any(obs IN entity.observations WHERE 
+                     obs IS NOT NULL AND toLower(obs) CONTAINS toLower(token)
+                   )
+                 )
+              )
+            
+            // Get relationships
+            WITH entity
+            OPTIONAL MATCH (entity)-[r]->(other)
+            WITH entity, collect(r) as outRels
+            OPTIONAL MATCH (other)-[inRel]->(entity)
+            
+            RETURN entity, outRels as relations, collect(inRel) as inRelations
+            ORDER BY entity.name
+          `, { nodeType, tokens }));
+            
+            console.error(`Token-based search found ${tokenResult.records.length} results`);
+            if (tokenResult.records.length > 0) {
+              return this.processSearchResults(tokenResult.records);
+            }
+          }
+        }
         
         return this.processSearchResults(res.records);
       } else {
@@ -889,33 +942,18 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
         
         // Execute original query without filtering - list all nodes of the type
         const res = await session.executeRead(tx => tx.run<EntityWithRelationsResult>(`
-          MATCH (entity)
+          MATCH (entity:Memory)
           WHERE entity.nodeType = $nodeType
+          WITH entity
           OPTIONAL MATCH (entity)-[r]->(other)
-          RETURN entity, collect(r) as relations
+          WITH entity, collect(r) as outRels
+          OPTIONAL MATCH (other)-[inRel]->(entity)
+          RETURN entity, outRels as relations, collect(inRel) as inRelations
+          ORDER BY entity.name
         `, { nodeType }));
         
-        const kgMemory:KnowledgeGraph = res.records.reduce(
-          (kg, row) => {
-            const entityNode = row.get('entity');
-            const entityRelationships = row.get('relations');
-
-            // Convert Neo4j node to Entity format
-            const entity: Entity = {
-              name: entityNode.properties.name,
-              entityType: entityNode.properties.nodeType || 'Entity',
-              observations: 'observations' in entityNode.properties ? 
-                entityNode.properties.observations : []
-            };
-
-            kg.entities.push(entity);
-            kg.relations.push(...entityRelationships.map(r => r.properties as Relation))
-            return kg
-          }, 
-          ({entities:[], relations:[]} as KnowledgeGraph)
-        );
-    
-        return kgMemory;
+        console.error(`Found ${res.records.length} nodes of type ${nodeType}`);
+        return this.processSearchResults(res.records);
       }
     } catch (error) {
       console.error(`Error finding nodes of type ${nodeType}:`, error);
@@ -1184,13 +1222,71 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
     const session = this.neo4jDriver.session();
     
     try {
-      // Find paths between the source and target nodes
-      const result = await session.executeRead(tx => tx.run(`
-        MATCH path = shortestPath((source:Memory {name: $sourceName})-[*1..$maxDepth]-(target:Memory {name: $targetName}))
-        UNWIND nodes(path) as node
-        WITH collect(DISTINCT node) as nodes, relationships(path) as pathRels
+      console.error(`Finding concept connections between "${sourceNodeName}" and "${targetNodeName}" with maxDepth: ${maxDepth}`);
+      
+      // First check if both nodes exist with case-insensitive matching
+      const nodesCheck = await session.executeRead(tx => tx.run(`
+        MATCH (source:Memory)
+        WHERE toLower(source.name) = toLower($sourceName)
+        WITH source
+        MATCH (target:Memory)
+        WHERE toLower(target.name) = toLower($targetName)
+        RETURN source, target
+      `, { 
+        sourceName: sourceNodeName,
+        targetName: targetNodeName 
+      }));
+      
+      if (nodesCheck.records.length === 0) {
+        console.error(`Cannot find one or both nodes: "${sourceNodeName}" and/or "${targetNodeName}"`);
         
-        // Get all relationships between the nodes in the path
+        // Try to check which node is missing
+        const sourceCheck = await session.executeRead(tx => tx.run(`
+          MATCH (node:Memory)
+          WHERE toLower(node.name) = toLower($nodeName)
+          RETURN node
+        `, { nodeName: sourceNodeName }));
+        
+        const targetCheck = await session.executeRead(tx => tx.run(`
+          MATCH (node:Memory)
+          WHERE toLower(node.name) = toLower($nodeName)
+          RETURN node
+        `, { nodeName: targetNodeName }));
+        
+        if (sourceCheck.records.length === 0) {
+          console.error(`Source node "${sourceNodeName}" not found`);
+        }
+        
+        if (targetCheck.records.length === 0) {
+          console.error(`Target node "${targetNodeName}" not found`);
+        }
+        
+        return { entities: [], relations: [] };
+      }
+      
+      // Get the actual node names with correct casing
+      const actualSourceName = nodesCheck.records[0].get('source').properties.name;
+      const actualTargetName = nodesCheck.records[0].get('target').properties.name;
+      console.error(`Found source node: "${actualSourceName}" and target node: "${actualTargetName}"`);
+      
+      // Find paths between the source and target nodes using case-insensitive matching
+      const result = await session.executeRead(tx => tx.run(`
+        // Find source and target nodes with case-insensitive matching
+        MATCH (source:Memory), (target:Memory)
+        WHERE toLower(source.name) = toLower($sourceName)
+        AND toLower(target.name) = toLower($targetName)
+        
+        // Find the shortest path between them
+        WITH source, target
+        CALL apoc.algo.dijkstra(source, target, "", "", $maxDepth) 
+        YIELD path, weight
+        
+        // Process path nodes
+        WITH nodes(path) as pathNodes
+        UNWIND pathNodes as node
+        WITH collect(DISTINCT node) as nodes
+        
+        // Get all relationships between these nodes
         UNWIND nodes as n1
         UNWIND nodes as n2
         OPTIONAL MATCH (n1)-[r]->(n2)
@@ -1204,7 +1300,61 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       }));
       
       if (result.records.length === 0) {
-        console.error(`No path found between ${sourceNodeName} and ${targetNodeName} within ${maxDepth} hops`);
+        console.error(`No path found between "${sourceNodeName}" and "${targetNodeName}" within ${maxDepth} hops`);
+        
+        // Try an alternative approach with allShortestPaths
+        const altResult = await session.executeRead(tx => tx.run(`
+          MATCH (source:Memory), (target:Memory)
+          WHERE toLower(source.name) = toLower($sourceName)
+          AND toLower(target.name) = toLower($targetName)
+          
+          // Try to find any path up to the specified depth
+          CALL apoc.path.expandConfig(source, {
+            minLevel: 1,
+            maxLevel: $maxDepth,
+            terminatorNodes: [target],
+            uniqueness: "NODE_GLOBAL"
+          })
+          YIELD path
+          WHERE last(nodes(path)) = target
+          
+          RETURN path
+          ORDER BY length(path)
+          LIMIT 1
+        `, {
+          sourceName: sourceNodeName,
+          targetName: targetNodeName,
+          maxDepth
+        }));
+        
+        if (altResult.records.length > 0) {
+          const path = altResult.records[0].get('path');
+          const nodes = path.segments.map((seg: any) => seg.start).concat([path.end]);
+          const rels = path.segments.map((seg: any) => seg.relationship);
+          
+          console.error(`Found alternative path with ${nodes.length} nodes and ${rels.length} relationships`);
+          
+          // Map nodes to entities
+          const entities: Entity[] = nodes.map((node: any) => ({
+            name: node.properties.name,
+            entityType: node.properties.nodeType || 'Entity',
+            observations: 'observations' in node.properties ? 
+              node.properties.observations : []
+          }));
+          
+          // Map relationships to relations
+          const relations: Relation[] = rels.map((rel: any) => ({
+            from: rel.startNode.properties.name,
+            to: rel.endNode.properties.name,
+            relationType: rel.type
+          }));
+          
+          return {
+            entities,
+            relations
+          };
+        }
+        
         return { entities: [], relations: [] };
       }
       
@@ -1212,6 +1362,8 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       const record = result.records[0];
       const nodes = record.get('nodes');
       const relationships = record.get('rels');
+      
+      console.error(`Found path with ${nodes.length} nodes and ${relationships.length} relationships`);
       
       // Map nodes to entities
       const entities: Entity[] = nodes.map((node: any) => ({
@@ -1245,9 +1397,41 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
     const session = this.neo4jDriver.session();
     
     try {
+      console.error(`Exploring context for node: "${nodeName}" with maxDepth: ${maxDepth}`);
+      
+      // First check if the node exists with case-insensitive matching
+      const nodeCheck = await session.executeRead(tx => tx.run(`
+        MATCH (center:Memory)
+        WHERE toLower(center.name) = toLower($nodeName)
+        RETURN center
+      `, { nodeName }));
+      
+      if (nodeCheck.records.length === 0) {
+        console.error(`No node found with name "${nodeName}" (case-insensitive check)`);
+        
+        // Attempt to find similar nodes to suggest
+        const similarNodes = await session.executeRead(tx => tx.run(`
+          MATCH (node:Memory)
+          WHERE toLower(node.name) CONTAINS toLower($partialName)
+          RETURN node.name AS name
+          LIMIT 5
+        `, { partialName: nodeName.split(' ')[0] })); // Try with first word
+        
+        if (similarNodes.records.length > 0) {
+          console.error(`Similar nodes found: ${similarNodes.records.map(r => r.get('name')).join(', ')}`);
+        }
+        
+        return { entities: [], relations: [] };
+      }
+      
+      // Get the actual node name with correct casing
+      const actualNodeName = nodeCheck.records[0].get('center').properties.name;
+      console.error(`Found node with name: "${actualNodeName}"`);
+      
       // Find the neighborhood subgraph
       const result = await session.executeRead(tx => tx.run(`
-        MATCH (center:Memory {name: $nodeName})
+        MATCH (center:Memory)
+        WHERE toLower(center.name) = toLower($nodeName)
         CALL apoc.path.subgraphNodes(center, {
           maxLevel: $maxDepth,
           relationshipFilter: '*'
@@ -1257,7 +1441,7 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
         // Find all relationships between these nodes
         UNWIND nodes as n1
         UNWIND nodes as n2
-        MATCH (n1)-[r]->(n2)
+        OPTIONAL MATCH (n1)-[r]->(n2)
         WHERE n1 <> n2
         
         RETURN nodes, collect(DISTINCT r) as relationships
@@ -1267,7 +1451,7 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       }));
       
       if (result.records.length === 0) {
-        console.error(`No node found with name ${nodeName}`);
+        console.error(`No subgraph found for node "${nodeName}"`);
         return { entities: [], relations: [] };
       }
       
@@ -1275,6 +1459,8 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       const record = result.records[0];
       const nodes = record.get('nodes');
       const relationships = record.get('relationships');
+      
+      console.error(`Found ${nodes.length} nodes and ${relationships.length} relationships in context`);
       
       // Map nodes to entities
       const entities: Entity[] = nodes.map((node: any) => ({
@@ -1308,48 +1494,134 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
     const session = this.neo4jDriver.session();
     
     try {
-      // Find evidence paths
+      console.error(`Tracing evidence paths with relationship type ${relationshipType} for node: "${targetNodeName}"`);
+      
+      // First check if the target node exists
+      const nodeCheck = await session.executeRead(tx => tx.run(`
+        MATCH (node:Memory)
+        WHERE toLower(node.name) = toLower($nodeName)
+        RETURN node
+      `, { nodeName: targetNodeName }));
+      
+      if (nodeCheck.records.length === 0) {
+        console.error(`No node found with name "${targetNodeName}" (case-insensitive check)`);
+        return { entities: [], relations: [] };
+      }
+      
+      // Get the actual node name with correct casing
+      const actualNodeName = nodeCheck.records[0].get('node').properties.name;
+      console.error(`Found target node: "${actualNodeName}"`);
+      
+      // Validate the relationship type is valid
+      const validRelationshipTypes = ["SUPPORTS", "CONTRADICTS", "VALIDATES", "CHALLENGES", "REFINES"];
+      const relType = validRelationshipTypes.includes(relationshipType) ? 
+                      relationshipType : "SUPPORTS";
+      
+      if (relType !== relationshipType) {
+        console.error(`Invalid relationship type "${relationshipType}", using "${relType}" instead`);
+      }
+      
+      // Find evidence paths using case-insensitive node matching
       const result = await session.executeRead(tx => tx.run(`
-        MATCH path = (source:Memory)-[:${relationshipType}*1..3]->(target:Memory {name: $targetName})
+        // Find the target node first with case-insensitive matching
+        MATCH (target:Memory)
+        WHERE toLower(target.name) = toLower($targetName)
+        
+        // Then find paths
+        WITH target
+        MATCH path = (source:Memory)-[:${relType}*1..3]->(target)
         WHERE source <> target
-        UNWIND nodes(path) as node
-        WITH collect(DISTINCT node) as nodes, relationships(path) as pathRels
         
-        // Get additional relationships between these nodes
-        UNWIND nodes as n1
-        UNWIND nodes as n2
+        // Process path nodes
+        WITH collect(nodes(path)) as paths
+        UNWIND paths as pathNodes
+        UNWIND pathNodes as node
+        WITH collect(DISTINCT node) as allNodes
+        
+        // Get relationships between these nodes
+        UNWIND allNodes as n1
+        UNWIND allNodes as n2
         OPTIONAL MATCH (n1)-[r]->(n2)
-        WHERE n1 <> n2
+        WHERE n1 <> n2 AND type(r) IN $validRelTypes
         
-        RETURN nodes, collect(DISTINCT r) as rels
+        RETURN allNodes as nodes, collect(DISTINCT r) as rels
       `, {
-        targetName: targetNodeName
+        targetName: targetNodeName,
+        validRelTypes: validRelationshipTypes
       }));
       
       // Process the nodes
-      let entities: Entity[] = [];
-      let relations: Relation[] = [];
-      
-      if (result.records.length > 0) {
-        const record = result.records[0];
-        const nodes = record.get('nodes');
-        const relationships = record.get('rels');
+      if (result.records.length === 0) {
+        console.error(`No evidence paths found for "${targetNodeName}" with relationship type "${relType}"`);
         
-        // Map nodes to entities
-        entities = nodes.map((node: any) => ({
-          name: node.properties.name,
-          entityType: node.properties.nodeType || 'Entity',
-          observations: 'observations' in node.properties ? 
-            node.properties.observations : []
-        }));
+        // Try to find the node and its immediate connections instead
+        const fallbackResult = await session.executeRead(tx => tx.run(`
+          MATCH (target:Memory)
+          WHERE toLower(target.name) = toLower($targetName)
+          
+          // Get all immediate connections (in both directions)
+          OPTIONAL MATCH (target)-[r1]-(other)
+          
+          // Return target node plus connected nodes
+          WITH target, collect(DISTINCT other) as connected
+          UNWIND connected as c
+          
+          RETURN collect(DISTINCT target) + collect(DISTINCT c) as nodes,
+                 collect(DISTINCT (target)-[r2]-(c)) as rels
+        `, { targetName: targetNodeName }));
         
-        // Map relationships to relations
-        relations = relationships.map((rel: any) => ({
-          from: rel.startNode.properties.name,
-          to: rel.endNode.properties.name,
-          relationType: rel.type
-        }));
+        if (fallbackResult.records.length > 0 && fallbackResult.records[0].get('nodes').length > 0) {
+          const record = fallbackResult.records[0];
+          const nodes = record.get('nodes');
+          const relationships = record.get('rels');
+          
+          console.error(`Found ${nodes.length} nodes and ${relationships.length} relationships in immediate context of "${targetNodeName}"`);
+          
+          // Map nodes to entities
+          const entities: Entity[] = nodes.map((node: any) => ({
+            name: node.properties.name,
+            entityType: node.properties.nodeType || 'Entity',
+            observations: 'observations' in node.properties ? 
+              node.properties.observations : []
+          }));
+          
+          // Map relationships to relations
+          const relations: Relation[] = relationships.map((rel: any) => ({
+            from: rel.startNode.properties.name,
+            to: rel.endNode.properties.name,
+            relationType: rel.type
+          }));
+          
+          return {
+            entities,
+            relations
+          };
+        }
+        
+        return { entities: [], relations: [] };
       }
+      
+      // Process the evidence paths
+      const record = result.records[0];
+      const nodes = record.get('nodes');
+      const relationships = record.get('rels');
+      
+      console.error(`Found ${nodes.length} nodes and ${relationships.length} relationships in evidence paths`);
+      
+      // Map nodes to entities
+      const entities: Entity[] = nodes.map((node: any) => ({
+        name: node.properties.name,
+        entityType: node.properties.nodeType || 'Entity',
+        observations: 'observations' in node.properties ? 
+          node.properties.observations : []
+      }));
+      
+      // Map relationships to relations
+      const relations: Relation[] = relationships.map((rel: any) => ({
+        from: rel.startNode.properties.name,
+        to: rel.endNode.properties.name,
+        relationType: rel.type
+      }));
       
       return {
         entities,
@@ -1370,23 +1642,21 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
     try {
       console.error(`Performing robust search for query: "${searchQuery}"`);
       
-      // First try with fuzzy search capability
-      let fuzzyMatchResult;
+      // Check if query is empty or too short
+      if (!searchQuery || searchQuery.trim().length < 1) {
+        console.error('Search query is empty or too short');
+        return { entities: [], relations: [] };
+      }
+      
+      let results = { entities: [], relations: [] };
+      const searchAttempts = [];
+      
+      // First attempt: Exact match (fastest and most precise)
       try {
-        // Use a try-catch since apoc may not be available
-        fuzzyMatchResult = await session.executeRead(tx => tx.run(`
+        console.error('Trying exact match search');
+        const exactMatchResult = await session.executeRead(tx => tx.run(`
           MATCH (entity:Memory)
-          WHERE apoc.text.fuzzyMatch(entity.name, $query) > 0.6
-             OR (entity.content IS NOT NULL AND apoc.text.fuzzyMatch(entity.content, $query) > 0.5)
-             OR (entity.definition IS NOT NULL AND apoc.text.fuzzyMatch(entity.definition, $query) > 0.5)
-          WITH entity, 
-               CASE WHEN apoc.text.fuzzyMatch(entity.name, $query) > 0.6 THEN apoc.text.fuzzyMatch(entity.name, $query) * 2
-                    WHEN entity.content IS NOT NULL AND apoc.text.fuzzyMatch(entity.content, $query) > 0.5 THEN apoc.text.fuzzyMatch(entity.content, $query)
-                    WHEN entity.definition IS NOT NULL AND apoc.text.fuzzyMatch(entity.definition, $query) > 0.5 THEN apoc.text.fuzzyMatch(entity.definition, $query)
-                    ELSE 0 END as score
-          WHERE score > 0
-          ORDER BY score DESC
-          LIMIT 20
+          WHERE toLower(entity.name) = toLower($query)
           
           // Get relationships
           WITH entity
@@ -1397,56 +1667,115 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
           RETURN entity, outRels as relations, collect(inRel) as inRelations
         `, { query: searchQuery }));
         
+        searchAttempts.push(`Exact match: ${exactMatchResult.records.length} results`);
+        console.error(`Exact match search found ${exactMatchResult.records.length} results`);
+        
+        if (exactMatchResult.records.length > 0) {
+          return this.processSearchResults(exactMatchResult.records);
+        }
+      } catch (error) {
+        console.error(`Error in exact match search: ${error}`);
+        searchAttempts.push(`Exact match: error - ${error.message}`);
+      }
+      
+      // Second attempt: Try with fuzzy search capability, but safely handle errors
+      try {
+        console.error('Trying fuzzy search if APOC is available');
+        const fuzzyQuery = `
+          CALL {
+            MATCH (entity:Memory)
+            // Safely check if APOC exists by using a simple string comparison as fallback
+            WITH entity,
+                 CASE 
+                   WHEN entity.name IS NOT NULL AND toLower(entity.name) CONTAINS toLower($query) THEN 0.9
+                   WHEN entity.content IS NOT NULL AND toLower(entity.content) CONTAINS toLower($query) THEN 0.7
+                   WHEN entity.definition IS NOT NULL AND toLower(entity.definition) CONTAINS toLower($query) THEN 0.7
+                   ELSE 0 
+                 END as score
+            WHERE score > 0
+            RETURN entity, score
+            ORDER BY score DESC
+            LIMIT 20
+          }
+          
+          // Get relationships
+          WITH entity
+          OPTIONAL MATCH (entity)-[r]->(other)
+          WITH entity, collect(r) as outRels
+          OPTIONAL MATCH (other)-[inRel]->(entity)
+          
+          RETURN entity, outRels as relations, collect(inRel) as inRelations
+        `;
+        
+        const fuzzyMatchResult = await session.executeRead(tx => tx.run(fuzzyQuery, { query: searchQuery }));
+        
+        searchAttempts.push(`Fuzzy search: ${fuzzyMatchResult.records.length} results`);
         console.error(`Fuzzy search found ${fuzzyMatchResult.records.length} results`);
+        
+        if (fuzzyMatchResult.records.length > 0) {
+          return this.processSearchResults(fuzzyMatchResult.records);
+        }
       } catch (fuzzyError) {
-        console.error(`Fuzzy search failed (APOC might not be available): ${fuzzyError}`);
-        fuzzyMatchResult = { records: [] };
+        console.error(`Safe fuzzy search failed: ${fuzzyError}`);
+        searchAttempts.push(`Fuzzy search: error - ${fuzzyError.message}`);
       }
       
-      // If fuzzy search found results, use them
-      if (fuzzyMatchResult.records.length > 0) {
-        return this.processSearchResults(fuzzyMatchResult.records);
+      // Third attempt: Fall back to string containment search
+      console.error(`Falling back to string containment search`);
+      
+      // Sample database nodes for debugging
+      try {
+        const debugResult = await session.executeRead(tx => tx.run(`
+          MATCH (entity:Memory)
+          RETURN entity.name, entity.nodeType LIMIT 10
+        `));
+        
+        const sampleNodes = debugResult.records.map(r => ({
+          name: r.get('entity.name'),
+          type: r.get('entity.nodeType')
+        }));
+        
+        console.error(`Sample nodes in database: ${JSON.stringify(sampleNodes)}`);
+      } catch (err) {
+        console.error(`Error fetching sample nodes: ${err}`);
       }
       
-      // If no results from fuzzy search, fall back to simple containment search
-      console.error(`No fuzzy match results found, falling back to string containment search`);
-      
-      // Debug: check for nodes that might match
-      const debugResult = await session.executeRead(tx => tx.run(`
-        MATCH (entity:Memory)
-        RETURN entity.name, entity.nodeType LIMIT 10
-      `));
-      console.error(`Sample nodes in database: ${JSON.stringify(debugResult.records.map(r => ({
-        name: r.get('entity.name'),
-        type: r.get('entity.nodeType')
-      })))}`);
-      
-      const containmentResult = await session.executeRead(tx => tx.run(`
-        MATCH (entity:Memory)
-        WHERE toLower(entity.name) CONTAINS toLower($query)
-           OR (entity.content IS NOT NULL AND toLower(entity.content) CONTAINS toLower($query))
-           OR (entity.definition IS NOT NULL AND toLower(entity.definition) CONTAINS toLower($query))
-           OR (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
-               any(obs IN entity.observations WHERE obs IS NOT NULL AND toLower(obs) CONTAINS toLower($query)))
+      try {
+        const containmentResult = await session.executeRead(tx => tx.run(`
+          MATCH (entity:Memory)
+          WHERE toLower(entity.name) CONTAINS toLower($query)
+             OR (entity.content IS NOT NULL AND toLower(entity.content) CONTAINS toLower($query))
+             OR (entity.definition IS NOT NULL AND toLower(entity.definition) CONTAINS toLower($query))
+             OR (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
+                 any(obs IN entity.observations WHERE obs IS NOT NULL AND toLower(obs) CONTAINS toLower($query)))
+          
+          // Get relationships
+          WITH entity
+          OPTIONAL MATCH (entity)-[r]->(other)
+          WITH entity, collect(r) as outRels
+          OPTIONAL MATCH (other)-[inRel]->(entity)
+          
+          RETURN entity, outRels as relations, collect(inRel) as inRelations
+          LIMIT 20
+        `, { query: searchQuery }));
         
-        // Get relationships
-        WITH entity
-        OPTIONAL MATCH (entity)-[r]->(other)
-        WITH entity, collect(r) as outRels
-        OPTIONAL MATCH (other)-[inRel]->(entity)
+        searchAttempts.push(`String containment: ${containmentResult.records.length} results`);
+        console.error(`String containment search found ${containmentResult.records.length} results`);
         
-        RETURN entity, outRels as relations, collect(inRel) as inRelations
-        LIMIT 20
-      `, { query: searchQuery }));
+        if (containmentResult.records.length > 0) {
+          return this.processSearchResults(containmentResult.records);
+        }
+      } catch (error) {
+        console.error(`Error in containment search: ${error}`);
+        searchAttempts.push(`String containment: error - ${error.message}`);
+      }
       
-      console.error(`String containment search found ${containmentResult.records.length} results`);
-      
-      // If still no results, try a tokenized search (split the query and search for each token)
-      if (containmentResult.records.length === 0) {
-        console.error(`No exact containment results, trying tokenized search`);
+      // Fourth attempt: Try a tokenized search with individual words
+      try {
+        console.error(`Trying tokenized search with individual words`);
         
         // Split the query into words and filter out short tokens
-        const tokens = searchQuery.split(/\s+/).filter(token => token.length > 2);
+        const tokens = searchQuery.split(/\s+/).filter(token => token.length > 1);
         console.error(`Tokens for search: ${JSON.stringify(tokens)}`);
         
         if (tokens.length > 0) {
@@ -1456,11 +1785,28 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
           const tokenizedResult = await session.executeRead(tx => tx.run(`
             MATCH (entity:Memory)
             WITH entity, $tokens as tokens
-            WHERE any(token IN tokens WHERE entity.name IS NOT NULL AND toLower(entity.name) CONTAINS toLower(token))
-               OR (entity.content IS NOT NULL AND any(token IN tokens WHERE toLower(entity.content) CONTAINS toLower(token)))
-               OR (entity.definition IS NOT NULL AND any(token IN tokens WHERE toLower(entity.definition) CONTAINS toLower(token)))
-               OR (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
-                   any(token IN tokens WHERE any(obs IN entity.observations WHERE obs IS NOT NULL AND toLower(obs) CONTAINS toLower(token))))
+            WHERE 
+              // Check if any token is in the name
+              any(token IN tokens WHERE 
+                entity.name IS NOT NULL AND toLower(entity.name) CONTAINS toLower(token)
+              )
+              OR 
+              // Check if any token is in the content
+              (entity.content IS NOT NULL AND 
+               any(token IN tokens WHERE toLower(entity.content) CONTAINS toLower(token)))
+               OR 
+               // Check if any token is in the definition
+               (entity.definition IS NOT NULL AND 
+                any(token IN tokens WHERE toLower(entity.definition) CONTAINS toLower(token)))
+               OR 
+               // Check if any token is in observations
+               (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
+                any(token IN tokens WHERE 
+                  any(obs IN entity.observations WHERE 
+                    obs IS NOT NULL AND toLower(obs) CONTAINS toLower(token)
+                  )
+                )
+               )
             
             // Get relationships
             WITH entity
@@ -1472,19 +1818,29 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
             LIMIT 20
           `, tokensParam));
           
+          searchAttempts.push(`Tokenized search: ${tokenizedResult.records.length} results`);
           console.error(`Tokenized search found ${tokenizedResult.records.length} results`);
+          
           if (tokenizedResult.records.length > 0) {
-            console.error(`First result name: ${tokenizedResult.records[0].get('entity').properties.name}`);
             return this.processSearchResults(tokenizedResult.records);
           }
         }
+      } catch (error) {
+        console.error(`Error in tokenized search: ${error}`);
+        searchAttempts.push(`Tokenized search: error - ${error.message}`);
+      }
+      
+      // Final attempt: Use pattern matching as last resort
+      try {
+        console.error(`Trying regex pattern search as last resort`);
+        // Create a pattern where words can appear in any order
+        const words = searchQuery.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+        const pattern = words.length > 0 ? words.join(".*") : searchQuery.toLowerCase();
         
-        // If tokens search still returns nothing, try a broader pattern search
-        console.error(`Trying partial pattern search as last resort`);
-        const partialMatchResult = await session.executeRead(tx => tx.run(`
+        const query = `
           MATCH (entity:Memory)
-          WHERE toLower(entity.name) =~ '.*${searchQuery.toLowerCase().split(/\s+/).join(".*")}.*'
-             OR (entity.content IS NOT NULL AND toLower(entity.content) =~ '.*${searchQuery.toLowerCase().split(/\s+/).join(".*")}.*')
+          WHERE toLower(entity.name) =~ '.*${pattern}.*'
+             OR (entity.content IS NOT NULL AND toLower(entity.content) =~ '.*${pattern}.*')
           
           // Get relationships
           WITH entity
@@ -1494,15 +1850,26 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
           
           RETURN entity, outRels as relations, collect(inRel) as inRelations
           LIMIT 20
-        `));
+        `;
         
-        console.error(`Pattern search found ${partialMatchResult.records.length} results`);
-        if (partialMatchResult.records.length > 0) {
-          return this.processSearchResults(partialMatchResult.records);
+        const patternMatchResult = await session.executeRead(tx => tx.run(query));
+        
+        searchAttempts.push(`Pattern search: ${patternMatchResult.records.length} results`);
+        console.error(`Pattern search found ${patternMatchResult.records.length} results`);
+        
+        if (patternMatchResult.records.length > 0) {
+          return this.processSearchResults(patternMatchResult.records);
         }
+      } catch (error) {
+        console.error(`Error in pattern search: ${error}`);
+        searchAttempts.push(`Pattern search: error - ${error.message}`);
       }
       
-      return this.processSearchResults(containmentResult.records);
+      // Log all search attempts to help diagnose issues
+      console.error(`All search attempts exhausted: ${searchAttempts.join(', ')}`);
+      
+      // Return empty results if nothing found
+      return { entities: [], relations: [] };
     } catch (error) {
       console.error(`Error in robust search: ${error}`);
       return { entities: [], relations: [] };
