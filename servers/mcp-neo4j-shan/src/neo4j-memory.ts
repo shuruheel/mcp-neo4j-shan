@@ -361,33 +361,21 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
       try {
         console.error(`Exploring context for node: "${nodeName}" with maxDepth: ${maxDepth}`);
         
-        // First check if the node exists with direct lookup
+        // Use case-insensitive search from the start
         const nodeCheck = await session.executeRead(tx => tx.run(`
-          MATCH (n:Memory {name: $nodeName})
+          MATCH (n:Memory)
+          WHERE toLower(n.name) = toLower($nodeName)
           RETURN n
         `, { nodeName }));
         
-        // If not found by exact match, try case-insensitive
         if (nodeCheck.records.length === 0) {
-          console.error(`Node not found with exact name "${nodeName}", trying case-insensitive match`);
-          
-          const caseInsensitiveCheck = await session.executeRead(tx => tx.run(`
-            MATCH (n:Memory)
-            WHERE toLower(n.name) = toLower($nodeName)
-            RETURN n
-          `, { nodeName }));
-          
-          if (caseInsensitiveCheck.records.length === 0) {
-            console.error(`No node found with name "${nodeName}" (case-insensitive check)`);
-            return { entities: [], relations: [] };
-          }
-          
-          // Use the actual node name
-          nodeName = caseInsensitiveCheck.records[0].get('n').properties.name;
-          console.error(`Found node with case-insensitive match: "${nodeName}"`);
-        } else {
-          nodeName = nodeCheck.records[0].get('n').properties.name;
+          console.error(`No node found with name "${nodeName}" (case-insensitive check)`);
+          return { entities: [], relations: [] };
         }
+        
+        // Use the actual node name with correct casing
+        const actualNodeName = nodeCheck.records[0].get('n').properties.name;
+        console.error(`Found node: "${actualNodeName}"`);
         
         // Build the result incrementally, starting with the center node
         let allNodes: any[] = [];
@@ -395,28 +383,18 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
         let uniqueNodeIds = new Set<string>();
         
         // Get the center node
-        const centerNodeResult = await session.executeRead(tx => tx.run(`
-          MATCH (center:Memory {name: $nodeName})
-          RETURN center
-        `, { nodeName }));
-        
-        if (centerNodeResult.records.length === 0) {
-          console.error(`Center node "${nodeName}" not found even after confirmation`);
-          return { entities: [], relations: [] };
-        }
-        
-        const centerNode = centerNodeResult.records[0].get('center');
+        const centerNode = nodeCheck.records[0].get('n');
         allNodes.push(centerNode);
         uniqueNodeIds.add(centerNode.elementId || centerNode.identity.toString());
         
         // Get immediate neighbors (depth 1)
         if (maxDepth >= 1) {
-          console.error(`Getting depth 1 neighbors for "${nodeName}"`);
+          console.error(`Getting depth 1 neighbors for "${actualNodeName}"`);
           
           const depth1Result = await session.executeRead(tx => tx.run(`
             MATCH (center:Memory {name: $nodeName})-[r]-(neighbor)
             RETURN neighbor, r
-          `, { nodeName }));
+          `, { nodeName: actualNodeName }));
           
           console.error(`Found ${depth1Result.records.length} direct neighbors`);
           
@@ -439,13 +417,13 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
         
         // Get depth 2 neighbors if needed
         if (maxDepth >= 2) {
-          console.error(`Getting depth 2 neighbors for "${nodeName}"`);
+          console.error(`Getting depth 2 neighbors for "${actualNodeName}"`);
           
           const depth2Result = await session.executeRead(tx => tx.run(`
             MATCH (center:Memory {name: $nodeName})-[r1]-(depth1)-[r2]-(depth2)
             WHERE depth2 <> center AND depth1 <> depth2
             RETURN depth1, depth2, r1, r2
-          `, { nodeName }));
+          `, { nodeName: actualNodeName }));
           
           console.error(`Found connections to ${depth2Result.records.length} depth-2 neighbors`);
           
@@ -470,13 +448,13 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
               uniqueNodeIds.add(depth2Id);
             }
             
-            // Add relationships (avoiding duplicates by simply adding them all for now)
+            // Add relationships
             allRelationships.push(rel1);
             allRelationships.push(rel2);
           }
         }
         
-        // If we found relationships, deduplicate them by their identity
+        // Deduplicate relationships by their identity
         const uniqueRelationships = allRelationships.filter((rel, index, self) => 
           index === self.findIndex(r => 
             (r.identity && rel.identity && r.identity.equals(rel.identity)) || 
@@ -584,11 +562,7 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
             return entity;
           } catch (error) {
             console.error(`Error processing node: ${error}`);
-            // Return a minimal valid entity if there's an error
             return {
-              name: 'Error Processing Node',
-              entityType: 'Entity',
-              observations: []
             };
           }
         });
@@ -643,6 +617,12 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
               }
               if (relProps.sources !== undefined && relProps.sources !== null) {
                 relation.sources = Array.isArray(relProps.sources) ? relProps.sources : [];
+              }
+              if (relProps.fromType !== undefined && relProps.fromType !== null) {
+                relation.fromType = relProps.fromType;
+              }
+              if (relProps.toType !== undefined && relProps.toType !== null) {
+                relation.toType = relProps.toType;
               }
             }
             
@@ -1168,110 +1148,6 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
     }
   }
 
-  // Function to find nodes by their type
-  async findNodesByType(nodeType: string, query?: string): Promise<KnowledgeGraph> {
-    const session = this.neo4jDriver.session();
-    
-    try {
-      // If a query is provided, use it to filter results
-      if (query && query.trim() !== '') {
-        console.error(`Searching for nodes of type ${nodeType} matching query: "${query}"`);
-        
-        // Execute query to find filtered nodes of specified type
-        const res = await session.executeRead(tx => tx.run(`
-          MATCH (entity:Memory)
-          WHERE entity.nodeType = $nodeType
-          AND (
-            toLower(entity.name) CONTAINS toLower($query)
-            OR (entity.content IS NOT NULL AND toLower(entity.content) CONTAINS toLower($query))
-            OR (entity.definition IS NOT NULL AND toLower(entity.definition) CONTAINS toLower($query))
-            OR (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
-                any(obs IN entity.observations WHERE obs IS NOT NULL AND toLower(obs) CONTAINS toLower($query)))
-          )
-          WITH entity
-          OPTIONAL MATCH (entity)-[r]->(other)
-          WITH entity, collect(r) as outRels
-          OPTIONAL MATCH (other)-[inRel]->(entity)
-          RETURN entity, outRels as relations, collect(inRel) as inRelations
-          ORDER BY entity.name
-        `, { nodeType, query }));
-        
-        // Log results for debugging
-        console.error(`Found ${res.records.length} nodes of type ${nodeType} matching "${query}"`);
-        if (res.records.length > 0) {
-          console.error(`First result: ${res.records[0].get('entity').properties.name}`);
-        } else {
-          // Try with individual tokens as fallback
-          const tokens = query.split(/\s+/).filter(token => token.length > 1);
-          if (tokens.length > 1) {
-            console.error(`No direct matches found. Attempting token-based search with: ${tokens.join(', ')}`);
-            
-            const tokenResult = await session.executeRead(tx => tx.run(`
-              MATCH (entity:Memory)
-              WHERE entity.nodeType = $nodeType
-              AND (
-                any(token IN $tokens WHERE 
-                  entity.name IS NOT NULL AND 
-                  toLower(entity.name) CONTAINS toLower(token)
-                )
-                OR 
-                (entity.content IS NOT NULL AND 
-                 any(token IN $tokens WHERE toLower(entity.content) CONTAINS toLower(token)))
-                OR 
-                (entity.definition IS NOT NULL AND 
-                 any(token IN $tokens WHERE toLower(entity.definition) CONTAINS toLower(token)))
-                OR 
-                (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
-                 any(token IN $tokens WHERE 
-                   any(obs IN entity.observations WHERE 
-                     obs IS NOT NULL AND toLower(obs) CONTAINS toLower(token)
-                   )
-               )
-            
-            // Get relationships
-            WITH entity
-            OPTIONAL MATCH (entity)-[r]->(other)
-            WITH entity, collect(r) as outRels
-            OPTIONAL MATCH (other)-[inRel]->(entity)
-            
-            RETURN entity, outRels as relations, collect(inRel) as inRelations
-            ORDER BY entity.name
-          `, { nodeType, tokens }));
-            
-            console.error(`Token-based search found ${tokenResult.records.length} results`);
-            if (tokenResult.records.length > 0) {
-              return this.processSearchResults(tokenResult.records);
-            }
-          }
-        }
-        
-        return this.processSearchResults(res.records);
-      } else {
-        console.error(`Finding all nodes of type ${nodeType}`);
-        
-        // Execute original query without filtering - list all nodes of the type
-        const res = await session.executeRead(tx => tx.run<EntityWithRelationsResult>(`
-          MATCH (entity:Memory)
-          WHERE entity.nodeType = $nodeType
-          WITH entity
-          OPTIONAL MATCH (entity)-[r]->(other)
-          WITH entity, collect(r) as outRels
-          OPTIONAL MATCH (other)-[inRel]->(entity)
-          RETURN entity, outRels as relations, collect(inRel) as inRelations
-          ORDER BY entity.name
-        `, { nodeType }));
-        
-        console.error(`Found ${res.records.length} nodes of type ${nodeType}`);
-        return this.processSearchResults(res.records);
-      }
-    } catch (error) {
-      console.error(`Error finding nodes of type ${nodeType}:`, error);
-      return { entities: [], relations: [] };
-    } finally {
-      await session.close();
-    }
-  }
-
   // Create a single Thought node and connect it to an entity
   async createThought(thought: { 
     entityName?: string; // Now optional
@@ -1476,367 +1352,6 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
     } catch (error) {
       console.error(`Error creating thought:`, error);
       throw error;
-    } finally {
-      await session.close();
-    }
-  }
-
-  // Trace evidence chains that support or contradict a node
-  async traceEvidence(targetNodeName: string, relationshipType: string = "SUPPORTS"): Promise<KnowledgeGraph> {
-    const session = this.neo4jDriver.session();
-    
-    try {
-      console.error(`Tracing evidence paths with relationship type ${relationshipType} for node: "${targetNodeName}"`);
-      
-      // First check if the target node exists
-      const nodeCheck = await session.executeRead(tx => tx.run(`
-        MATCH (node:Memory)
-        WHERE toLower(node.name) = toLower($nodeName)
-        RETURN node
-      `, { nodeName: targetNodeName }));
-      
-      if (nodeCheck.records.length === 0) {
-        console.error(`No node found with name "${targetNodeName}" (case-insensitive check)`);
-        return { entities: [], relations: [] };
-      }
-      
-      // Get the actual node name with correct casing
-      const actualNodeName = nodeCheck.records[0].get('node').properties.name;
-      console.error(`Found target node: "${actualNodeName}"`);
-      
-      // Validate the relationship type is valid
-      const validRelationshipTypes = ["SUPPORTS", "CONTRADICTS", "VALIDATES", "CHALLENGES", "REFINES"];
-      const relType = validRelationshipTypes.includes(relationshipType) ? 
-                      relationshipType : "SUPPORTS";
-      
-      if (relType !== relationshipType) {
-        console.error(`Invalid relationship type "${relationshipType}", using "${relType}" instead`);
-      }
-      
-      // Find evidence paths using case-insensitive node matching
-      const result = await session.executeRead(tx => tx.run(`
-        // Find the target node first with case-insensitive matching
-        MATCH (target:Memory)
-        WHERE toLower(target.name) = toLower($targetName)
-        
-        // Then find paths
-        WITH target
-        MATCH path = (source:Memory)-[:${relType}*1..3]->(target)
-        WHERE source <> target
-        
-        // Process path nodes
-        WITH collect(nodes(path)) as paths
-        UNWIND paths as pathNodes
-        UNWIND pathNodes as node
-        WITH collect(DISTINCT node) as allNodes
-        
-        // Get relationships between these nodes
-        UNWIND allNodes as n1
-        UNWIND allNodes as n2
-        OPTIONAL MATCH (n1)-[r]->(n2)
-        WHERE n1 <> n2 AND type(r) IN $validRelTypes
-        
-        RETURN allNodes as nodes, collect(DISTINCT r) as rels
-      `, {
-        targetName: targetNodeName,
-        validRelTypes: validRelationshipTypes
-      }));
-      
-      // Process the nodes
-      if (result.records.length === 0) {
-        console.error(`No evidence paths found for "${targetNodeName}" with relationship type "${relType}"`);
-        
-        // Try to find the node and its immediate connections instead
-        const fallbackResult = await session.executeRead(tx => tx.run(`
-          MATCH (target:Memory)
-          WHERE toLower(target.name) = toLower($targetName)
-          
-          // Get all immediate connections (in both directions)
-          OPTIONAL MATCH (target)-[r1]-(other)
-          
-          // Return target node plus connected nodes
-          WITH target, collect(DISTINCT other) as connected
-          UNWIND connected as c
-          
-          RETURN collect(DISTINCT target) + collect(DISTINCT c) as nodes,
-                 collect(DISTINCT (target)-[r2]-(c)) as rels
-        `, { targetName: targetNodeName }));
-        
-        if (fallbackResult.records.length > 0 && fallbackResult.records[0].get('nodes').length > 0) {
-          const record = fallbackResult.records[0];
-          const nodes = record.get('nodes');
-          const relationships = record.get('rels');
-          
-          console.error(`Found ${nodes.length} nodes and ${relationships.length} relationships in immediate context of "${targetNodeName}"`);
-          
-          // Map nodes to entities
-          const entities: Entity[] = nodes.map((node: any) => ({
-            name: node.properties.name,
-            entityType: node.properties.nodeType || 'Entity',
-            observations: 'observations' in node.properties ? 
-              node.properties.observations : []
-          }));
-          
-          // Map relationships to relations
-          const relations: Relation[] = relationships.map((rel: any) => ({
-            from: rel.startNode.properties.name,
-            to: rel.endNode.properties.name,
-            relationType: rel.type
-          }));
-          
-          return {
-            entities,
-            relations
-          };
-        }
-        
-        return { entities: [], relations: [] };
-      }
-      
-      // Process the evidence paths
-      const record = result.records[0];
-      const nodes = record.get('nodes');
-      const relationships = record.get('rels');
-      
-      console.error(`Found ${nodes.length} nodes and ${relationships.length} relationships in evidence paths`);
-      
-      // Map nodes to entities
-      const entities: Entity[] = nodes.map((node: any) => ({
-        name: node.properties.name,
-        entityType: node.properties.nodeType || 'Entity',
-        observations: 'observations' in node.properties ? 
-          node.properties.observations : []
-      }));
-      
-      // Map relationships to relations
-      const relations: Relation[] = relationships.map((rel: any) => ({
-        from: rel.startNode.properties.name,
-        to: rel.endNode.properties.name,
-        relationType: rel.type
-      }));
-      
-      return {
-        entities,
-        relations
-      };
-    } catch (error) {
-      console.error(`Error tracing evidence: ${error}`);
-      return { entities: [], relations: [] };
-    } finally {
-      await session.close();
-    }
-  }
-
-  // Find paths connecting two nodes (especially useful for concepts)
-  async findConceptConnections(sourceNodeName: string, targetNodeName: string, maxDepth: number = 3): Promise<KnowledgeGraph> {
-    const session = this.neo4jDriver.session();
-    
-    try {
-      console.error(`Finding concept connections between "${sourceNodeName}" and "${targetNodeName}" with maxDepth: ${maxDepth}`);
-      
-      // First check if both nodes exist with direct name matching
-      const nodesExist = await session.executeRead(tx => tx.run(`
-        MATCH (source:Memory {name: $sourceName}), (target:Memory {name: $targetName})
-        RETURN source, target
-      `, { 
-        sourceName: sourceNodeName,
-        targetName: targetNodeName 
-      }));
-      
-      if (nodesExist.records.length === 0) {
-        // Try case-insensitive search as fallback
-        const caseInsensitiveCheck = await session.executeRead(tx => tx.run(`
-          MATCH (source:Memory), (target:Memory)
-          WHERE toLower(source.name) = toLower($sourceName)
-          AND toLower(target.name) = toLower($targetName)
-          RETURN source, target
-        `, { 
-          sourceName: sourceNodeName,
-          targetName: targetNodeName 
-        }));
-        
-        if (caseInsensitiveCheck.records.length === 0) {
-          console.error(`Cannot find nodes: "${sourceNodeName}" and/or "${targetNodeName}"`);
-          return { entities: [], relations: [] };
-        } else {
-          // Get the actual node names with correct casing
-          sourceNodeName = caseInsensitiveCheck.records[0].get('source').properties.name;
-          targetNodeName = caseInsensitiveCheck.records[0].get('target').properties.name;
-          console.error(`Found nodes with case-insensitive search: "${sourceNodeName}" and "${targetNodeName}"`);
-        }
-      } else {
-        // Get the actual node names from the results
-        sourceNodeName = nodesExist.records[0].get('source').properties.name;
-        targetNodeName = nodesExist.records[0].get('target').properties.name;
-      }
-
-      // Use a simpler approach with explicit depth traversal
-      let pathFound = false;
-      let allNodes: any[] = [];
-      let allRelationships: any[] = [];
-      
-      // Try direct relationship (depth 1)
-      const directRelationResult = await session.executeRead(tx => tx.run(`
-        MATCH (source:Memory {name: $sourceName})-[r]-(target:Memory {name: $targetName})
-        RETURN source, target, r
-      `, {
-        sourceName: sourceNodeName,
-        targetName: targetNodeName
-      }));
-      
-      if (directRelationResult.records.length > 0) {
-        console.error(`Found direct relationship between "${sourceNodeName}" and "${targetNodeName}"`);
-        pathFound = true;
-        
-        const source = directRelationResult.records[0].get('source');
-        const target = directRelationResult.records[0].get('target');
-        const relationship = directRelationResult.records[0].get('r');
-        
-        allNodes = [source, target];
-        allRelationships = [relationship];
-      }
-      
-      // If no direct path and maxDepth > 1, try 2-hop path
-      if (!pathFound && maxDepth >= 2) {
-        console.error(`Trying 2-hop path between "${sourceNodeName}" and "${targetNodeName}"`);
-        
-        const twoHopResult = await session.executeRead(tx => tx.run(`
-          MATCH (source:Memory {name: $sourceName})-[r1]-(mid)-[r2]-(target:Memory {name: $targetName})
-          WHERE mid <> source AND mid <> target
-          RETURN source, mid, target, r1, r2
-        `, {
-          sourceName: sourceNodeName,
-          targetName: targetNodeName
-        }));
-        
-        if (twoHopResult.records.length > 0) {
-          console.error(`Found 2-hop path between "${sourceNodeName}" and "${targetNodeName}"`);
-          pathFound = true;
-          
-          const record = twoHopResult.records[0];
-          const source = record.get('source');
-          const mid = record.get('mid');
-          const target = record.get('target');
-          const rel1 = record.get('r1');
-          const rel2 = record.get('r2');
-          
-          allNodes = [source, mid, target];
-          allRelationships = [rel1, rel2];
-        }
-      }
-      
-      // If still no path and maxDepth > 2, try 3-hop path
-      if (!pathFound && maxDepth >= 3) {
-        console.error(`Trying 3-hop path between "${sourceNodeName}" and "${targetNodeName}"`);
-        
-        const threeHopResult = await session.executeRead(tx => tx.run(`
-          MATCH (source:Memory {name: $sourceName})-[r1]-(mid1)-[r2]-(mid2)-[r3]-(target:Memory {name: $targetName})
-          WHERE mid1 <> source AND mid1 <> target 
-          AND mid2 <> source AND mid2 <> target AND mid2 <> mid1
-          RETURN source, mid1, mid2, target, r1, r2, r3
-        `, {
-          sourceName: sourceNodeName,
-          targetName: targetNodeName
-        }));
-        
-        if (threeHopResult.records.length > 0) {
-          console.error(`Found 3-hop path between "${sourceNodeName}" and "${targetNodeName}"`);
-          pathFound = true;
-          
-          const record = threeHopResult.records[0];
-          const source = record.get('source');
-          const mid1 = record.get('mid1');
-          const mid2 = record.get('mid2');
-          const target = record.get('target');
-          const rel1 = record.get('r1');
-          const rel2 = record.get('r2');
-          const rel3 = record.get('r3');
-          
-          allNodes = [source, mid1, mid2, target];
-          allRelationships = [rel1, rel2, rel3];
-        }
-      }
-      
-      if (!pathFound) {
-        console.error(`No path found between "${sourceNodeName}" and "${targetNodeName}" within ${maxDepth} hops`);
-        
-        // If no path found, check if the nodes exist individually to help with debugging
-        const sourceCheck = await session.executeRead(tx => tx.run(`
-          MATCH (n:Memory {name: $nodeName})
-          RETURN n
-        `, { nodeName: sourceNodeName }));
-        
-        const targetCheck = await session.executeRead(tx => tx.run(`
-          MATCH (n:Memory {name: $nodeName})
-          RETURN n
-        `, { nodeName: targetNodeName }));
-        
-        console.error(`Source node "${sourceNodeName}" exists: ${sourceCheck.records.length > 0}`);
-        console.error(`Target node "${targetNodeName}" exists: ${targetCheck.records.length > 0}`);
-        
-        // Check if they have any relationships at all
-        if (sourceCheck.records.length > 0) {
-          const sourceRels = await session.executeRead(tx => tx.run(`
-            MATCH (n:Memory {name: $nodeName})-[r]-()
-            RETURN count(r) as relCount
-          `, { nodeName: sourceNodeName }));
-          
-          console.error(`Source node has ${sourceRels.records[0].get('relCount')} relationships`);
-        }
-        
-        if (targetCheck.records.length > 0) {
-          const targetRels = await session.executeRead(tx => tx.run(`
-            MATCH (n:Memory {name: $nodeName})-[r]-()
-            RETURN count(r) as relCount
-          `, { nodeName: targetNodeName }));
-          
-          console.error(`Target node has ${targetRels.records[0].get('relCount')} relationships`);
-        }
-        
-        return { entities: [], relations: [] };
-      }
-      
-      // Convert nodes and relationships to entities and relations
-      const entities: Entity[] = allNodes.map(node => {
-        // Create a basic entity with required properties
-        const entity: Entity = {
-          name: node.properties.name,
-          entityType: node.properties.nodeType || 'Entity',
-          observations: node.properties.observations || []
-        };
-        
-        // Add additional fields based on entity type
-        if (node.properties.nodeType === 'Entity') {
-          (entity as any).description = node.properties.description;
-          (entity as any).biography = node.properties.biography;
-          (entity as any).keyContributions = node.properties.keyContributions;
-          (entity as any).confidence = node.properties.confidence;
-        } 
-        else if (node.properties.nodeType === 'Concept') {
-          (entity as any).definition = node.properties.definition;
-          (entity as any).examples = node.properties.examples;
-          (entity as any).domain = node.properties.domain;
-          (entity as any).perspectives = node.properties.perspectives;
-          (entity as any).historicalDevelopment = node.properties.historicalDevelopment;
-        }
-        
-        return entity;
-      });
-      
-      const relations: Relation[] = allRelationships.map(rel => ({
-        from: rel.startNodeElementId ? 
-          allNodes.find(n => n.elementId === rel.startNodeElementId)?.properties.name : 
-          rel.startNode.properties.name,
-        to: rel.endNodeElementId ? 
-          allNodes.find(n => n.elementId === rel.endNodeElementId)?.properties.name : 
-          rel.endNode.properties.name,
-        relationType: rel.type
-      }));
-      
-      return { entities, relations };
-    } catch (error) {
-      console.error(`Error finding concept connections: ${error}`);
-      return { entities: [], relations: [] };
     } finally {
       await session.close();
     }

@@ -652,27 +652,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ] 
       };
       
-    case "search_nodes_by_type":
-      result = await (knowledgeGraphMemory as Neo4jMemory).findNodesByType(args.nodeType as string, args.query as string);
-      return { 
-        content: [
-          {
-            role: "system",
-            content: {
-              type: "text",
-              text: toolPrompt
-            }
-          },
-          {
-            role: "assistant",
-            content: {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          }
-        ] 
-      };
-      
     case "create_thoughts":
       // Map content to thoughtContent for backward compatibility
       if (args.content && !args.thoughtContent) {
@@ -721,67 +700,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ] 
       };
       
-    // New handlers for traversal tools
-    case "find_concept_connections":
-      try {
-        result = await (knowledgeGraphMemory as Neo4jMemory).findConceptConnections(
-          args.sourceNodeName as string,
-          args.targetNodeName as string,
-          args.maxDepth as number || 3
-        );
-        
-        // Basic validation and cleanup
-        if (!result) result = { entities: [], relations: [] };
-        const cleanResult = {
-          entities: Array.isArray(result.entities) ? result.entities : [],
-          relations: Array.isArray(result.relations) ? result.relations : []
-        };
-        
-        return { 
-          content: [
-            {
-              role: "system",
-              content: {
-                type: "text",
-                text: toolPrompt
-              }
-            },
-            {
-              role: "assistant",
-              content: {
-                type: "text",
-                text: JSON.stringify(cleanResult, null, 2)
-              }
-            }
-          ] 
-        };
-      } catch (error) {
-        console.error(`Error in find_concept_connections tool: ${error}`);
-        
-        return { 
-          content: [
-            {
-              role: "system",
-              content: {
-                type: "text",
-                text: toolPrompt
-              }
-            },
-            {
-              role: "assistant",
-              content: {
-                type: "text",
-                text: JSON.stringify({
-                  error: `Error finding concept connections: ${error}`,
-                  entities: [],
-                  relations: []
-                }, null, 2)
-              }
-            }
-          ] 
-        };
-      }
-      
     case "explore_context":
       try {
         // Log the input parameters for debugging
@@ -798,11 +716,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           result = { entities: [], relations: [] };
         }
         
-        // Basic validation and cleanup
+        // Basic validation and cleanup to ensure we always return valid arrays
         const cleanResult = {
           entities: Array.isArray(result.entities) ? result.entities : [],
           relations: Array.isArray(result.relations) ? result.relations : []
         };
+
+        // Validate each entity to ensure they have at least required fields
+        cleanResult.entities = cleanResult.entities.filter(entity => {
+          if (!entity || typeof entity !== 'object') return false;
+          if (!entity.name) {
+            console.error(`Found entity without name, filtering out`);
+            return false;
+          }
+          return true;
+        });
+
+        // Validate each relation to ensure they have required fields
+        cleanResult.relations = cleanResult.relations.filter(relation => {
+          if (!relation || typeof relation !== 'object') return false;
+          if (!relation.from || !relation.to || !relation.relationType) {
+            console.error(`Found relation missing required fields, filtering out`);
+            return false;
+          }
+          return true;
+        });
+
+        console.error(`Returning ${cleanResult.entities.length} entities and ${cleanResult.relations.length} relations`);
 
         return { 
           content: [
@@ -849,66 +789,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ] 
         };
       }
-      
-    case "trace_evidence":
-      try {
-        result = await (knowledgeGraphMemory as Neo4jMemory).traceEvidence(
-          args.targetNodeName as string,
-          args.relationshipType as string || "SUPPORTS"
-        );
-        
-        // Basic validation and cleanup
-        if (!result) result = { entities: [], relations: [] };
-        const cleanResult = {
-          entities: Array.isArray(result.entities) ? result.entities : [],
-          relations: Array.isArray(result.relations) ? result.relations : []
-        };
-        
-        return { 
-          content: [
-            {
-              role: "system",
-              content: {
-                type: "text",
-                text: toolPrompt
-              }
-            },
-            {
-              role: "assistant",
-              content: {
-                type: "text",
-                text: JSON.stringify(cleanResult, null, 2)
-              }
-            }
-          ] 
-        };
-      } catch (error) {
-        console.error(`Error in trace_evidence tool: ${error}`);
-        
-        return { 
-          content: [
-            {
-              role: "system",
-              content: {
-                type: "text",
-                text: toolPrompt
-              }
-            },
-            {
-              role: "assistant",
-              content: {
-                type: "text",
-                text: JSON.stringify({
-                  error: `Error tracing evidence: ${error}`,
-                  entities: [],
-                  relations: []
-                }, null, 2)
-              }
-            }
-          ] 
-        };
-      }
-      
+            
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
