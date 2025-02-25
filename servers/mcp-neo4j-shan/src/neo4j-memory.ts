@@ -155,19 +155,22 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
             
             // For Entity nodes
             FOREACH (ignore IN CASE WHEN entity.entityType = 'Entity' THEN [1] ELSE [] END | 
-              MERGE (node:Memory:Entity {name: entity.name})
+              MERGE (node:Memory {name: entity.name})
               SET node.nodeType = 'Entity',
+                  node:Entity,
                   node.lastUpdated = datetime(),
                   node.observations = COALESCE(entity.observations, []),
                   node.confidence = entity.confidence,
                   node.source = entity.source,
-                  node.description = entity.description
+                  node.description = entity.description,
+                  node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
             // For Event nodes
             FOREACH (ignore IN CASE WHEN entity.entityType = 'Event' THEN [1] ELSE [] END | 
-              MERGE (node:Memory:Event {name: entity.name})
+              MERGE (node:Memory {name: entity.name})
               SET node.nodeType = 'Event',
+                  node:Event,
                   node.lastUpdated = datetime(),
                   node.startDate = entity.startDate,
                   node.endDate = entity.endDate,
@@ -177,26 +180,30 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
                   node.location = entity.location,
                   node.participants = COALESCE(entity.participants, []),
                   node.outcome = entity.outcome,
-                  node.significance = entity.significance
+                  node.significance = entity.significance,
+                  node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
             // For Concept nodes
             FOREACH (ignore IN CASE WHEN entity.entityType = 'Concept' THEN [1] ELSE [] END | 
-              MERGE (node:Memory:Concept {name: entity.name})
+              MERGE (node:Memory {name: $name})
               SET node.nodeType = 'Concept',
+                  node:Concept,
                   node.lastUpdated = datetime(),
-                  node.definition = entity.definition,
-                  node.description = entity.description,
-                  node.examples = COALESCE(entity.examples, []),
-                  node.relatedConcepts = COALESCE(entity.relatedConcepts, []),
-                  node.domain = entity.domain,
-                  node.significance = entity.significance
+                  node.definition = $definition,
+                  node.description = $description,
+                  node.examples = $examples,
+                  node.relatedConcepts = $relatedConcepts,
+                  node.domain = $domain,
+                  node.significance = $significance,
+                  node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
             // For Thought nodes
             FOREACH (ignore IN CASE WHEN entity.entityType = 'Thought' THEN [1] ELSE [] END | 
-              MERGE (node:Memory:Thought {name: entity.name})
+              MERGE (node:Memory {name: entity.name})
               SET node.nodeType = 'Thought',
+                  node:Thought,
                   node.lastUpdated = datetime(),
                   node.content = entity.content,
                   node.references = COALESCE(entity.references, []),
@@ -204,32 +211,37 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
                   node.source = entity.source,
                   node.createdBy = entity.createdBy,
                   node.tags = COALESCE(entity.tags, []),
-                  node.impact = entity.impact
+                  node.impact = entity.impact,
+                  node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
             // For ScientificInsight nodes
             FOREACH (ignore IN CASE WHEN entity.entityType = 'ScientificInsight' THEN [1] ELSE [] END | 
-              MERGE (node:Memory:ScientificInsight {name: entity.name})
+              MERGE (node:Memory {name: entity.name})
               SET node.nodeType = 'ScientificInsight',
+                  node:ScientificInsight,
                   node.lastUpdated = datetime(),
                   node.hypothesis = entity.hypothesis,
                   node.evidence = COALESCE(entity.evidence, []),
                   node.methodology = entity.methodology,
                   node.confidence = entity.confidence,
                   node.field = entity.field,
-                  node.publications = COALESCE(entity.publications, [])
+                  node.publications = COALESCE(entity.publications, []),
+                  node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
             // For Law nodes
             FOREACH (ignore IN CASE WHEN entity.entityType = 'Law' THEN [1] ELSE [] END | 
-              MERGE (node:Memory:Law {name: entity.name})
+              MERGE (node:Memory {name: entity.name})
               SET node.nodeType = 'Law',
+                  node:Law,
                   node.lastUpdated = datetime(),
                   node.statement = entity.statement,
                   node.conditions = COALESCE(entity.conditions, []),
                   node.exceptions = COALESCE(entity.exceptions, []),
                   node.domain = entity.domain,
-                  node.proofs = COALESCE(entity.proofs, [])
+                  node.proofs = COALESCE(entity.proofs, []),
+                  node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
             // Handle new node creation date for all types
@@ -297,8 +309,9 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
         // Specific query based on entity type
         if (entity.entityType === 'Entity') {
           const result = await session.executeWrite(tx => tx.run(`
-            MERGE (node:Memory:Entity {name: $name})
+            MERGE (node:Memory {name: $name})
             SET node.nodeType = 'Entity',
+                node:Entity,
                 node.lastUpdated = datetime(),
                 node.observations = $observations,
                 node.confidence = $confidence,
@@ -318,8 +331,9 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
         } 
         else if (entity.entityType === 'Event') {
           const result = await session.executeWrite(tx => tx.run(`
-            MERGE (node:Memory:Event {name: $name})
+            MERGE (node:Memory {name: $name})
             SET node.nodeType = 'Event',
+                node:Event,
                 node.lastUpdated = datetime(),
                 node.startDate = $startDate,
                 node.endDate = $endDate,
@@ -350,8 +364,9 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
         }
         else if (entity.entityType === 'Concept') {
           const result = await session.executeWrite(tx => tx.run(`
-            MERGE (node:Memory:Concept {name: $name})
+            MERGE (node:Memory {name: $name})
             SET node.nodeType = 'Concept',
+                node:Concept,
                 node.lastUpdated = datetime(),
                 node.definition = $definition,
                 node.description = $description,

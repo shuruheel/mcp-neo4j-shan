@@ -21,8 +21,8 @@ const __dirname = path.dirname(__filename);
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  'neo4j://localhost:7687',
-  Neo4jAuth.basic('neo4j', 'marwhompa')
+  'neo4j+s://9df4bc56.databases.neo4j.io',
+  Neo4jAuth.basic('neo4j', 'jrOZqvLnVYUQ7OF0JdmuOo4PqSlbGfvD50HXVXZrmEE')
 )
 
 const knowledgeGraphMemory:KnowledgeGraphMemory = new Neo4jMemory(neo4jDriver);
@@ -41,7 +41,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
-        name: "create_entities",
+        name: "create_nodes",
         description: "Create multiple new nodes in the knowledge graph. When analyzing conversations, identify and create nodes of these types:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
         inputSchema: {
           type: "object",
@@ -238,7 +238,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   switch (name) {
-    case "create_entities":
+    case "create_nodes":
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.createEntities(args.entities as Entity[]), null, 2) }] };
     case "create_relations":
       return { content: [{ type: "text", text: JSON.stringify(await knowledgeGraphMemory.createRelations(args.relations as Relation[]), null, 2) }] };
