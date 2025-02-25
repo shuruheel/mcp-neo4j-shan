@@ -92,7 +92,15 @@ type EntityWithRelationsResult = {
   inRelations?: EntityRelationship[]
 }
 
-export class Neo4jMemory implements KnowledgeGraphMemory {
+// Create a custom interface with only the methods you need
+interface CustomKnowledgeGraphMemory {
+  createEntities(entities: Entity[]): Promise<Entity[]>;
+  createRelations(relations: Relation[]): Promise<Relation[]>;
+  searchNodes(query: string): Promise<KnowledgeGraph>;
+  openNodes(names: string[]): Promise<KnowledgeGraph>;
+}
+
+export class Neo4jMemory implements CustomKnowledgeGraphMemory {
   constructor(private neo4jDriver: Neo4jDriver) { }
 
   private async loadGraph(): Promise<KnowledgeGraph> {
@@ -578,54 +586,6 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
     }
   }
 
-  async addObservations(observations: { entityName: string; contents: string[] }[]): Promise<{ entityName: string; addedObservations: string[] }[]> {
-    const graph = await this.loadGraph();
-    const results = observations.map(o => {
-      const entity = graph.entities.find(e => e.name === o.entityName);
-      if (!entity) {
-        throw new Error(`Entity with name ${o.entityName} not found`);
-      }
-      const newObservations = o.contents.filter(content => !entity.observations.includes(content));
-      entity.observations.push(...newObservations);
-      return { entityName: o.entityName, addedObservations: newObservations };
-    });
-    await this.saveGraph(graph);
-    return results;
-  }
-
-  async deleteEntities(entityNames: string[]): Promise<void> {
-    const graph = await this.loadGraph();
-    graph.entities = graph.entities.filter(e => !entityNames.includes(e.name));
-    graph.relations = graph.relations.filter(r => !entityNames.includes(r.from) && !entityNames.includes(r.to));
-    await this.saveGraph(graph);
-  }
-
-  async deleteObservations(deletions: { entityName: string; observations: string[] }[]): Promise<void> {
-    const graph = await this.loadGraph();
-    deletions.forEach(d => {
-      const entity = graph.entities.find(e => e.name === d.entityName);
-      if (entity) {
-        entity.observations = entity.observations.filter(o => !d.observations.includes(o));
-      }
-    });
-    await this.saveGraph(graph);
-  }
-
-  async deleteRelations(relations: Relation[]): Promise<void> {
-    const graph = await this.loadGraph();
-    graph.relations = graph.relations.filter(r => !relations.some(delRelation => 
-      r.from === delRelation.from && 
-      r.to === delRelation.to && 
-      r.relationType === delRelation.relationType
-    ));
-    await this.saveGraph(graph);
-  }
-
-  async readGraph(): Promise<KnowledgeGraph> {
-
-    return this.loadGraph();
-  }
-
   // Very basic search function
   async searchNodes(query: string): Promise<KnowledgeGraph> {
     const session = this.neo4jDriver.session();
@@ -916,7 +876,6 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
                    any(obs IN entity.observations WHERE 
                      obs IS NOT NULL AND toLower(obs) CONTAINS toLower(token)
                    )
-                 )
               )
             
             // Get relationships
@@ -958,72 +917,6 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
     } catch (error) {
       console.error(`Error finding nodes of type ${nodeType}:`, error);
       return { entities: [], relations: [] };
-    } finally {
-      await session.close();
-    }
-  }
-
-  // Migrate observations from Entity nodes to connected Thought nodes
-  async migrateObservationsToThoughts(entityName: string): Promise<void> {
-    const session = this.neo4jDriver.session();
-    
-    try {
-      // Find the entity and its observations
-      const result = await session.executeRead(tx => tx.run(`
-        MATCH (e:Entity:Memory {name: $entityName})
-        RETURN e.observations as observations
-      `, { entityName }));
-      
-      if (result.records.length === 0) {
-        console.error(`Entity with name ${entityName} not found`);
-        return;
-      }
-      
-      const observations = result.records[0].get('observations') || [];
-      
-      if (observations.length === 0) {
-        console.error(`No observations found for entity ${entityName}`);
-        return;
-      }
-      
-      // Create Thought nodes for each observation and connect them to the entity
-      await session.executeWrite(tx => tx.run(`
-        MATCH (e:Entity:Memory {name: $entityName})
-        
-        UNWIND $observations as observation
-        
-        // Create a Thought node with a unique name based on entity and timestamp
-        CREATE (t:Thought:Memory {
-          name: $entityName + '_thought_' + toString(timestamp()),
-          nodeType: 'Thought',
-          content: observation,
-          createdAt: datetime(),
-          lastUpdated: datetime(),
-          references: [$entityName],
-          createdBy: 'System Migration',
-          tags: ['migrated_observation']
-        })
-        
-        // Create relationship from Entity to Thought
-        CREATE (e)-[r:HAS_OBSERVATION]->(t)
-        SET r.lastUpdated = datetime()
-        
-        RETURN count(*)
-      `, { 
-        entityName,
-        observations
-      }));
-      
-      // Remove observations from Entity node
-      await session.executeWrite(tx => tx.run(`
-        MATCH (e:Entity:Memory {name: $entityName})
-        REMOVE e.observations
-        RETURN e
-      `, { entityName }));
-      
-      console.error(`Successfully migrated ${observations.length} observations to Thought nodes for entity ${entityName}`);
-    } catch (error) {
-      console.error(`Error migrating observations to thoughts:`, error);
     } finally {
       await session.close();
     }
@@ -1889,23 +1782,6 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       // Third attempt: Fall back to string containment search
       console.error(`Falling back to string containment search`);
       
-      // Sample database nodes for debugging
-      try {
-        const debugResult = await session.executeRead(tx => tx.run(`
-          MATCH (entity:Memory)
-          RETURN entity.name, entity.nodeType LIMIT 10
-        `));
-        
-        const sampleNodes = debugResult.records.map(r => ({
-          name: r.get('entity.name'),
-          type: r.get('entity.nodeType')
-        }));
-        
-        console.error(`Sample nodes in database: ${JSON.stringify(sampleNodes)}`);
-      } catch (err) {
-        console.error(`Error fetching sample nodes: ${err}`);
-      }
-      
       try {
         const containmentResult = await session.executeRead(tx => tx.run(`
           MATCH (entity:Memory)
@@ -1934,103 +1810,7 @@ export class Neo4jMemory implements KnowledgeGraphMemory {
       } catch (error) {
         console.error(`Error in containment search: ${error}`);
         searchAttempts.push(`String containment: error - ${error.message}`);
-      }
-      
-      // Fourth attempt: Try a tokenized search with individual words
-      try {
-        console.error(`Trying tokenized search with individual words`);
-        
-        // Split the query into words and filter out short tokens
-        const tokens = searchQuery.split(/\s+/).filter(token => token.length > 1);
-        console.error(`Tokens for search: ${JSON.stringify(tokens)}`);
-        
-        if (tokens.length > 0) {
-          // Create a parameterized query with tokens
-          const tokensParam = { tokens, query: searchQuery };
-          
-          const tokenizedResult = await session.executeRead(tx => tx.run(`
-            MATCH (entity:Memory)
-            WITH entity, $tokens as tokens
-            WHERE 
-              // Check if any token is in the name
-              any(token IN tokens WHERE 
-                entity.name IS NOT NULL AND toLower(entity.name) CONTAINS toLower(token)
-              )
-              OR 
-              // Check if any token is in the content
-              (entity.content IS NOT NULL AND 
-               any(token IN tokens WHERE toLower(entity.content) CONTAINS toLower(token)))
-               OR 
-               // Check if any token is in the definition
-               (entity.definition IS NOT NULL AND 
-                any(token IN tokens WHERE toLower(entity.definition) CONTAINS toLower(token)))
-               OR 
-               // Check if any token is in observations
-               (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
-                any(token IN tokens WHERE 
-                  any(obs IN entity.observations WHERE 
-                    obs IS NOT NULL AND toLower(obs) CONTAINS toLower(token)
-                  )
-                )
-               )
-            
-            // Get relationships
-            WITH entity
-            OPTIONAL MATCH (entity)-[r]->(other)
-            WITH entity, collect(r) as outRels
-            OPTIONAL MATCH (other)-[inRel]->(entity)
-            
-            RETURN entity, outRels as relations, collect(inRel) as inRelations
-            LIMIT 20
-          `, tokensParam));
-          
-          searchAttempts.push(`Tokenized search: ${tokenizedResult.records.length} results`);
-          console.error(`Tokenized search found ${tokenizedResult.records.length} results`);
-          
-          if (tokenizedResult.records.length > 0) {
-            return this.processSearchResults(tokenizedResult.records);
-          }
-        }
-      } catch (error) {
-        console.error(`Error in tokenized search: ${error}`);
-        searchAttempts.push(`Tokenized search: error - ${error.message}`);
-      }
-      
-      // Final attempt: Use pattern matching as last resort
-      try {
-        console.error(`Trying regex pattern search as last resort`);
-        // Create a pattern where words can appear in any order
-        const words = searchQuery.toLowerCase().split(/\s+/).filter(w => w.length > 1);
-        const pattern = words.length > 0 ? words.join(".*") : searchQuery.toLowerCase();
-        
-        const query = `
-          MATCH (entity:Memory)
-          WHERE toLower(entity.name) =~ '.*${pattern}.*'
-             OR (entity.content IS NOT NULL AND toLower(entity.content) =~ '.*${pattern}.*')
-          
-          // Get relationships
-          WITH entity
-          OPTIONAL MATCH (entity)-[r]->(other)
-          WITH entity, collect(r) as outRels
-          OPTIONAL MATCH (other)-[inRel]->(entity)
-          
-          RETURN entity, outRels as relations, collect(inRel) as inRelations
-          LIMIT 20
-        `;
-        
-        const patternMatchResult = await session.executeRead(tx => tx.run(query));
-        
-        searchAttempts.push(`Pattern search: ${patternMatchResult.records.length} results`);
-        console.error(`Pattern search found ${patternMatchResult.records.length} results`);
-        
-        if (patternMatchResult.records.length > 0) {
-          return this.processSearchResults(patternMatchResult.records);
-        }
-      } catch (error) {
-        console.error(`Error in pattern search: ${error}`);
-        searchAttempts.push(`Pattern search: error - ${error.message}`);
-      }
-      
+      }      
       // Log all search attempts to help diagnose issues
       console.error(`All search attempts exhausted: ${searchAttempts.join(', ')}`);
       

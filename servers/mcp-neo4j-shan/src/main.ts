@@ -6,12 +6,10 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { driver as connectToNeo4j, auth as Neo4jAuth } from 'neo4j-driver'
-import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync } from 'fs';
 
-import { KnowledgeGraphMemory, Entity, KnowledgeGraph, Relation } from "@neo4j/graphrag-memory";
+import { Entity, Relation } from "@neo4j/graphrag-memory";
 import { Neo4jMemory } from './neo4j-memory.js'
 
 // Load environment variables from .env file
@@ -21,11 +19,11 @@ const __dirname = path.dirname(__filename);
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  'neo4j+s://9df4bc56.databases.neo4j.io',
-  Neo4jAuth.basic('neo4j', 'jrOZqvLnVYUQ7OF0JdmuOo4PqSlbGfvD50HXVXZrmEE')
+  'neo4j+s://x.databases.neo4j.io',
+  Neo4jAuth.basic('neo4j', 'pwd')
 )
 
-const knowledgeGraphMemory:KnowledgeGraphMemory = new Neo4jMemory(neo4jDriver);
+const knowledgeGraphMemory:Neo4jMemory = new Neo4jMemory(neo4jDriver);
 
 // The server instance and tools exposed to Claude
 const server = new Server({
@@ -159,25 +157,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: "search_nodes_by_type",
-        description: "Find nodes of a specific type in the knowledge graph (Entity, Event, Concept, ScientificInsight, Law, or Thought)",
-        inputSchema: {
-          type: "object",
-          properties: {
-            nodeType: {
-              type: "string",
-              description: "The type of nodes to find",
-              enum: ["Entity", "Event", "Concept", "ScientificInsight", "Law", "Thought"]
-            },
-            query: {
-              type: "string",
-              description: "Optional search query to filter nodes of the specified type"
-            }
-          },
-          required: ["nodeType"],
-        },
-      },
-      {
         name: "create_thoughts",
         description: "Create Thought nodes representing an analysis, interpretation, or insight about the conversation. Use this tool to document your reasoning, connect ideas across different nodes, or capture important observations that should be preserved. Thoughts should be linked to relevant entities, concepts, events, scientific insights, laws, and other thoughts, building a network of connected insights. Each thought should have clear content and, when possible, include confidence level.",
         inputSchema: {
@@ -270,26 +249,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ["nodeName"],
-        },
-      },
-      {
-        name: "trace_evidence",
-        description: "Trace evidence chains that support or contradict a node in the knowledge graph. This tool follows specific relationship types (like SUPPORTS, CONTRADICTS) to identify the network of evidence for or against laws, scientific insights, or concepts. Useful for validating claims and understanding the foundation of knowledge.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            targetNodeName: { 
-              type: "string", 
-              description: "Name of the target node to find evidence for/against" 
-            },
-            relationshipType: { 
-              type: "string", 
-              description: "Type of relationship to trace (default: SUPPORTS)",
-              enum: ["SUPPORTS", "CONTRADICTS", "VALIDATES", "CHALLENGES", "REFINES"],
-              default: "SUPPORTS"
-            }
-          },
-          required: ["targetNodeName"],
         },
       }
     ],
