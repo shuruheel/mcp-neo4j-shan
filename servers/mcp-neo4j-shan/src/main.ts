@@ -11,7 +11,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { Entity, Relation } from "@neo4j/graphrag-memory";
-import { Neo4jMemory } from './neo4j-memory.js'
+import { Neo4jCreator } from './node-creator.js'
+import { Neo4jRetriever } from './node-retriever.js'
+import { NarrativeGenerator, NarrativeOptions } from './narrative-generator.js'
 
 // Load environment variables from .env file
 const __filename = fileURLToPath(import.meta.url);
@@ -20,11 +22,13 @@ const __dirname = path.dirname(__filename);
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  'neo4j+s://x.databases.neo4j.io',
-  Neo4jAuth.basic('neo4j', 'pwd')
+  'neo4j+s://9df4bc56.databases.neo4j.io',
+  Neo4jAuth.basic('neo4j', 'jrOZqvLnVYUQ7OF0JdmuOo4PqSlbGfvD50HXVXZrmEE')
 )
 
-const knowledgeGraphMemory:Neo4jMemory = new Neo4jMemory(neo4jDriver);
+// Create instances for node creation and retrieval
+const nodeCreator = new Neo4jCreator(neo4jDriver);
+const nodeRetriever = new Neo4jRetriever(neo4jDriver);
 
 // The server instance and tools exposed to Claude
 const server = new Server({
@@ -95,7 +99,7 @@ The knowledge graph is designed to build connections between ideas over time. Yo
 
 // Define tool-specific prompts
 const TOOL_PROMPTS = {
-  "explore_context": `You are a knowledge graph exploration assistant with cognitive neuroscience capabilities. When presenting exploration results:
+  "explore_weighted_context": `You are a knowledge graph exploration assistant with cognitive neuroscience capabilities. When presenting exploration results:
   1. Organize information clearly by node types (Entity, Event, Concept, ScientificInsight, Law, Thought)
   2. Format relationships with direction indicators (→) showing the connection between nodes
   3. Highlight the most important connections based on relationship types and context
@@ -173,6 +177,7 @@ const TOOL_PROMPTS = {
   3. Always include a detailed context field (30-50 words) explaining how and why the nodes are related
   4. Include confidence scores (0.0-1.0) when appropriate
   5. Add citation sources when available
+  6. Provide a weight (0.0-1.0) indicating the relationship's strength or importance
   
   Required fields for each relation:
   - from: The name of the source node
@@ -181,13 +186,19 @@ const TOOL_PROMPTS = {
   
   Optional but highly recommended fields:
   - context: Explanation of how and why these nodes are related (30-50 words)
-  - confidenceScore: Number between 0.0-1.0
+  - confidenceScore: Number between 0.0-1.0 indicating certainty of the relationship
+  - weight: Number between 0.0-1.0 indicating the strength/importance of the relationship
   - sources: Array of citation sources
+  
+  Guidelines for weights:
+  - Higher weights (0.8-1.0): Direct, strong, and crucial relationships (e.g., defining characteristics, direct causation)
+  - Medium weights (0.4-0.7): Important but not defining relationships (e.g., significant influences, correlations)
+  - Lower weights (0.1-0.3): Minor or tangential relationships (e.g., weak associations, historical connections)
   
   Example relation types between different node types:
   - Entity → Concept: ADVOCATES, SUPPORTS, UNDERSTANDS
   - Entity → Event: PARTICIPATED_IN, ORGANIZED, WITNESSED
-  - Concept → Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS
+  - Concept → Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS, IS_PREREQUISITE_FOR, IS_A, PART_OF
   - Event → ScientificInsight: LED_TO, DISPROVED, REINFORCED
   - ScientificInsight → Law: SUPPORTS, CHALLENGES, REFINES`,
 
@@ -253,8 +264,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
-        name: "explore_context",
-        description: "Whenever the user shows interest in exploring a topic, use this tool FIRST to explore the complete context around relevant Entity, Event, Concept, Scientific Insight, or Law nodes in the knowledge graph. This tool reveals the neighborhood of relationships and connected nodes surrounding the specified node, providing deeper contextual understanding with enhanced information:\n\n- For Entity nodes: Includes biographical information and key contributions when available\n- For Concept nodes: Includes definitions, examples, and multiple perspectives on the concept\n- For relationships: Includes explanatory context about how and why nodes are related\n\nUse this tool for all node types extracted from the user's query to build a comprehensive picture with rich contextual details.",
+        name: "explore_weighted_context",
+        description: "Explore the knowledge graph using relationship weights to prioritize the most important connections. This tool reveals the most significant relationships first, providing a focused view of the knowledge network around a node. Particularly useful for filtering out less relevant connections when exploring densely connected nodes or when looking for the strongest relationships in a complex network.",
         inputSchema: {
           type: "object",
           properties: {
@@ -266,6 +277,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "number", 
               description: "Maximum number of relationship hops to include (default: 2)",
               default: 2 
+            },
+            minWeight: {
+              type: "number",
+              description: "Minimum relationship weight to include (0.0-1.0). Higher values filter out weaker connections. (default: 0.3)",
+              default: 0.3
             }
           },
           required: ["nodeName"],
@@ -478,6 +494,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   relationType: { type: "string", description: "The type of the relation" },
                   context: { type: "string", description: "Brief explanation (30-50 words) of how and why these nodes are related" },
                   confidenceScore: { type: "number", description: "Confidence score for this relationship (0.0-1.0)" },
+                  weight: { type: "number", description: "Weight indicating the relationship's strength/importance (0.0-1.0)" },
                   sources: { 
                     type: "array", 
                     items: { type: "string" },
@@ -586,13 +603,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   
   switch (name) {
     case "create_nodes":
-      result = await knowledgeGraphMemory.createEntities(args.nodes as Entity[]);
+      result = await nodeCreator.createEntities(args.nodes as Entity[]);
       return { 
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
       };
       
     case "create_relations":
-      result = await knowledgeGraphMemory.createRelations(args.relations as Relation[]);
+      result = await nodeCreator.createRelations(args.relations as Relation[]);
       return { 
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
       };
@@ -602,7 +619,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const searchQuery = args.query as string;
       
       // Use the robust search method that combines fuzzy matching with fallbacks
-      result = await (knowledgeGraphMemory as Neo4jMemory).robustSearch(searchQuery);
+      result = await nodeRetriever.robustSearch(searchQuery);
       return { 
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
       };
@@ -613,7 +630,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         args.thoughtContent = args.content;
       }
       
-      result = await (knowledgeGraphMemory as Neo4jMemory).createThought(args as { 
+      result = await nodeCreator.createThought(args as { 
         entityName?: string; 
         title: string;
         thoughtContent: string;
@@ -645,7 +662,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Log the input parameters for debugging
         console.error(`Exploring context for node: ${args.nodeName}, maxDepth: ${args.maxDepth || 2}`);
         
-        result = await (knowledgeGraphMemory as Neo4jMemory).exploreContext(
+        result = await nodeRetriever.exploreContext(
           args.nodeName as string,
           args.maxDepth as number || 2
         );
@@ -700,6 +717,126 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }, null, 2) }]
         };
       }
+            
+    case "explore_weighted_context":
+      try {
+        // Log the input parameters for debugging
+        console.error(`Exploring weighted context for node: ${args.nodeName}, maxDepth: ${args.maxDepth || 2}, minWeight: ${args.minWeight || 0.3}`);
+        
+        result = await nodeRetriever.exploreContextWeighted(
+          args.nodeName as string,
+          args.maxDepth as number || 2,
+          args.minWeight as number || 0.3
+        );
+        
+        // Ensure result has the expected structure even if null/undefined is returned
+        if (!result) {
+          console.error(`exploreContextWeighted returned undefined for node: ${args.nodeName}`);
+          result = { entities: [], relations: [] };
+        }
+        
+        // Basic validation and cleanup to ensure we always return valid arrays
+        const cleanResult = {
+          entities: Array.isArray(result.entities) ? result.entities : [],
+          relations: Array.isArray(result.relations) ? result.relations : []
+        };
+
+        // Validate each entity to ensure they have at least required fields
+        cleanResult.entities = cleanResult.entities.filter(entity => {
+          if (!entity || typeof entity !== 'object') return false;
+          if (!entity.name) {
+            console.error(`Found entity without name, filtering out`);
+            return false;
+          }
+          return true;
+        });
+
+        // Validate each relation to ensure they have required fields
+        cleanResult.relations = cleanResult.relations.filter(relation => {
+          if (!relation || typeof relation !== 'object') return false;
+          if (!relation.from || !relation.to || !relation.relationType) {
+            console.error(`Found relation missing required fields, filtering out`);
+            return false;
+          }
+          return true;
+        });
+
+        console.error(`Returning ${cleanResult.entities.length} entities and ${cleanResult.relations.length} weighted relations`);
+
+        // Return properly formatted response with content type explicitly set to "text"
+        return { 
+          content: [{ type: "text", text: JSON.stringify(cleanResult, null, 2) }]
+        };
+      } catch (error) {
+        console.error(`Error in explore_weighted_context tool: ${error}`);
+        
+        // Return a graceful error response with properly formatted content
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            error: `Error exploring weighted context for node "${args.nodeName}": ${error.message || error}`,
+            entities: [],
+            relations: []
+          }, null, 2) }]
+        };
+      }
+            
+    case "generate_narrative":
+      try {
+        const { topic, length, style } = args;
+        
+        // First get the knowledge graph data related to the topic
+        const topicGraph = await nodeRetriever.robustSearch(topic as string);
+        
+        // Convert length and style to appropriate options
+        const maxLength = length === 'short' ? 500 : length === 'medium' ? 1500 : 3000;
+        const format = style === 'informative' ? 'detailed' : 
+                       style === 'engaging' ? 'storytelling' : 'educational';
+        
+        // Create a narrative generator instance
+        const narrativeGenerator = new NarrativeGenerator();
+        
+        // Generate the narrative
+        const narrativeOptions: NarrativeOptions = { 
+          focusEntity: topic as string,
+          maxLength,
+          format: format as any,
+          includeEmotionalDimensions: true
+        };
+        
+        const narrative = narrativeGenerator.generateNarrative(topicGraph, narrativeOptions);
+        
+        return { 
+          content: [{ type: "text", text: narrative }]
+        };
+      } catch (error) {
+        console.error(`Error in generate_narrative tool: ${error}`);
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            error: `Error generating narrative: ${error.message || error}`,
+            topic: args.topic,
+            length: args.length,
+            style: args.style
+          }, null, 2) }]
+        };
+      }
+            
+    case "create_thought":
+      console.error(`Creating thought with title: ${args.title}, content: ${args.thoughtContent}`);
+      
+      result = await nodeCreator.createThought(args as { 
+        entityName?: string; 
+        title: string;
+        thoughtContent: string;
+        entities?: string[];
+        concepts?: string[];
+        events?: string[];
+        scientificInsights?: string[];
+        laws?: string[];
+        thoughts?: string[];
+      });
+      return { 
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
             
     default:
       throw new Error(`Unknown tool: ${name}`);
