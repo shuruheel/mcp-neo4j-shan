@@ -1663,53 +1663,146 @@ export class Neo4jMemory implements CustomKnowledgeGraphMemory {
       
       // Convert to entities and relations format for return
       const entities: Entity[] = allNodes.map(node => {
-        // Create a basic entity with required properties
+        // Make sure properties exist
+        const nodeProps = node.properties || {};
+        
+        // Create a basic entity with required properties, with fallbacks for missing values
         const entity: Entity = {
-          name: node.properties.name,
-          entityType: node.properties.nodeType || 'Entity',
-          observations: node.properties.observations || []
+          name: nodeProps.name || 'Unnamed Node',
+          entityType: nodeProps.nodeType || 'Entity',
+          observations: nodeProps.observations || []
         };
         
-        // Add additional fields based on entity type
-        if (node.properties.nodeType === 'Entity') {
-          (entity as any).description = node.properties.description;
-          (entity as any).biography = node.properties.biography;
-          (entity as any).keyContributions = node.properties.keyContributions;
-          (entity as any).confidence = node.properties.confidence;
+        // Safely add additional fields based on entity type
+        if (nodeProps.nodeType === 'Entity') {
+          if (nodeProps.description) (entity as any).description = nodeProps.description;
+          if (nodeProps.biography) (entity as any).biography = nodeProps.biography;
+          if (nodeProps.keyContributions) (entity as any).keyContributions = nodeProps.keyContributions;
+          if (nodeProps.confidence !== undefined) (entity as any).confidence = nodeProps.confidence;
+          
+          // Add cognitive enhancement fields if they exist
+          if (nodeProps.emotionalValence !== undefined) (entity as any).emotionalValence = nodeProps.emotionalValence;
+          if (nodeProps.emotionalArousal !== undefined) (entity as any).emotionalArousal = nodeProps.emotionalArousal;
         } 
-        else if (node.properties.nodeType === 'Concept') {
-          (entity as any).definition = node.properties.definition;
-          (entity as any).examples = node.properties.examples;
-          (entity as any).domain = node.properties.domain;
-          (entity as any).perspectives = node.properties.perspectives;
-          (entity as any).historicalDevelopment = node.properties.historicalDevelopment;
+        else if (nodeProps.nodeType === 'Concept') {
+          if (nodeProps.definition) (entity as any).definition = nodeProps.definition;
+          if (nodeProps.examples) (entity as any).examples = nodeProps.examples;
+          if (nodeProps.domain) (entity as any).domain = nodeProps.domain;
+          if (nodeProps.perspectives) (entity as any).perspectives = nodeProps.perspectives;
+          if (nodeProps.historicalDevelopment) (entity as any).historicalDevelopment = nodeProps.historicalDevelopment;
+          
+          // Add cognitive enhancement fields if they exist
+          if (nodeProps.emotionalValence !== undefined) (entity as any).emotionalValence = nodeProps.emotionalValence;
+          if (nodeProps.emotionalArousal !== undefined) (entity as any).emotionalArousal = nodeProps.emotionalArousal;
+          if (nodeProps.abstractionLevel !== undefined) (entity as any).abstractionLevel = nodeProps.abstractionLevel;
+          if (nodeProps.metaphoricalMappings) (entity as any).metaphoricalMappings = nodeProps.metaphoricalMappings;
+        }
+        else if (nodeProps.nodeType === 'Event') {
+          if (nodeProps.startDate) (entity as any).startDate = nodeProps.startDate;
+          if (nodeProps.endDate) (entity as any).endDate = nodeProps.endDate;
+          if (nodeProps.location) (entity as any).location = nodeProps.location;
+          if (nodeProps.participants) (entity as any).participants = nodeProps.participants;
+          if (nodeProps.outcome) (entity as any).outcome = nodeProps.outcome;
+          
+          // Add cognitive enhancement fields if they exist
+          if (nodeProps.emotionalValence !== undefined) (entity as any).emotionalValence = nodeProps.emotionalValence;
+          if (nodeProps.emotionalArousal !== undefined) (entity as any).emotionalArousal = nodeProps.emotionalArousal;
+          if (nodeProps.causalPredecessors) (entity as any).causalPredecessors = nodeProps.causalPredecessors;
+          if (nodeProps.causalSuccessors) (entity as any).causalSuccessors = nodeProps.causalSuccessors;
+        }
+        else if (nodeProps.nodeType === 'Thought') {
+          if (nodeProps.thoughtContent) (entity as any).thoughtContent = nodeProps.thoughtContent;
+          if (nodeProps.references) (entity as any).references = nodeProps.references;
+          if (nodeProps.confidence !== undefined) (entity as any).confidence = nodeProps.confidence;
+          
+          // Add cognitive enhancement fields if they exist
+          if (nodeProps.emotionalValence !== undefined) (entity as any).emotionalValence = nodeProps.emotionalValence;
+          if (nodeProps.emotionalArousal !== undefined) (entity as any).emotionalArousal = nodeProps.emotionalArousal;
+          if (nodeProps.evidentialBasis) (entity as any).evidentialBasis = nodeProps.evidentialBasis;
+          if (nodeProps.thoughtCounterarguments) (entity as any).thoughtCounterarguments = nodeProps.thoughtCounterarguments;
+          if (nodeProps.implications) (entity as any).implications = nodeProps.implications;
+          if (nodeProps.thoughtConfidenceScore !== undefined) (entity as any).thoughtConfidenceScore = nodeProps.thoughtConfidenceScore;
+        }
+        else if (nodeProps.nodeType === 'ScientificInsight') {
+          if (nodeProps.hypothesis) (entity as any).hypothesis = nodeProps.hypothesis;
+          if (nodeProps.evidence) (entity as any).evidence = nodeProps.evidence;
+          if (nodeProps.methodology) (entity as any).methodology = nodeProps.methodology;
+          if (nodeProps.confidence !== undefined) (entity as any).confidence = nodeProps.confidence;
+          
+          // Add cognitive enhancement fields if they exist
+          if (nodeProps.emotionalValence !== undefined) (entity as any).emotionalValence = nodeProps.emotionalValence;
+          if (nodeProps.emotionalArousal !== undefined) (entity as any).emotionalArousal = nodeProps.emotionalArousal;
+          if (nodeProps.evidenceStrength !== undefined) (entity as any).evidenceStrength = nodeProps.evidenceStrength;
+          if (nodeProps.scientificCounterarguments) (entity as any).scientificCounterarguments = nodeProps.scientificCounterarguments;
+          if (nodeProps.applicationDomains) (entity as any).applicationDomains = nodeProps.applicationDomains;
+          if (nodeProps.replicationStatus) (entity as any).replicationStatus = nodeProps.replicationStatus;
+          if (nodeProps.surpriseValue !== undefined) (entity as any).surpriseValue = nodeProps.surpriseValue;
+        }
+        else if (nodeProps.nodeType === 'Law') {
+          if (nodeProps.statement) (entity as any).statement = nodeProps.statement;
+          if (nodeProps.conditions) (entity as any).conditions = nodeProps.conditions;
+          if (nodeProps.exceptions) (entity as any).exceptions = nodeProps.exceptions;
+          if (nodeProps.domain) (entity as any).domain = nodeProps.domain;
+          
+          // Add cognitive enhancement fields if they exist
+          if (nodeProps.emotionalValence !== undefined) (entity as any).emotionalValence = nodeProps.emotionalValence;
+          if (nodeProps.emotionalArousal !== undefined) (entity as any).emotionalArousal = nodeProps.emotionalArousal;
+          if (nodeProps.domainConstraints) (entity as any).domainConstraints = nodeProps.domainConstraints;
+          if (nodeProps.historicalPrecedents) (entity as any).historicalPrecedents = nodeProps.historicalPrecedents;
+          if (nodeProps.counterexamples) (entity as any).counterexamples = nodeProps.counterexamples;
+          if (nodeProps.formalRepresentation) (entity as any).formalRepresentation = nodeProps.formalRepresentation;
         }
         
         return entity;
       });
       
       const relations: Relation[] = uniqueRelationships.map(rel => {
+        // Make sure properties exist
+        const relProps = rel.properties || {};
+        
+        // Find start and end node names with fallbacks
+        let fromName = 'Unknown';
+        let toName = 'Unknown';
+        
+        try {
+          if (rel.startNodeElementId) {
+            const startNode = allNodes.find(n => n.elementId === rel.startNodeElementId);
+            if (startNode && startNode.properties && startNode.properties.name) {
+              fromName = startNode.properties.name;
+            }
+          } else if (rel.startNode && rel.startNode.properties && rel.startNode.properties.name) {
+            fromName = rel.startNode.properties.name;
+          }
+          
+          if (rel.endNodeElementId) {
+            const endNode = allNodes.find(n => n.elementId === rel.endNodeElementId);
+            if (endNode && endNode.properties && endNode.properties.name) {
+              toName = endNode.properties.name;
+            }
+          } else if (rel.endNode && rel.endNode.properties && rel.endNode.properties.name) {
+            toName = rel.endNode.properties.name;
+          }
+        } catch (e) {
+          console.error(`Error retrieving node names for relationship: ${e}`);
+        }
+        
         // Basic relation properties
         const relation: Relation = {
-          from: rel.startNodeElementId ? 
-            allNodes.find(n => n.elementId === rel.startNodeElementId)?.properties.name : 
-            rel.startNode.properties.name,
-          to: rel.endNodeElementId ? 
-            allNodes.find(n => n.elementId === rel.endNodeElementId)?.properties.name : 
-            rel.endNode.properties.name,
-          relationType: rel.type
+          from: fromName,
+          to: toName,
+          relationType: rel.type || 'RELATED_TO'
         };
         
         // Add enhanced relation properties if they exist
-        if (rel.properties) {
-          if (rel.properties.context) {
-            (relation as any).context = rel.properties.context;
+        if (relProps) {
+          if (relProps.context) {
+            (relation as any).context = relProps.context;
           }
-          if (rel.properties.confidenceScore) {
-            (relation as any).confidenceScore = rel.properties.confidenceScore;
+          if (relProps.confidenceScore !== undefined) {
+            (relation as any).confidenceScore = relProps.confidenceScore;
           }
-          if (rel.properties.sources) {
-            (relation as any).sources = rel.properties.sources;
+          if (relProps.sources) {
+            (relation as any).sources = relProps.sources;
           }
         }
         

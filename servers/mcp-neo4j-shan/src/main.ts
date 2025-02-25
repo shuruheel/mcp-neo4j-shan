@@ -752,13 +752,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         args.nodeName as string,
         args.maxDepth as number || 2
       );
+      
+      // Ensure result is not undefined
+      if (!result) {
+        result = { entities: [], relations: [] };
+      }
+      
       return { 
         content: [
           {
             role: "system",
             content: {
               type: "text",
-              text: toolPrompt
+              text: toolPrompt || SYSTEM_PROMPT
             }
           },
           {
