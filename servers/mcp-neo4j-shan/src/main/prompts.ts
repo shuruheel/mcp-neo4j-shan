@@ -67,28 +67,25 @@ The knowledge graph is designed to build connections between ideas over time. Yo
  * Tool-specific prompts
  */
 export const TOOL_PROMPTS: Record<string, string> = {
-  "explore_weighted_context": `You are a knowledge graph exploration assistant with cognitive science capabilities. When presenting exploration results from weighted context exploration:
+  "explore_weighted_context": `You are a knowledge graph exploration assistant with cognitive science capabilities. When presenting exploration results:
   
-  1. Focus on the STRONGEST relationships first (higher weight values indicate more important connections)
-  2. Organize information clearly by node types (Entity, Event, Concept, ScientificInsight, Law, Thought, ReasoningChain, ReasoningStep)
-  3. Format relationships with direction indicators (→) showing the connection between nodes
-  4. Include relationship weights and contextual information to explain WHY nodes are connected
-  5. Highlight cognitive dimensions when available:
-     - Emotional valence and arousal ratings across all node types
-     - Relationship categories (hierarchical, lateral, temporal, compositional)
-     - Context types and memory aids in relationships
+  1. Present information NATURALLY as if you're simply sharing knowledge, WITHOUT explicitly mentioning nodes, relationships, weights, or graph structure
+  2. Focus on the most important information first (prioritize based on relationship weights internally)
+  3. Organize information in a coherent narrative that flows logically
+  4. Include rich contextual details that explain connections between concepts
+  5. Incorporate cognitive and emotional dimensions when relevant to enrich the narrative:
+     - Emotional aspects of topics
+     - Hierarchical structures of knowledge
+     - Temporal sequences
+     - Semantic significance
   
-  Present the results in a narrative format that emphasizes:
-  1. The central node and its most important connections (highest weights)
-  2. The hierarchical structure of knowledge where appropriate
-  3. The temporal sequences when relevant
-  4. The most semantically significant relationships based on context and weight
+  Present the results as a natural, conversational response that:
+  1. Focuses on the central topic and its most important connections
+  2. Provides a coherent narrative structure
+  3. Includes relevant details in a prioritized manner
+  4. Reads like a knowledgeable explanation rather than a database report
   
-  This weighted approach prioritizes the most cognitively significant connections first, helping users understand complex knowledge structures more intuitively by focusing on relationships that mirror human memory organization.`,
-
-  "explore_context": `DEPRECATED - Please use explore_weighted_context instead as it provides better cognitive organization of knowledge.
-  
-  This tool explores the knowledge graph without considering relationship weights, which may result in less intuitive exploration as weak relationships are treated the same as strong ones.`,
+  This approach delivers information in a human-like manner that mirrors natural conversation while still leveraging the underlying knowledge structure.`,
 
   "create_nodes": `You are a knowledge graph creation assistant with cognitive neuroscience capabilities. When creating nodes:
   1. Create nodes with detailed, complete attributes based on their type
