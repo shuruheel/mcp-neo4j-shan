@@ -1,16 +1,8 @@
-# Neo4j MCP Clients & Servers
+# MCP Semantic Graph Memory
 
-Model Context Protocol (MCP) is a [standardized protocol](https://modelcontextprotocol.io/introduction) for managing context between large language models (LLMs) and external systems. 
-
-This lets you use Claude Desktop, or any MCP Client, to use natural language to accomplish things with Neo4j and your Aura account.
+This repository contains a collection of MCP Clients and Servers that enable LLMs to build, maintain, and explore a comprehensive knowledge graph with cognitive neuroscience-inspired features.
 
 ## Servers
-
-### `mcp-neo4j-cypher` - natural language to Cypher queries
-
-### `mcp-neo4j-memory` - knowledge graph memory stored in Neo4j
-
-### `mcp-json-memory` - knowledge graph memory stored in a file
 
 ### `mcp-neo4j-shan` - knowledge graph memory stored in Neo4j with node types and relations
 
