@@ -44,9 +44,9 @@ const server = new Server({
 const SYSTEM_PROMPT = `You are interacting with a Neo4j knowledge graph that stores interconnected information about entities, events, concepts, scientific insights, laws, and thoughts. This knowledge graph helps maintain context between conversations and builds a rich network of related information over time.
 
 TOOL USAGE WORKFLOW:
-1. ALWAYS start by using the \`explore_context\` tool to check if relevant nodes already exist in the knowledge graph when the user asks about a topic. This tool reveals the neighborhood around a node including all connected relationships and nodes, providing rich contextual information.
+1. ALWAYS start by using the \`explore_weighted_context\` tool to check if relevant nodes already exist in the knowledge graph when the user asks about a topic. This tool reveals the neighborhood around a node with intelligent prioritization of the most important relationships first, providing rich contextual information organized by relationship weights.
 
-2. If \`explore_context\` doesn't return any nodes OR if the user explicitly asks to update the knowledge graph, use the \`create_nodes\` tool to add new information. Extract ALL relevant node types from the conversation:
+2. If \`explore_weighted_context\` doesn't return any nodes OR if the user explicitly asks to update the knowledge graph, use the \`create_nodes\` tool to add new information. Extract ALL relevant node types from the conversation:
 
    NODE TYPES AND SCHEMAS:
    - Entity: People, organizations, products, physical objects
@@ -79,14 +79,18 @@ TOOL USAGE WORKFLOW:
    - Always include a detailed context field (30-50 words) explaining how and why the nodes are related
    - Include confidence scores (0.0-1.0) when appropriate
    - Add citation sources when available for academic or factual claims
+   - Always provide weight values (0.0-1.0) indicating how important the relationship is
+   - Set appropriate relationshipCategory values (hierarchical, lateral, temporal, compositional)
 
 4. Only use the \`create_thoughts\` tool when specifically asked to add your thoughts to the knowledge graph. These represent your analysis or insights about the conversation and should be connected to relevant nodes.
 
-5. When helping users explore existing knowledge, use appropriate search and traversal tools:
-   - \`search_nodes\` for general searches across all node types
-   - \`search_nodes_by_type\` for targeted searches within a specific node type
-   - \`find_concept_connections\` to discover paths between nodes
-   - \`trace_evidence\` to examine the evidence supporting a claim
+5. For exploring temporal information, use the \`get_temporal_sequence\` tool to visualize how events and concepts unfold over time.
+
+COGNITIVE ORGANIZATION GUIDELINES:
+- Categorize relationships appropriately (hierarchical, lateral, temporal, compositional)
+- Use weights to indicate importance (higher weights = more important connections)
+- Include memory aids and context information to enhance recall
+- Consider emotional dimensions when representing knowledge
 
 QUALITY GUIDELINES:
 - Create concise, specific, and uniquely identifiable node names
@@ -99,25 +103,28 @@ The knowledge graph is designed to build connections between ideas over time. Yo
 
 // Define tool-specific prompts
 const TOOL_PROMPTS = {
-  "explore_weighted_context": `You are a knowledge graph exploration assistant with cognitive neuroscience capabilities. When presenting exploration results:
-  1. Organize information clearly by node types (Entity, Event, Concept, ScientificInsight, Law, Thought)
-  2. Format relationships with direction indicators (→) showing the connection between nodes
-  3. Highlight the most important connections based on relationship types and context
-  4. Summarize key insights from the graph structure
-  5. Present node properties according to their type (e.g., for Entities: description, biography; for Events: dates, locations)
-  6. Emphasize cognitive dimensions when available:
+  "explore_weighted_context": `You are a knowledge graph exploration assistant with cognitive science capabilities. When presenting exploration results from weighted context exploration:
+  
+  1. Focus on the STRONGEST relationships first (higher weight values indicate more important connections)
+  2. Organize information clearly by node types (Entity, Event, Concept, ScientificInsight, Law, Thought)
+  3. Format relationships with direction indicators (→) showing the connection between nodes
+  4. Include relationship weights and contextual information to explain WHY nodes are connected
+  5. Highlight cognitive dimensions when available:
      - Emotional valence and arousal ratings across all node types
-     - Causal relationships for Events (predecessors/successors)
-     - Abstraction level and metaphorical mappings for Concepts
-     - Evidence strength and surprise value for ScientificInsights
-     - Domain constraints and counterexamples for Laws
-     - Evidential basis and implication chains for Thoughts
+     - Relationship categories (hierarchical, lateral, temporal, compositional)
+     - Context types and memory aids in relationships
   
-  The input parameters for this tool are:
-  - nodeName (required): The exact name of the node to explore
-  - maxDepth (optional, default: 2): Maximum number of relationship hops to include
+  Present the results in a narrative format that emphasizes:
+  1. The central node and its most important connections (highest weights)
+  2. The hierarchical structure of knowledge where appropriate
+  3. The temporal sequences when relevant
+  4. The most semantically significant relationships based on context and weight
   
-  When cognitive dimensions are present, analyze their implications for the node's significance, memorability, and contextual importance. Explain how these dimensions enhance understanding of the node and its connections.`,
+  This weighted approach prioritizes the most cognitively significant connections first, helping users understand complex knowledge structures more intuitively by focusing on relationships that mirror human memory organization.`,
+
+  "explore_context": `DEPRECATED - Please use explore_weighted_context instead as it provides better cognitive organization of knowledge.
+  
+  This tool explores the knowledge graph without considering relationship weights, which may result in less intuitive exploration as weak relationships are treated the same as strong ones.`,
 
   "create_nodes": `You are a knowledge graph creation assistant with cognitive neuroscience capabilities. When creating nodes:
   1. Create nodes with detailed, complete attributes based on their type
@@ -302,7 +309,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "explore_weighted_context",
-        description: "Explore the knowledge graph using relationship weights to prioritize the most important connections. This tool reveals the most significant relationships first, providing a focused view of the knowledge network around a node. Particularly useful for filtering out less relevant connections when exploring densely connected nodes or when looking for the strongest relationships in a complex network.",
+        description: "The PRIMARY tool for exploring the knowledge graph context around a node. Uses relationship weights to prioritize the most important connections, providing an intelligent view focused on the strongest and most relevant relationships first. Particularly useful for understanding complex networks by highlighting significant connections based on their weights.",
         inputSchema: {
           type: "object",
           properties: {
@@ -325,8 +332,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "explore_context",
+        description: "DEPRECATED - Use explore_weighted_context instead. This tool will be removed in a future version. Explores the knowledge graph context around a node without considering relationship weights.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeName: { 
+              type: "string", 
+              description: "Name of the node to explore the context around" 
+            },
+            maxDepth: { 
+              type: "number", 
+              description: "Maximum number of relationship hops to include (default: 2)",
+              default: 2 
+            }
+          },
+          required: ["nodeName"],
+        },
+      },
+      {
         name: "create_nodes",
-        description: "IF the explore_context tool does not return any nodes OR the user specifically asks for the knowledge graph to be updated, create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific cognitive attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
+        description: "WHEN the user specifically asks for the knowledge graph to be updated, create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific cognitive attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
         inputSchema: {
           type: "object",
           properties: {
@@ -805,6 +831,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Log the input parameters for debugging
         console.error(`Exploring weighted context for node: ${args.nodeName}, maxDepth: ${args.maxDepth || 2}, minWeight: ${args.minWeight || 0.3}`);
         
+        // Execute the weighted context exploration - this is the primary context exploration tool
         result = await nodeRetriever.exploreContextWeighted(
           args.nodeName as string,
           args.maxDepth as number || 2,
@@ -822,6 +849,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           entities: Array.isArray(result.entities) ? result.entities : [],
           relations: Array.isArray(result.relations) ? result.relations : []
         };
+
+        // Sort relations by weight in descending order to prioritize strongest connections
+        if (cleanResult.relations.length > 0) {
+          cleanResult.relations.sort((a, b) => {
+            const weightA = (a as any).weight || 0.5;
+            const weightB = (b as any).weight || 0.5;
+            return weightB - weightA; // Descending order
+          });
+        }
 
         // Validate each entity to ensure they have at least required fields
         cleanResult.entities = cleanResult.entities.filter(entity => {
