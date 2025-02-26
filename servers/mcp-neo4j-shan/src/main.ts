@@ -724,7 +724,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "create_reasoning_chain",
         description: "Create a new reasoning chain with multiple reasoning steps that represent a chain of logical reasoning. This connects a thought to its underlying logical structure.",
-        parameters: {
+        inputSchema: {
+          type: "object",
           properties: {
             thoughtName: {
               type: "string",
@@ -835,62 +836,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ["chainName", "description", "conclusion", "methodology", "confidenceScore", "steps"]
-        },
-        requestHandler: async (params) => {
-          try {
-            console.error(`Creating reasoning chain: ${params.chainName}`);
-            
-            // Create the reasoning chain
-            const chain = await nodeCreator.createReasoningChain({
-              name: params.chainName,
-              description: params.description,
-              conclusion: params.conclusion,
-              confidenceScore: params.confidenceScore,
-              sourceThought: params.thoughtName,
-              creator: "System",
-              methodology: params.methodology,
-              domain: params.domain,
-              tags: [],
-              alternativeConclusionsConsidered: params.alternativeConclusionsConsidered
-            });
-            
-            // Create each reasoning step
-            const steps = [];
-            for (const step of params.steps) {
-              const createdStep = await nodeCreator.createReasoningStep({
-                chainName: params.chainName,
-                name: step.name,
-                content: step.content,
-                stepNumber: step.stepNumber,
-                stepType: step.stepType,
-                evidenceType: step.evidenceType,
-                supportingReferences: step.supportingReferences,
-                confidence: step.confidence,
-                alternatives: step.alternatives,
-                counterarguments: step.counterarguments,
-                assumptions: step.assumptions,
-                previousSteps: step.previousSteps
-              });
-              steps.push(createdStep);
-            }
-            
-            return {
-              content: {
-                message: `Successfully created reasoning chain "${params.chainName}" with ${steps.length} steps`,
-                chain: chain,
-                steps: steps
-              }
-            };
-          } catch (error) {
-            console.error("Error creating reasoning chain:", error);
-            return { error: error.message };
-          }
         }
       },
       {
         name: "get_reasoning_chain",
         description: "Retrieve a reasoning chain and all its steps by name.",
-        parameters: {
+        inputSchema: {
+          type: "object",
           properties: {
             chainName: {
               type: "string",
@@ -898,43 +850,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ["chainName"]
-        },
-        requestHandler: async (params) => {
-          try {
-            console.error(`Retrieving reasoning chain: ${params.chainName}`);
-            
-            // Get the reasoning chain and its steps
-            const result = await nodeRetriever.getReasoningChain(params.chainName);
-            
-            // Generate a narrative about the reasoning chain
-            const narrativeOptions: NarrativeOptions = {
-              detailLevel: 'high',
-              includeIntroduction: true,
-              includeSummary: true
-            };
-            
-            const narrative = NarrativeGenerator.generateReasoningChainNarrative(
-              result.chain,
-              result.steps,
-              narrativeOptions
-            );
-            
-            return {
-              content: {
-                message: `Retrieved reasoning chain "${params.chainName}" with ${result.steps.length} steps`,
-                chain: result.chain,
-                steps: result.steps,
-                narrative: narrative
-              }
-            };
-          } catch (error) {
-            console.error("Error retrieving reasoning chain:", error);
-            return { error: error.message };
-          }
         }
       }
     ],
-}});
+  }
+});
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
@@ -1214,6 +1134,186 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{ type: "text", text: JSON.stringify({
             error: `Error getting temporal sequence: ${error.message || error}`,
             nodeName: args.nodeName
+          }, null, 2) }]
+        };
+      }
+            
+    case "create_reasoning_chain":
+      try {
+        console.error(`Creating reasoning chain: ${args.chainName}`);
+        
+        // Validate required arguments
+        if (!args.chainName || !args.description || !args.conclusion || !args.methodology || args.confidenceScore === undefined || !args.steps || !Array.isArray(args.steps) || args.steps.length === 0) {
+          const missingFields = [];
+          if (!args.chainName) missingFields.push('chainName');
+          if (!args.description) missingFields.push('description');
+          if (!args.conclusion) missingFields.push('conclusion');
+          if (!args.methodology) missingFields.push('methodology');
+          if (args.confidenceScore === undefined) missingFields.push('confidenceScore');
+          if (!args.steps || !Array.isArray(args.steps) || args.steps.length === 0) missingFields.push('steps (must be non-empty array)');
+          
+          const errorMsg = `Missing required fields for reasoning chain: ${missingFields.join(', ')}`;
+          console.error(errorMsg);
+          return { 
+            content: [{ type: "text", text: JSON.stringify({
+              error: errorMsg,
+              received: {
+                hasChainName: Boolean(args.chainName),
+                hasDescription: Boolean(args.description),
+                hasConclusion: Boolean(args.conclusion),
+                hasMethodology: Boolean(args.methodology),
+                hasConfidenceScore: args.confidenceScore !== undefined,
+                hasSteps: Boolean(args.steps && Array.isArray(args.steps) && args.steps.length > 0),
+              }
+            }, null, 2) }]
+          };
+        }
+        
+        // Create the reasoning chain
+        const chain = await nodeCreator.createReasoningChain({
+          name: args.chainName as string,
+          description: args.description as string,
+          conclusion: args.conclusion as string,
+          confidenceScore: args.confidenceScore as number,
+          sourceThought: args.thoughtName as string | undefined,
+          creator: "System",
+          methodology: args.methodology as 'deductive' | 'inductive' | 'abductive' | 'analogical' | 'mixed',
+          domain: args.domain as string | undefined,
+          tags: args.tags as string[] | undefined || [],
+          alternativeConclusionsConsidered: args.alternativeConclusionsConsidered as string[] | undefined
+        });
+        
+        // Validate steps before creating them
+        const validSteps = (args.steps as any[]).filter(step => {
+          if (!step.name || !step.content || step.stepNumber === undefined || !step.stepType || step.confidence === undefined) {
+            const missingStepFields = [];
+            if (!step.name) missingStepFields.push('name');
+            if (!step.content) missingStepFields.push('content');
+            if (step.stepNumber === undefined) missingStepFields.push('stepNumber');
+            if (!step.stepType) missingStepFields.push('stepType');
+            if (step.confidence === undefined) missingStepFields.push('confidence');
+            
+            console.error(`Skipping invalid step: missing fields ${missingStepFields.join(', ')}`);
+            return false;
+          }
+          return true;
+        });
+        
+        if (validSteps.length === 0) {
+          console.error("No valid steps found in the provided data");
+          return { 
+            content: [{ type: "text", text: JSON.stringify({
+              warning: "Chain created but no valid steps found to add",
+              chain: chain
+            }, null, 2) }]
+          };
+        }
+        
+        // Create each reasoning step
+        const steps = [];
+        const stepErrors = [];
+        
+        for (const step of validSteps) {
+          try {
+            const createdStep = await nodeCreator.createReasoningStep({
+              chainName: args.chainName as string,
+              name: step.name as string,
+              content: step.content as string,
+              stepNumber: step.stepNumber as number,
+              stepType: step.stepType as 'premise' | 'inference' | 'evidence' | 'counterargument' | 'rebuttal' | 'conclusion',
+              evidenceType: step.evidenceType as 'observation' | 'fact' | 'assumption' | 'inference' | 'expert_opinion' | 'statistical_data' | undefined,
+              supportingReferences: step.supportingReferences as string[] | undefined,
+              confidence: step.confidence as number,
+              alternatives: step.alternatives as string[] | undefined,
+              counterarguments: step.counterarguments as string[] | undefined,
+              assumptions: step.assumptions as string[] | undefined,
+              previousSteps: step.previousSteps as string[] | undefined
+            });
+            steps.push(createdStep);
+          } catch (stepError) {
+            console.error(`Error creating step ${step.name}:`, stepError);
+            stepErrors.push({
+              stepName: step.name,
+              error: stepError.message || String(stepError)
+            });
+          }
+        }
+        
+        // Return report including any errors
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            message: `Created reasoning chain "${args.chainName}" with ${steps.length} steps${stepErrors.length > 0 ? ` (${stepErrors.length} steps failed)` : ''}`,
+            chain: chain,
+            steps: steps,
+            errors: stepErrors.length > 0 ? stepErrors : undefined
+          }, null, 2) }]
+        };
+      } catch (error) {
+        console.error(`Error creating reasoning chain:`, error);
+        // Provide more detailed error information
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            error: `Error creating reasoning chain: ${error.message || error}`,
+            location: "chain creation",
+            chainName: args.chainName,
+            suggestion: "Check that all required fields are provided and that there are no duplicate node names"
+          }, null, 2) }]
+        };
+      }
+            
+    case "get_reasoning_chain":
+      try {
+        console.error(`Retrieving reasoning chain: ${args.chainName as string}`);
+        
+        // Validate the chain name parameter
+        if (!args.chainName) {
+          return { 
+            content: [{ type: "text", text: JSON.stringify({
+              error: "Missing required parameter: chainName",
+            }, null, 2) }]
+          };
+        }
+        
+        // Get the reasoning chain and its steps
+        const result = await nodeRetriever.getReasoningChain(args.chainName as string);
+        
+        let narrative = "";
+        
+        // Generate a narrative about the reasoning chain
+        try {
+          const narrativeOptions: NarrativeOptions = {
+            detailLevel: 'high',
+            includeIntroduction: true,
+            includeSummary: true
+          };
+          
+          narrative = NarrativeGenerator.generateReasoningChainNarrative(
+            result.chain,
+            result.steps,
+            narrativeOptions
+          );
+          
+          console.error(`Successfully generated narrative for chain "${args.chainName}"`);
+        } catch (narrativeError) {
+          console.error(`Error generating narrative for chain "${args.chainName}":`, narrativeError);
+          narrative = `Error generating narrative: ${narrativeError.message}. The chain and steps data are still available.`;
+        }
+        
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            message: `Retrieved reasoning chain "${args.chainName}" with ${result.steps.length} steps`,
+            chain: result.chain,
+            steps: result.steps,
+            narrative: narrative
+          }, null, 2) }]
+        };
+      } catch (error) {
+        console.error(`Error retrieving reasoning chain:`, error);
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            error: `Error retrieving reasoning chain: ${error.message || error}`,
+            chainName: args.chainName,
+            suggestion: "Check that the reasoning chain exists and that the name is spelled correctly"
           }, null, 2) }]
         };
       }

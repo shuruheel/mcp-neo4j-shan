@@ -1139,7 +1139,21 @@ export class Neo4jRetriever {
     const session = this.neo4jDriver.session();
     
     try {
-      console.error(`Retrieving reasoning chain: ${chainName}`);
+      console.error(`Retrieving reasoning chain: "${chainName}"`);
+      
+      // First check if the chain exists
+      const chainExists = await session.executeRead(tx => tx.run(`
+        MATCH (chain:ReasoningChain:Memory {name: $chainName})
+        RETURN chain
+      `, { chainName }));
+      
+      if (chainExists.records.length === 0) {
+        const errorMsg = `ReasoningChain "${chainName}" not found`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+      
+      console.error(`Found reasoning chain: "${chainName}"`);
       
       // Get the chain and its steps in one query
       const result = await session.executeRead(tx => tx.run(`
@@ -1156,7 +1170,10 @@ export class Neo4jRetriever {
       `, { chainName }));
       
       if (result.records.length === 0) {
-        throw new Error(`ReasoningChain ${chainName} not found`);
+        // This shouldn't happen since we already checked the chain exists
+        const errorMsg = `Failed to retrieve reasoning chain "${chainName}" after confirming it exists`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
       }
       
       const record = result.records[0];
@@ -1173,10 +1190,44 @@ export class Neo4jRetriever {
         })
         .sort((a: any, b: any) => a.order - b.order); // Ensure steps are ordered
       
+      console.error(`Retrieved reasoning chain "${chainName}" with ${steps.length} steps`);
+      
+      // If there are steps with supportingReferences or previousSteps, get those details
+      const stepsWithReferences = steps.filter(s => 
+        (s.supportingReferences && s.supportingReferences.length > 0) || 
+        (s.previousSteps && s.previousSteps.length > 0)
+      );
+      
+      if (stepsWithReferences.length > 0) {
+        console.error(`Retrieving additional details for ${stepsWithReferences.length} steps with references`);
+        
+        // For each step with references, get the reference details
+        for (const step of stepsWithReferences) {
+          try {
+            const stepDetails = await this.getReasoningStepDetails(step.name);
+            // Merge in the details for supportingReferences and previousSteps
+            step.supportingReferencesDetails = stepDetails.supportingReferences;
+            step.previousStepsDetails = stepDetails.previousSteps;
+            step.nextStepsDetails = stepDetails.nextSteps;
+          } catch (detailError) {
+            console.error(`Error getting details for step ${step.name}:`, detailError);
+            // Don't fail the entire operation for one step's details
+          }
+        }
+      }
+      
       return { chain, steps };
     } catch (error) {
-      console.error(`Error retrieving reasoning chain:`, error);
-      throw error;
+      // Enhanced error message with more context
+      const errorMessage = `Error retrieving reasoning chain "${chainName}": ${error.message || error}`;
+      console.error(errorMessage);
+      
+      // If it's a Neo4j driver error, log more details
+      if (error.code) {
+        console.error(`Neo4j error code: ${error.code}`);
+      }
+      
+      throw new Error(errorMessage);
     } finally {
       await session.close();
     }

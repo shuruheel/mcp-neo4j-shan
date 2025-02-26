@@ -964,8 +964,34 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
     try {
       console.error(`Creating reasoning chain: ${reasoningChain.name}`);
       
-      // Create the ReasoningChain node
-      const result = await session.executeWrite(tx => tx.run(`
+      // First check if sourceThought exists if provided
+      if (reasoningChain.sourceThought) {
+        const thoughtCheck = await session.executeRead(tx => tx.run(`
+          MATCH (t:Memory:Thought {name: $thoughtName})
+          RETURN t
+        `, { thoughtName: reasoningChain.sourceThought }));
+        
+        if (thoughtCheck.records.length === 0) {
+          console.error(`Warning: Source thought "${reasoningChain.sourceThought}" not found. Will create the chain without connecting to a thought.`);
+        } else {
+          console.error(`Found source thought "${reasoningChain.sourceThought}" for the chain.`);
+        }
+      }
+      
+      // Log the parameters being sent to Neo4j
+      console.error('Creating reasoning chain with parameters:', {
+        name: reasoningChain.name,
+        description: reasoningChain.description ? reasoningChain.description.substring(0, 50) + '...' : null,
+        conclusion: reasoningChain.conclusion ? reasoningChain.conclusion.substring(0, 50) + '...' : null,
+        confidenceScore: reasoningChain.confidenceScore,
+        methodology: reasoningChain.methodology,
+        sourceThought: reasoningChain.sourceThought,
+        tags: reasoningChain.tags,
+        alternativeConclusionsConsidered: reasoningChain.alternativeConclusionsConsidered
+      });
+      
+      // First create the ReasoningChain node (simpler query without the relationship)
+      const createResult = await session.executeWrite(tx => tx.run(`
         MERGE (rc:Memory:ReasoningChain {name: $name})
         SET rc.nodeType = 'ReasoningChain',
             rc.description = $description,
@@ -980,14 +1006,6 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
             rc.numberOfSteps = 0,
             rc.createdAt = CASE WHEN rc.createdAt IS NULL THEN datetime() ELSE rc.createdAt END,
             rc.lastUpdated = datetime()
-        
-        // If a sourceThought is provided, create a relationship to it
-        WITH rc
-        WHERE $sourceThought IS NOT NULL
-        MATCH (t:Memory:Thought {name: $sourceThought})
-        MERGE (t)-[r:HAS_REASONING]->(rc)
-        SET r.lastUpdated = datetime()
-        
         RETURN rc
       `, {
         name: reasoningChain.name,
@@ -1002,11 +1020,38 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
         alternativeConclusionsConsidered: reasoningChain.alternativeConclusionsConsidered || []
       }));
       
-      if (result.records.length === 0) {
-        throw new Error(`Failed to create ReasoningChain node`);
+      if (createResult.records.length === 0) {
+        console.error(`Failed to create ReasoningChain node. No results returned from CREATE operation.`);
+        throw new Error(`Failed to create ReasoningChain node - database did not return the created node`);
       }
       
-      const chainNode = result.records[0].get('rc');
+      console.error(`Successfully created reasoning chain node: "${reasoningChain.name}"`);
+      const chainNode = createResult.records[0].get('rc');
+      
+      // If a sourceThought was provided and exists, create the relationship in a separate query
+      if (reasoningChain.sourceThought) {
+        try {
+          const relResult = await session.executeWrite(tx => tx.run(`
+            MATCH (t:Memory:Thought {name: $thoughtName})
+            MATCH (rc:Memory:ReasoningChain {name: $chainName})
+            MERGE (t)-[r:HAS_REASONING]->(rc)
+            SET r.lastUpdated = datetime()
+            RETURN r
+          `, {
+            thoughtName: reasoningChain.sourceThought,
+            chainName: reasoningChain.name
+          }));
+          
+          if (relResult.records.length > 0) {
+            console.error(`Successfully connected chain to thought "${reasoningChain.sourceThought}"`);
+          } else {
+            console.error(`Warning: Failed to connect chain to thought "${reasoningChain.sourceThought}". Relationship not created.`);
+          }
+        } catch (relError) {
+          console.error(`Error connecting chain to thought:`, relError);
+          // Don't fail the whole operation if just the relationship creation fails
+        }
+      }
       
       // Convert to Entity format for return
       const chainEntity: Entity = {
@@ -1017,8 +1062,16 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
       
       return chainEntity;
     } catch (error) {
-      console.error(`Error creating reasoning chain:`, error);
-      throw error;
+      // Enhanced error message with more context
+      const errorMessage = `Error creating reasoning chain "${reasoningChain.name}": ${error.message || error}`;
+      console.error(errorMessage);
+      
+      // If it's a Neo4j driver error, log more details
+      if (error.code) {
+        console.error(`Neo4j error code: ${error.code}`);
+      }
+      
+      throw new Error(errorMessage);
     } finally {
       await session.close();
     }
@@ -1042,7 +1095,7 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
     const session = this.neo4jDriver.session();
     
     try {
-      console.error(`Creating reasoning step: ${stepData.name} for chain: ${stepData.chainName}`);
+      console.error(`Creating reasoning step: "${stepData.name}" for chain: "${stepData.chainName}`);
       
       // First check if the chain exists
       const chainExists = await session.executeRead(tx => tx.run(`
@@ -1051,7 +1104,35 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
       `, { chainName: stepData.chainName }));
       
       if (chainExists.records.length === 0) {
-        throw new Error(`ReasoningChain ${stepData.chainName} not found`);
+        const errorMsg = `ReasoningChain "${stepData.chainName}" not found`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+      
+      console.error(`Found chain "${stepData.chainName}", proceeding with step creation`);
+      
+      // Log the step data for debugging
+      console.error('Creating reasoning step with parameters:', {
+        name: stepData.name,
+        content: stepData.content ? stepData.content.substring(0, 50) + '...' : null,
+        stepNumber: stepData.stepNumber,
+        stepType: stepData.stepType,
+        evidenceType: stepData.evidenceType,
+        confidence: stepData.confidence,
+        supportingReferences: stepData.supportingReferences ? 
+          `${stepData.supportingReferences.length} references` : 'none',
+        previousSteps: stepData.previousSteps ? 
+          `${stepData.previousSteps.length} previous steps` : 'none'
+      });
+      
+      // Check if the step already exists
+      const stepCheck = await session.executeRead(tx => tx.run(`
+        MATCH (rs:Memory:ReasoningStep {name: $name})
+        RETURN rs
+      `, { name: stepData.name }));
+      
+      if (stepCheck.records.length > 0) {
+        console.error(`Note: Step "${stepData.name}" already exists. Will update its properties.`);
       }
       
       // Create the ReasoningStep node
@@ -1102,35 +1183,93 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
       }));
       
       if (result.records.length === 0) {
-        throw new Error(`Failed to create ReasoningStep node`);
+        const errorMsg = `Failed to create ReasoningStep node "${stepData.name}"`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
       }
+      
+      console.error(`Successfully created reasoning step "${stepData.name}"`);
       
       // Create relationships to supporting references
       if (stepData.supportingReferences && stepData.supportingReferences.length > 0) {
-        await session.executeWrite(tx => tx.run(`
-          MATCH (rs:ReasoningStep:Memory {name: $stepName})
-          UNWIND $references as refName
-          MATCH (ref:Memory {name: refName})
-          MERGE (rs)-[r:REFERENCES]->(ref)
-          SET r.lastUpdated = datetime()
-        `, {
-          stepName: stepData.name,
-          references: stepData.supportingReferences
-        }));
+        try {
+          console.error(`Adding ${stepData.supportingReferences.length} supporting references to step "${stepData.name}"`);
+          
+          // First check which references exist
+          const refCheck = await session.executeRead(tx => tx.run(`
+            UNWIND $references as refName
+            MATCH (ref:Memory {name: refName})
+            RETURN ref.name as foundRef
+          `, { references: stepData.supportingReferences }));
+          
+          const foundRefs = refCheck.records.map(record => record.get('foundRef'));
+          
+          if (foundRefs.length < stepData.supportingReferences.length) {
+            const missingRefs = stepData.supportingReferences.filter(ref => !foundRefs.includes(ref));
+            console.error(`Warning: Some supporting references not found: ${missingRefs.join(', ')}`);
+          }
+          
+          if (foundRefs.length > 0) {
+            const refResult = await session.executeWrite(tx => tx.run(`
+              MATCH (rs:ReasoningStep:Memory {name: $stepName})
+              UNWIND $references as refName
+              MATCH (ref:Memory {name: refName})
+              MERGE (rs)-[r:REFERENCES]->(ref)
+              SET r.lastUpdated = datetime()
+              RETURN count(r) as relCount
+            `, {
+              stepName: stepData.name,
+              references: foundRefs
+            }));
+            
+            const relCount = refResult.records[0].get('relCount').toNumber();
+            console.error(`Created ${relCount} reference relationships from step "${stepData.name}"`);
+          }
+        } catch (refError) {
+          console.error(`Error creating reference relationships:`, refError);
+          // Don't fail the entire operation if just the references fail
+        }
       }
       
       // Create relationships to previous steps
       if (stepData.previousSteps && stepData.previousSteps.length > 0) {
-        await session.executeWrite(tx => tx.run(`
-          MATCH (rs:ReasoningStep:Memory {name: $stepName})
-          UNWIND $prevSteps as prevName
-          MATCH (prev:ReasoningStep:Memory {name: prevName})
-          MERGE (prev)-[r:LEADS_TO]->(rs)
-          SET r.lastUpdated = datetime()
-        `, {
-          stepName: stepData.name,
-          prevSteps: stepData.previousSteps
-        }));
+        try {
+          console.error(`Adding ${stepData.previousSteps.length} previous step connections to step "${stepData.name}"`);
+          
+          // First check which previous steps exist
+          const prevCheck = await session.executeRead(tx => tx.run(`
+            UNWIND $prevSteps as prevName
+            MATCH (prev:ReasoningStep:Memory {name: prevName})
+            RETURN prev.name as foundPrev
+          `, { prevSteps: stepData.previousSteps }));
+          
+          const foundPrevs = prevCheck.records.map(record => record.get('foundPrev'));
+          
+          if (foundPrevs.length < stepData.previousSteps.length) {
+            const missingPrevs = stepData.previousSteps.filter(prev => !foundPrevs.includes(prev));
+            console.error(`Warning: Some previous steps not found: ${missingPrevs.join(', ')}`);
+          }
+          
+          if (foundPrevs.length > 0) {
+            const prevResult = await session.executeWrite(tx => tx.run(`
+              MATCH (rs:ReasoningStep:Memory {name: $stepName})
+              UNWIND $prevSteps as prevName
+              MATCH (prev:ReasoningStep:Memory {name: prevName})
+              MERGE (prev)-[r:LEADS_TO]->(rs)
+              SET r.lastUpdated = datetime()
+              RETURN count(r) as relCount
+            `, {
+              stepName: stepData.name,
+              prevSteps: foundPrevs
+            }));
+            
+            const relCount = prevResult.records[0].get('relCount').toNumber();
+            console.error(`Created ${relCount} LEADS_TO relationships to step "${stepData.name}"`);
+          }
+        } catch (prevError) {
+          console.error(`Error creating previous step relationships:`, prevError);
+          // Don't fail the entire operation if just the previous step connections fail
+        }
       }
       
       const stepNode = result.records[0].get('rs');
@@ -1144,8 +1283,16 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
       
       return stepEntity;
     } catch (error) {
-      console.error(`Error creating reasoning step:`, error);
-      throw error;
+      // Enhanced error message with more context
+      const errorMessage = `Error creating reasoning step "${stepData.name}" for chain "${stepData.chainName}": ${error.message || error}`;
+      console.error(errorMessage);
+      
+      // If it's a Neo4j driver error, log more details
+      if (error.code) {
+        console.error(`Neo4j error code: ${error.code}`);
+      }
+      
+      throw new Error(errorMessage);
     } finally {
       await session.close();
     }
