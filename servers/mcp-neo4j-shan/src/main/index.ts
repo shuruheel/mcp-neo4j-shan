@@ -15,7 +15,7 @@ import { SYSTEM_PROMPT, TOOL_PROMPTS } from './prompts.js';
 /**
  * Main function to initialize and start the server
  */
-async function main() {
+export async function main() {
   console.error('Starting mcp-neo4j-shan server...');
   
   // Initialize Neo4j connection
