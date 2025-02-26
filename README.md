@@ -18,13 +18,12 @@ A sophisticated knowledge graph memory system that stores interconnected informa
 
 #### Key Features
 
-- **Rich Node Type System**: Supports eight specialized node types, each with tailored attributes:
+- **Rich Node Type System**: Supports seven specialized node types, each with tailored attributes:
   - **Entity**: People, organizations, products, physical objects
   - **Event**: Time-bound occurrences with temporal attributes
   - **Concept**: Abstract ideas, theories, principles, frameworks
   - **ScientificInsight**: Research findings with supporting evidence
   - **Law**: Established principles, rules, or regularities
-  - **Thought**: Analyses, interpretations, or reflections
   - **ReasoningChain**: Structured representations of logical reasoning
   - **ReasoningStep**: Individual steps in a reasoning process
 
