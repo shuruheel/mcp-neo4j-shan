@@ -6,6 +6,14 @@ import neo4j, { Integer, Node, Relationship, Driver as Neo4jDriver, DateTime } f
 
 import { KnowledgeGraphMemory, Entity, KnowledgeGraph, Relation } from "@neo4j/graphrag-memory";
 
+// Add the RelationshipCategory enum
+export enum RelationshipCategory {
+  HIERARCHICAL = 'hierarchical', // parent-child, category-instance
+  LATERAL = 'lateral',           // similarity, contrast, analogy
+  TEMPORAL = 'temporal',         // before-after, causes-results
+  COMPOSITIONAL = 'compositional' // part-whole, component-system
+}
+
 // Base interface for all node types
 export interface BaseNode {
   name: string;
@@ -78,6 +86,8 @@ export interface Thought extends BaseNode {
   thoughtCounterarguments?: string[];  // Potential challenges to the thought
   implications?: string[];  // Logical consequences of the thought
   thoughtConfidenceScore?: number;  // 0.0-1.0 scale of certainty
+  // New field to reference associated reasoning chains
+  reasoningChains?: string[];  // References to ReasoningChain nodes
 }
 
 export interface ScientificInsight extends BaseNode {
@@ -114,7 +124,35 @@ export interface Law extends BaseNode {
   formalRepresentation?: string;  // Mathematical or logical formulation when applicable
 }
 
-export type KnowledgeNode = EnhancedEntity | Event | Concept | ScientificInsight | Law | Thought;
+// New interfaces for reasoning chains and steps
+export interface ReasoningChain extends BaseNode {
+  nodeType: 'ReasoningChain';
+  description: string;
+  conclusion: string;
+  confidenceScore: number;  // 0.0-1.0
+  creator: string;
+  methodology: 'deductive' | 'inductive' | 'abductive' | 'analogical' | 'mixed';
+  domain?: string;
+  tags?: string[];
+  sourceThought?: string;  // Reference to the thought that initiated this reasoning
+  numberOfSteps?: number;  // Cached count of steps
+  alternativeConclusionsConsidered?: string[];  // Other conclusions that were considered
+}
+
+export interface ReasoningStep extends BaseNode {
+  nodeType: 'ReasoningStep';
+  content: string;  // The actual reasoning content
+  stepType: 'premise' | 'inference' | 'evidence' | 'counterargument' | 'rebuttal' | 'conclusion';
+  evidenceType?: 'observation' | 'fact' | 'assumption' | 'inference' | 'expert_opinion' | 'statistical_data';
+  supportingReferences?: string[];  // References to other nodes supporting this step
+  confidence: number;  // 0.0-1.0
+  alternatives?: string[];  // Alternative paths that could be taken at this step
+  counterarguments?: string[];  // Known challenges to this reasoning step
+  assumptions?: string[];  // Underlying assumptions for this step
+  formalNotation?: string;  // For logical or mathematical steps
+}
+
+export type KnowledgeNode = EnhancedEntity | Event | Concept | ScientificInsight | Law | Thought | ReasoningChain | ReasoningStep;
 
 export type EntityNode = Node<Integer, KnowledgeNode>
 
@@ -125,6 +163,12 @@ export interface EnhancedRelation extends Relation {
   confidenceScore?: number;  // Added field for confidence scoring
   sources?: string[];  // Added field for citation sources
   weight?: number;     // Weight of the relationship (0.0-1.0), used for traversal prioritization
+  
+  // New cognitive enhancement fields
+  contextType?: 'hierarchical' | 'associative' | 'causal' | 'temporal' | 'analogical';
+  contextStrength?: number; // 0.0-1.0 indicating how strong this particular context is
+  memoryAids?: string[]; // Phrases or cues that help recall this relationship
+  relationshipCategory?: RelationshipCategory; // Categorization of relationship type
 }
 
 export type EntityRelationship = Relationship<Integer, Relation>
@@ -292,6 +336,43 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
                   node.content = entity.content,
                   node.entities = COALESCE(entity.entities, []),
                   node.concepts = COALESCE(entity.concepts, []),
+                  node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+            )
+            
+            // For ReasoningChain nodes
+            FOREACH (ignore IN CASE WHEN entity.entityType = 'ReasoningChain' THEN [1] ELSE [] END | 
+              MERGE (node:Memory {name: entity.name})
+              SET node.nodeType = 'ReasoningChain',
+                  node:ReasoningChain,
+                  node.lastUpdated = datetime(),
+                  node.description = entity.description,
+                  node.conclusion = entity.conclusion,
+                  node.confidenceScore = entity.confidenceScore,
+                  node.creator = entity.creator,
+                  node.methodology = entity.methodology,
+                  node.domain = entity.domain,
+                  node.tags = COALESCE(entity.tags, []),
+                  node.sourceThought = entity.sourceThought,
+                  node.numberOfSteps = entity.numberOfSteps,
+                  node.alternativeConclusionsConsidered = COALESCE(entity.alternativeConclusionsConsidered, []),
+                  node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+            )
+            
+            // For ReasoningStep nodes
+            FOREACH (ignore IN CASE WHEN entity.entityType = 'ReasoningStep' THEN [1] ELSE [] END | 
+              MERGE (node:Memory {name: entity.name})
+              SET node.nodeType = 'ReasoningStep',
+                  node:ReasoningStep,
+                  node.lastUpdated = datetime(),
+                  node.content = entity.content,
+                  node.stepType = entity.stepType,
+                  node.evidenceType = entity.evidenceType,
+                  node.supportingReferences = COALESCE(entity.supportingReferences, []),
+                  node.confidence = entity.confidence,
+                  node.alternatives = COALESCE(entity.alternatives, []),
+                  node.counterarguments = COALESCE(entity.counterarguments, []),
+                  node.assumptions = COALESCE(entity.assumptions, []),
+                  node.formalNotation = entity.formalNotation,
                   node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
             )
             
@@ -605,7 +686,13 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
                                        toType: $toNodeType,
                                        context: $context,
                                        confidenceScore: $confidenceScore,
-                                       sources: $sources
+                                       sources: $sources,
+                                       weight: $weight,
+                                       // New cognitive enhancement fields
+                                       contextType: $contextType,
+                                       contextStrength: $contextStrength,
+                                       memoryAids: $memoryAids,
+                                       relationshipCategory: $relationshipCategory
                                      }, to, {})
           YIELD rel
           RETURN rel
@@ -617,7 +704,13 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
           toNodeType: toNodeType,
           context: (enhancedRelation as any).context || null,
           confidenceScore: (enhancedRelation as any).confidenceScore || null,
-          sources: (enhancedRelation as any).sources || []
+          sources: (enhancedRelation as any).sources || [],
+          weight: (enhancedRelation as any).weight || null,
+          // New cognitive enhancement fields
+          contextType: (enhancedRelation as any).contextType || null,
+          contextStrength: (enhancedRelation as any).contextStrength || null,
+          memoryAids: (enhancedRelation as any).memoryAids || [],
+          relationshipCategory: (enhancedRelation as any).relationshipCategory || null
         }));
         
         if (result.records.length > 0) {
@@ -847,6 +940,359 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
     } catch (error) {
       console.error(`Error creating thought:`, error);
       throw error;
+    } finally {
+      await session.close();
+    }
+  }
+
+  // Add these new methods to the Neo4jCreator class
+
+  async createReasoningChain(reasoningChain: {
+    name: string;
+    description: string;
+    conclusion: string;
+    confidenceScore: number;
+    sourceThought?: string; // The thought this reasoning is attached to
+    creator: string;
+    methodology: 'deductive' | 'inductive' | 'abductive' | 'analogical' | 'mixed';
+    domain?: string;
+    tags?: string[];
+    alternativeConclusionsConsidered?: string[];
+  }): Promise<Entity> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      console.error(`Creating reasoning chain: ${reasoningChain.name}`);
+      
+      // First check if sourceThought exists if provided
+      if (reasoningChain.sourceThought) {
+        const thoughtCheck = await session.executeRead(tx => tx.run(`
+          MATCH (t:Memory:Thought {name: $thoughtName})
+          RETURN t
+        `, { thoughtName: reasoningChain.sourceThought }));
+        
+        if (thoughtCheck.records.length === 0) {
+          console.error(`Warning: Source thought "${reasoningChain.sourceThought}" not found. Will create the chain without connecting to a thought.`);
+        } else {
+          console.error(`Found source thought "${reasoningChain.sourceThought}" for the chain.`);
+        }
+      }
+      
+      // Log the parameters being sent to Neo4j
+      console.error('Creating reasoning chain with parameters:', {
+        name: reasoningChain.name,
+        description: reasoningChain.description ? reasoningChain.description.substring(0, 50) + '...' : null,
+        conclusion: reasoningChain.conclusion ? reasoningChain.conclusion.substring(0, 50) + '...' : null,
+        confidenceScore: reasoningChain.confidenceScore,
+        methodology: reasoningChain.methodology,
+        sourceThought: reasoningChain.sourceThought,
+        tags: reasoningChain.tags,
+        alternativeConclusionsConsidered: reasoningChain.alternativeConclusionsConsidered
+      });
+      
+      // First create the ReasoningChain node (simpler query without the relationship)
+      const createResult = await session.executeWrite(tx => tx.run(`
+        MERGE (rc:Memory:ReasoningChain {name: $name})
+        SET rc.nodeType = 'ReasoningChain',
+            rc.description = $description,
+            rc.conclusion = $conclusion,
+            rc.confidenceScore = $confidenceScore,
+            rc.creator = $creator,
+            rc.methodology = $methodology,
+            rc.domain = $domain,
+            rc.tags = $tags,
+            rc.sourceThought = $sourceThought,
+            rc.alternativeConclusionsConsidered = $alternativeConclusionsConsidered,
+            rc.numberOfSteps = 0,
+            rc.createdAt = CASE WHEN rc.createdAt IS NULL THEN datetime() ELSE rc.createdAt END,
+            rc.lastUpdated = datetime()
+        RETURN rc
+      `, {
+        name: reasoningChain.name,
+        description: reasoningChain.description,
+        conclusion: reasoningChain.conclusion,
+        confidenceScore: reasoningChain.confidenceScore,
+        creator: reasoningChain.creator,
+        methodology: reasoningChain.methodology,
+        domain: reasoningChain.domain || null,
+        tags: reasoningChain.tags || [],
+        sourceThought: reasoningChain.sourceThought || null,
+        alternativeConclusionsConsidered: reasoningChain.alternativeConclusionsConsidered || []
+      }));
+      
+      if (createResult.records.length === 0) {
+        console.error(`Failed to create ReasoningChain node. No results returned from CREATE operation.`);
+        throw new Error(`Failed to create ReasoningChain node - database did not return the created node`);
+      }
+      
+      console.error(`Successfully created reasoning chain node: "${reasoningChain.name}"`);
+      const chainNode = createResult.records[0].get('rc');
+      
+      // If a sourceThought was provided and exists, create the relationship in a separate query
+      if (reasoningChain.sourceThought) {
+        try {
+          const relResult = await session.executeWrite(tx => tx.run(`
+            MATCH (t:Memory:Thought {name: $thoughtName})
+            MATCH (rc:Memory:ReasoningChain {name: $chainName})
+            MERGE (t)-[r:HAS_REASONING]->(rc)
+            SET r.lastUpdated = datetime()
+            RETURN r
+          `, {
+            thoughtName: reasoningChain.sourceThought,
+            chainName: reasoningChain.name
+          }));
+          
+          if (relResult.records.length > 0) {
+            console.error(`Successfully connected chain to thought "${reasoningChain.sourceThought}"`);
+          } else {
+            console.error(`Warning: Failed to connect chain to thought "${reasoningChain.sourceThought}". Relationship not created.`);
+          }
+        } catch (relError) {
+          console.error(`Error connecting chain to thought:`, relError);
+          // Don't fail the whole operation if just the relationship creation fails
+        }
+      }
+      
+      // Convert to Entity format for return
+      const chainEntity: Entity = {
+        name: chainNode.properties.name,
+        entityType: 'ReasoningChain',
+        observations: []
+      };
+      
+      return chainEntity;
+    } catch (error) {
+      // Enhanced error message with more context
+      const errorMessage = `Error creating reasoning chain "${reasoningChain.name}": ${error.message || error}`;
+      console.error(errorMessage);
+      
+      // If it's a Neo4j driver error, log more details
+      if (error.code) {
+        console.error(`Neo4j error code: ${error.code}`);
+      }
+      
+      throw new Error(errorMessage);
+    } finally {
+      await session.close();
+    }
+  }
+
+  async createReasoningStep(stepData: {
+    chainName: string; // The reasoning chain this step belongs to
+    name: string;
+    content: string;
+    stepNumber: number; // Position in the chain (1-based)
+    stepType: 'premise' | 'inference' | 'evidence' | 'counterargument' | 'rebuttal' | 'conclusion';
+    evidenceType?: 'observation' | 'fact' | 'assumption' | 'inference' | 'expert_opinion' | 'statistical_data';
+    supportingReferences?: string[]; // Names of nodes that support this step
+    confidence: number;
+    alternatives?: string[];
+    counterarguments?: string[];
+    assumptions?: string[];
+    formalNotation?: string;
+    previousSteps?: string[]; // Names of steps that directly lead to this one (for branching)
+  }): Promise<Entity> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      console.error(`Creating reasoning step: "${stepData.name}" for chain: "${stepData.chainName}`);
+      
+      // First check if the chain exists
+      const chainExists = await session.executeRead(tx => tx.run(`
+        MATCH (rc:Memory:ReasoningChain {name: $chainName})
+        RETURN rc
+      `, { chainName: stepData.chainName }));
+      
+      if (chainExists.records.length === 0) {
+        const errorMsg = `ReasoningChain "${stepData.chainName}" not found`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+      
+      console.error(`Found chain "${stepData.chainName}", proceeding with step creation`);
+      
+      // Log the step data for debugging
+      console.error('Creating reasoning step with parameters:', {
+        name: stepData.name,
+        content: stepData.content ? stepData.content.substring(0, 50) + '...' : null,
+        stepNumber: stepData.stepNumber,
+        stepType: stepData.stepType,
+        evidenceType: stepData.evidenceType,
+        confidence: stepData.confidence,
+        supportingReferences: stepData.supportingReferences ? 
+          `${stepData.supportingReferences.length} references` : 'none',
+        previousSteps: stepData.previousSteps ? 
+          `${stepData.previousSteps.length} previous steps` : 'none'
+      });
+      
+      // Check if the step already exists
+      const stepCheck = await session.executeRead(tx => tx.run(`
+        MATCH (rs:Memory:ReasoningStep {name: $name})
+        RETURN rs
+      `, { name: stepData.name }));
+      
+      if (stepCheck.records.length > 0) {
+        console.error(`Note: Step "${stepData.name}" already exists. Will update its properties.`);
+      }
+      
+      // Create the ReasoningStep node
+      const result = await session.executeWrite(tx => tx.run(`
+        // Create the step node
+        MERGE (rs:Memory:ReasoningStep {name: $name})
+        SET rs.nodeType = 'ReasoningStep',
+            rs.content = $content,
+            rs.stepType = $stepType,
+            rs.evidenceType = $evidenceType,
+            rs.supportingReferences = $supportingReferences,
+            rs.confidence = $confidence,
+            rs.alternatives = $alternatives,
+            rs.counterarguments = $counterarguments,
+            rs.assumptions = $assumptions,
+            rs.formalNotation = $formalNotation,
+            rs.createdAt = CASE WHEN rs.createdAt IS NULL THEN datetime() ELSE rs.createdAt END,
+            rs.lastUpdated = datetime()
+        
+        // Connect to the reasoning chain with step order
+        WITH rs
+        MATCH (rc:Memory:ReasoningChain {name: $chainName})
+        MERGE (rc)-[r:CONTAINS_STEP {order: $stepNumber}]->(rs)
+        SET r.lastUpdated = datetime()
+        
+        // Update the numberOfSteps counter if this is a new maximum
+        WITH rc, rs, $stepNumber as newStep
+        SET rc.numberOfSteps = CASE 
+            WHEN rc.numberOfSteps IS NULL THEN newStep
+            WHEN rc.numberOfSteps < newStep THEN newStep
+            ELSE rc.numberOfSteps 
+          END
+        
+        RETURN rs
+      `, {
+        name: stepData.name,
+        chainName: stepData.chainName,
+        content: stepData.content,
+        stepNumber: stepData.stepNumber,
+        stepType: stepData.stepType,
+        evidenceType: stepData.evidenceType || null,
+        supportingReferences: stepData.supportingReferences || [],
+        confidence: stepData.confidence,
+        alternatives: stepData.alternatives || [],
+        counterarguments: stepData.counterarguments || [],
+        assumptions: stepData.assumptions || [],
+        formalNotation: stepData.formalNotation || null
+      }));
+      
+      if (result.records.length === 0) {
+        const errorMsg = `Failed to create ReasoningStep node "${stepData.name}"`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+      
+      console.error(`Successfully created reasoning step "${stepData.name}"`);
+      
+      // Create relationships to supporting references
+      if (stepData.supportingReferences && stepData.supportingReferences.length > 0) {
+        try {
+          console.error(`Adding ${stepData.supportingReferences.length} supporting references to step "${stepData.name}"`);
+          
+          // First check which references exist
+          const refCheck = await session.executeRead(tx => tx.run(`
+            UNWIND $references as refName
+            MATCH (ref:Memory {name: refName})
+            RETURN ref.name as foundRef
+          `, { references: stepData.supportingReferences }));
+          
+          const foundRefs = refCheck.records.map(record => record.get('foundRef'));
+          
+          if (foundRefs.length < stepData.supportingReferences.length) {
+            const missingRefs = stepData.supportingReferences.filter(ref => !foundRefs.includes(ref));
+            console.error(`Warning: Some supporting references not found: ${missingRefs.join(', ')}`);
+          }
+          
+          if (foundRefs.length > 0) {
+            const refResult = await session.executeWrite(tx => tx.run(`
+              MATCH (rs:ReasoningStep:Memory {name: $stepName})
+              UNWIND $references as refName
+              MATCH (ref:Memory {name: refName})
+              MERGE (rs)-[r:REFERENCES]->(ref)
+              SET r.lastUpdated = datetime()
+              RETURN count(r) as relCount
+            `, {
+              stepName: stepData.name,
+              references: foundRefs
+            }));
+            
+            const relCount = refResult.records[0].get('relCount').toNumber();
+            console.error(`Created ${relCount} reference relationships from step "${stepData.name}"`);
+          }
+        } catch (refError) {
+          console.error(`Error creating reference relationships:`, refError);
+          // Don't fail the entire operation if just the references fail
+        }
+      }
+      
+      // Create relationships to previous steps
+      if (stepData.previousSteps && stepData.previousSteps.length > 0) {
+        try {
+          console.error(`Adding ${stepData.previousSteps.length} previous step connections to step "${stepData.name}"`);
+          
+          // First check which previous steps exist
+          const prevCheck = await session.executeRead(tx => tx.run(`
+            UNWIND $prevSteps as prevName
+            MATCH (prev:ReasoningStep:Memory {name: prevName})
+            RETURN prev.name as foundPrev
+          `, { prevSteps: stepData.previousSteps }));
+          
+          const foundPrevs = prevCheck.records.map(record => record.get('foundPrev'));
+          
+          if (foundPrevs.length < stepData.previousSteps.length) {
+            const missingPrevs = stepData.previousSteps.filter(prev => !foundPrevs.includes(prev));
+            console.error(`Warning: Some previous steps not found: ${missingPrevs.join(', ')}`);
+          }
+          
+          if (foundPrevs.length > 0) {
+            const prevResult = await session.executeWrite(tx => tx.run(`
+              MATCH (rs:ReasoningStep:Memory {name: $stepName})
+              UNWIND $prevSteps as prevName
+              MATCH (prev:ReasoningStep:Memory {name: prevName})
+              MERGE (prev)-[r:LEADS_TO]->(rs)
+              SET r.lastUpdated = datetime()
+              RETURN count(r) as relCount
+            `, {
+              stepName: stepData.name,
+              prevSteps: foundPrevs
+            }));
+            
+            const relCount = prevResult.records[0].get('relCount').toNumber();
+            console.error(`Created ${relCount} LEADS_TO relationships to step "${stepData.name}"`);
+          }
+        } catch (prevError) {
+          console.error(`Error creating previous step relationships:`, prevError);
+          // Don't fail the entire operation if just the previous step connections fail
+        }
+      }
+      
+      const stepNode = result.records[0].get('rs');
+      
+      // Convert to Entity format for return
+      const stepEntity: Entity = {
+        name: stepNode.properties.name,
+        entityType: 'ReasoningStep',
+        observations: []
+      };
+      
+      return stepEntity;
+    } catch (error) {
+      // Enhanced error message with more context
+      const errorMessage = `Error creating reasoning step "${stepData.name}" for chain "${stepData.chainName}": ${error.message || error}`;
+      console.error(errorMessage);
+      
+      // If it's a Neo4j driver error, log more details
+      if (error.code) {
+        console.error(`Neo4j error code: ${error.code}`);
+      }
+      
+      throw new Error(errorMessage);
     } finally {
       await session.close();
     }

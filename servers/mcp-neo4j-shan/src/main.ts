@@ -44,9 +44,9 @@ const server = new Server({
 const SYSTEM_PROMPT = `You are interacting with a Neo4j knowledge graph that stores interconnected information about entities, events, concepts, scientific insights, laws, and thoughts. This knowledge graph helps maintain context between conversations and builds a rich network of related information over time.
 
 TOOL USAGE WORKFLOW:
-1. ALWAYS start by using the \`explore_context\` tool to check if relevant nodes already exist in the knowledge graph when the user asks about a topic. This tool reveals the neighborhood around a node including all connected relationships and nodes, providing rich contextual information.
+1. ALWAYS start by using the \`explore_weighted_context\` tool to check if relevant nodes already exist in the knowledge graph when the user asks about a topic. This tool reveals the neighborhood around a node with intelligent prioritization of the most important relationships first, providing rich contextual information organized by relationship weights.
 
-2. If \`explore_context\` doesn't return any nodes OR if the user explicitly asks to update the knowledge graph, use the \`create_nodes\` tool to add new information. Extract ALL relevant node types from the conversation:
+2. If \`explore_weighted_context\` doesn't return any nodes OR if the user explicitly asks to update the knowledge graph, use the \`create_nodes\` tool to add new information. Extract ALL relevant node types from the conversation:
 
    NODE TYPES AND SCHEMAS:
    - Entity: People, organizations, products, physical objects
@@ -79,45 +79,48 @@ TOOL USAGE WORKFLOW:
    - Always include a detailed context field (30-50 words) explaining how and why the nodes are related
    - Include confidence scores (0.0-1.0) when appropriate
    - Add citation sources when available for academic or factual claims
+   - Always provide weight values (0.0-1.0) indicating how important the relationship is
+   - Set appropriate relationshipCategory values (hierarchical, lateral, temporal, compositional)
 
 4. Only use the \`create_thoughts\` tool when specifically asked to add your thoughts to the knowledge graph. These represent your analysis or insights about the conversation and should be connected to relevant nodes.
 
-5. When helping users explore existing knowledge, use appropriate search and traversal tools:
-   - \`search_nodes\` for general searches across all node types
-   - \`search_nodes_by_type\` for targeted searches within a specific node type
-   - \`find_concept_connections\` to discover paths between nodes
-   - \`trace_evidence\` to examine the evidence supporting a claim
+5. For exploring temporal information, use the \`get_temporal_sequence\` tool to visualize how events and concepts unfold over time.
 
-QUALITY GUIDELINES:
-- Create concise, specific, and uniquely identifiable node names
-- Provide comprehensive attributes for each node type
-- Construct meaningful relationships that clearly show how nodes are connected
-- Build a coherent network structure that captures the semantic richness of information
-- Focus on creating high-quality nodes with detailed attributes and meaningful relationships
+6. When the user wants to understand or represent chains of reasoning or arguments, use the \`create_reasoning_chain\` tool:
+   - Create a structured representation of logical reasoning with well-defined steps
+   - Connect reasoning chains to existing thoughts
+   - Specify methodology (deductive, inductive, abductive, analogical, mixed)
+   - Create individual steps with distinct logical roles (premise, inference, evidence, counterargument, rebuttal, conclusion)
+   - Include confidence scores for each step and the overall chain
+   - Link to supporting references and evidence
+   - Consider alternatives and counterarguments
 
 The knowledge graph is designed to build connections between ideas over time. Your role is to help users interact with this knowledge structure effectively, extracting insights and adding new information in a structured, meaningful way.`;
 
 // Define tool-specific prompts
 const TOOL_PROMPTS = {
-  "explore_weighted_context": `You are a knowledge graph exploration assistant with cognitive neuroscience capabilities. When presenting exploration results:
-  1. Organize information clearly by node types (Entity, Event, Concept, ScientificInsight, Law, Thought)
-  2. Format relationships with direction indicators (→) showing the connection between nodes
-  3. Highlight the most important connections based on relationship types and context
-  4. Summarize key insights from the graph structure
-  5. Present node properties according to their type (e.g., for Entities: description, biography; for Events: dates, locations)
-  6. Emphasize cognitive dimensions when available:
+  "explore_weighted_context": `You are a knowledge graph exploration assistant with cognitive science capabilities. When presenting exploration results from weighted context exploration:
+  
+  1. Focus on the STRONGEST relationships first (higher weight values indicate more important connections)
+  2. Organize information clearly by node types (Entity, Event, Concept, ScientificInsight, Law, Thought)
+  3. Format relationships with direction indicators (→) showing the connection between nodes
+  4. Include relationship weights and contextual information to explain WHY nodes are connected
+  5. Highlight cognitive dimensions when available:
      - Emotional valence and arousal ratings across all node types
-     - Causal relationships for Events (predecessors/successors)
-     - Abstraction level and metaphorical mappings for Concepts
-     - Evidence strength and surprise value for ScientificInsights
-     - Domain constraints and counterexamples for Laws
-     - Evidential basis and implication chains for Thoughts
+     - Relationship categories (hierarchical, lateral, temporal, compositional)
+     - Context types and memory aids in relationships
   
-  The input parameters for this tool are:
-  - nodeName (required): The exact name of the node to explore
-  - maxDepth (optional, default: 2): Maximum number of relationship hops to include
+  Present the results in a narrative format that emphasizes:
+  1. The central node and its most important connections (highest weights)
+  2. The hierarchical structure of knowledge where appropriate
+  3. The temporal sequences when relevant
+  4. The most semantically significant relationships based on context and weight
   
-  When cognitive dimensions are present, analyze their implications for the node's significance, memorability, and contextual importance. Explain how these dimensions enhance understanding of the node and its connections.`,
+  This weighted approach prioritizes the most cognitively significant connections first, helping users understand complex knowledge structures more intuitively by focusing on relationships that mirror human memory organization.`,
+
+  "explore_context": `DEPRECATED - Please use explore_weighted_context instead as it provides better cognitive organization of knowledge.
+  
+  This tool explores the knowledge graph without considering relationship weights, which may result in less intuitive exploration as weak relationships are treated the same as strong ones.`,
 
   "create_nodes": `You are a knowledge graph creation assistant with cognitive neuroscience capabilities. When creating nodes:
   1. Create nodes with detailed, complete attributes based on their type
@@ -190,6 +193,18 @@ const TOOL_PROMPTS = {
   - weight: Number between 0.0-1.0 indicating the strength/importance of the relationship
   - sources: Array of citation sources
   
+  Cognitive enhancement fields (based on cognitive science principles):
+  - contextType: The type of context this relationship represents ('hierarchical', 'associative', 'causal', 'temporal', 'analogical')
+  - contextStrength: How strong this particular context is (0.0-1.0)
+  - memoryAids: Phrases or cues that help recall this relationship
+  - relationshipCategory: Categorization of the relationship type ('hierarchical', 'lateral', 'temporal', 'compositional')
+  
+  Guidelines for relationship categories:
+  - HIERARCHICAL: Parent-child relationships, category-instance, is-a, taxonomic structures
+  - LATERAL: Similarity relationships, contrasts, analogies, associations
+  - TEMPORAL: Before-after relationships, causes-results, sequences
+  - COMPOSITIONAL: Part-whole relationships, component-system, contains/contained
+  
   Guidelines for weights:
   - Higher weights (0.8-1.0): Direct, strong, and crucial relationships (e.g., defining characteristics, direct causation)
   - Medium weights (0.4-0.7): Important but not defining relationships (e.g., significant influences, correlations)
@@ -232,6 +247,60 @@ const TOOL_PROMPTS = {
     * thoughts: Array of related thought names
     
   Focus on extracting cognitive dimensions naturally from context rather than asking the user directly. Use linguistic cues, semantic analysis, and contextual understanding to determine these values.`,
+
+  "get_temporal_sequence": `You are a temporal sequence visualization assistant. This tool helps users understand how events, concepts, and insights unfold over time by retrieving temporally connected nodes from the knowledge graph.
+
+  When presenting temporal sequence results:
+  1. Organize events chronologically, using either explicit dates when available or implicit sequence when dates are missing
+  2. Highlight cause-and-effect relationships between events (CAUSED, RESULTED_IN relationships)
+  3. Emphasize the temporal flow with appropriate transition phrases
+  4. Identify key turning points or pivotal events in the sequence
+  5. Note any significant time gaps or compression in the timeline
+  
+  Input parameters:
+  - nodeName (required): The name of the node to start the temporal sequence from
+  - direction (optional): 
+    * "forward" - show events that came after the starting node
+    * "backward" - show events that came before the starting node
+    * "both" (default) - show events in both directions
+  - maxEvents (optional): Maximum number of events to include (default: 10)
+  
+  This tool is particularly useful for:
+  - Understanding historical developments and their causal relationships
+  - Tracking the evolution of concepts over time
+  - Visualizing cause-and-effect chains in complex scenarios
+  - Creating narrative structures from interconnected events
+  
+  Present the results as a coherent narrative that follows temporal progression, making it easier for users to understand how events and concepts are connected through time.`,
+
+  "create_reasoning_chain": `You are a knowledge graph reasoning assistant with cognitive science capabilities. When creating reasoning chains:
+  
+  1. Create a clear, structured chain of reasoning with well-defined steps
+  2. Connect the reasoning to existing thoughts and concepts in the knowledge graph
+  3. Use appropriate methodology types (deductive, inductive, abductive, analogical, mixed)
+  4. Create steps with distinct roles (premise, inference, evidence, counterargument, rebuttal, conclusion)
+  5. Provide confidence scores for each step and the overall reasoning chain
+  6. Link to supporting references when available
+  7. Consider alternative paths and counterarguments
+  
+  The reasoning chain structure includes:
+  - ReasoningChain node that represents the overall argument or line of thinking
+  - ReasoningStep nodes that represent each individual step in the reasoning process
+  - Connections between steps showing how they build upon each other
+  - References to supporting evidence from other nodes in the knowledge graph
+  
+  This tool helps create explicit chains of reasoning that connect thoughts to their underlying logical structure, making the thought process transparent and available for future reference and exploration.`,
+
+  "get_reasoning_chain": `You are a reasoning chain retrieval assistant with cognitive science capabilities. When retrieving a reasoning chain:
+  
+  1. Use the reasoning chain name to identify the relevant chain and its steps
+  2. Retrieve the chain and its steps from the knowledge graph
+  3. Generate a narrative about the reasoning chain
+  
+  Input parameters:
+  - chainName (required): The name of the reasoning chain to retrieve
+  
+  This tool helps users understand the reasoning process and its implications by providing a narrative summary of the reasoning chain.`,
 };
 
 // Define the PROMPTS constant that's used in the GetPromptRequestSchema handler
@@ -265,7 +334,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "explore_weighted_context",
-        description: "Explore the knowledge graph using relationship weights to prioritize the most important connections. This tool reveals the most significant relationships first, providing a focused view of the knowledge network around a node. Particularly useful for filtering out less relevant connections when exploring densely connected nodes or when looking for the strongest relationships in a complex network.",
+        description: "The PRIMARY tool for exploring the knowledge graph context around a node. Uses relationship weights to prioritize the most important connections, providing an intelligent view focused on the strongest and most relevant relationships first. Particularly useful for understanding complex networks by highlighting significant connections based on their weights.",
         inputSchema: {
           type: "object",
           properties: {
@@ -288,8 +357,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "explore_context",
+        description: "DEPRECATED - Use explore_weighted_context instead. This tool will be removed in a future version. Explores the knowledge graph context around a node without considering relationship weights.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeName: { 
+              type: "string", 
+              description: "Name of the node to explore the context around" 
+            },
+            maxDepth: { 
+              type: "number", 
+              description: "Maximum number of relationship hops to include (default: 2)",
+              default: 2 
+            }
+          },
+          required: ["nodeName"],
+        },
+      },
+      {
         name: "create_nodes",
-        description: "IF the explore_context tool does not return any nodes OR the user specifically asks for the knowledge graph to be updated, create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific cognitive attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
+        description: "WHEN the user specifically asks for the knowledge graph to be updated, create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific cognitive attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
         inputSchema: {
           type: "object",
           properties: {
@@ -500,6 +588,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     items: { type: "string" },
                     description: "Citation sources supporting this relationship" 
                   },
+                  // New cognitive enhancement fields
+                  contextType: { 
+                    type: "string", 
+                    enum: ["hierarchical", "associative", "causal", "temporal", "analogical"],
+                    description: "The type of context this relationship represents"
+                  },
+                  contextStrength: { 
+                    type: "number", 
+                    description: "How strong this particular context is (0.0-1.0)"
+                  },
+                  memoryAids: { 
+                    type: "array", 
+                    items: { type: "string" },
+                    description: "Phrases or cues that help recall this relationship"
+                  },
+                  relationshipCategory: {
+                    type: "string",
+                    enum: ["hierarchical", "lateral", "temporal", "compositional"],
+                    description: "Categorization of the relationship type"
+                  }
                 },
                 required: ["from", "to", "relationType"],
               },
@@ -587,9 +695,166 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["title", "thoughtContent"],
         },
+      },
+      {
+        name: "get_temporal_sequence",
+        description: "Visualize temporal sequences of related events and concepts, showing how they unfold over time. This helps understand causal and chronological relationships between nodes in the knowledge graph. The tool identifies time-bound relationships and provides a chronologically ordered sequence of connected events, scientific insights, and concepts.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeName: { 
+              type: "string", 
+              description: "The name of the node to start the temporal sequence from" 
+            },
+            direction: { 
+              type: "string", 
+              enum: ["forward", "backward", "both"],
+              description: "Direction of temporal sequence: 'forward' (later events), 'backward' (earlier events), or 'both'",
+              default: "both"
+            },
+            maxEvents: { 
+              type: "number", 
+              description: "Maximum number of events to include in the sequence",
+              default: 10
+            }
+          },
+          required: ["nodeName"],
+        },
+      },
+      {
+        name: "create_reasoning_chain",
+        description: "Create a new reasoning chain with multiple reasoning steps that represent a chain of logical reasoning. This connects a thought to its underlying logical structure.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            thoughtName: {
+              type: "string",
+              description: "Name of the thought node to attach this reasoning chain to (optional)"
+            },
+            chainName: {
+              type: "string", 
+              description: "Name for the reasoning chain"
+            },
+            description: {
+              type: "string",
+              description: "Description of what this reasoning chain demonstrates or argues"
+            },
+            conclusion: {
+              type: "string",
+              description: "The final conclusion that the reasoning chain leads to"
+            },
+            methodology: {
+              type: "string",
+              enum: ["deductive", "inductive", "abductive", "analogical", "mixed"],
+              description: "The methodological approach used in this reasoning"
+            },
+            confidenceScore: {
+              type: "number",
+              description: "Confidence in the overall reasoning (0.0-1.0)"
+            },
+            domain: {
+              type: "string",
+              description: "The domain or field this reasoning pertains to (optional)"
+            },
+            alternativeConclusionsConsidered: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Other conclusions that were considered but not ultimately accepted (optional)"
+            },
+            steps: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: {
+                    type: "string",
+                    description: "Unique name for this reasoning step"
+                  },
+                  content: {
+                    type: "string",
+                    description: "The actual content of this reasoning step"
+                  },
+                  stepNumber: {
+                    type: "number",
+                    description: "Position of this step in the reasoning chain (1-based)"
+                  },
+                  stepType: {
+                    type: "string",
+                    enum: ["premise", "inference", "evidence", "counterargument", "rebuttal", "conclusion"],
+                    description: "The logical role this step plays in the reasoning"
+                  },
+                  evidenceType: {
+                    type: "string",
+                    enum: ["observation", "fact", "assumption", "inference", "expert_opinion", "statistical_data"],
+                    description: "The type of evidence provided in this step (optional)"
+                  },
+                  supportingReferences: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Names of nodes that support this reasoning step (optional)"
+                  },
+                  confidence: {
+                    type: "number",
+                    description: "Confidence in this particular step (0.0-1.0)"
+                  },
+                  alternatives: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Alternative paths that could be taken at this step (optional)"
+                  },
+                  counterarguments: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Known challenges to this reasoning step (optional)"
+                  },
+                  assumptions: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Underlying assumptions for this step (optional)"
+                  },
+                  previousSteps: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Names of steps that directly lead to this one (for branching) (optional)"
+                  }
+                },
+                required: ["name", "content", "stepNumber", "stepType", "confidence"]
+              },
+              description: "Array of reasoning steps that make up this chain"
+            }
+          },
+          required: ["chainName", "description", "conclusion", "methodology", "confidenceScore", "steps"]
+        }
+      },
+      {
+        name: "get_reasoning_chain",
+        description: "Retrieve a reasoning chain and all its steps by name.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            chainName: {
+              type: "string",
+              description: "Name of the reasoning chain to retrieve"
+            }
+          },
+          required: ["chainName"]
+        }
       }
     ],
-}});
+  }
+});
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
@@ -723,6 +988,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Log the input parameters for debugging
         console.error(`Exploring weighted context for node: ${args.nodeName}, maxDepth: ${args.maxDepth || 2}, minWeight: ${args.minWeight || 0.3}`);
         
+        // Execute the weighted context exploration - this is the primary context exploration tool
         result = await nodeRetriever.exploreContextWeighted(
           args.nodeName as string,
           args.maxDepth as number || 2,
@@ -740,6 +1006,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           entities: Array.isArray(result.entities) ? result.entities : [],
           relations: Array.isArray(result.relations) ? result.relations : []
         };
+
+        // Sort relations by weight in descending order to prioritize strongest connections
+        if (cleanResult.relations.length > 0) {
+          cleanResult.relations.sort((a, b) => {
+            const weightA = (a as any).weight || 0.5;
+            const weightB = (b as any).weight || 0.5;
+            return weightB - weightA; // Descending order
+          });
+        }
 
         // Validate each entity to ensure they have at least required fields
         cleanResult.entities = cleanResult.entities.filter(entity => {
@@ -837,6 +1112,211 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { 
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
       };
+            
+    case "get_temporal_sequence":
+      try {
+        const { nodeName, direction, maxEvents } = args;
+        console.error(`Getting temporal sequence for: ${nodeName}, direction: ${direction || 'both'}, maxEvents: ${maxEvents || 10}`);
+        
+        // Call the getTemporalSequence method
+        result = await nodeRetriever.getTemporalSequence(
+          nodeName as string,
+          direction as 'forward' | 'backward' | 'both' || 'both',
+          maxEvents as number || 10
+        );
+        
+        return { 
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+        };
+      } catch (error) {
+        console.error(`Error in get_temporal_sequence tool: ${error}`);
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            error: `Error getting temporal sequence: ${error.message || error}`,
+            nodeName: args.nodeName
+          }, null, 2) }]
+        };
+      }
+            
+    case "create_reasoning_chain":
+      try {
+        console.error(`Creating reasoning chain: ${args.chainName}`);
+        
+        // Validate required arguments
+        if (!args.chainName || !args.description || !args.conclusion || !args.methodology || args.confidenceScore === undefined || !args.steps || !Array.isArray(args.steps) || args.steps.length === 0) {
+          const missingFields = [];
+          if (!args.chainName) missingFields.push('chainName');
+          if (!args.description) missingFields.push('description');
+          if (!args.conclusion) missingFields.push('conclusion');
+          if (!args.methodology) missingFields.push('methodology');
+          if (args.confidenceScore === undefined) missingFields.push('confidenceScore');
+          if (!args.steps || !Array.isArray(args.steps) || args.steps.length === 0) missingFields.push('steps (must be non-empty array)');
+          
+          const errorMsg = `Missing required fields for reasoning chain: ${missingFields.join(', ')}`;
+          console.error(errorMsg);
+          return { 
+            content: [{ type: "text", text: JSON.stringify({
+              error: errorMsg,
+              received: {
+                hasChainName: Boolean(args.chainName),
+                hasDescription: Boolean(args.description),
+                hasConclusion: Boolean(args.conclusion),
+                hasMethodology: Boolean(args.methodology),
+                hasConfidenceScore: args.confidenceScore !== undefined,
+                hasSteps: Boolean(args.steps && Array.isArray(args.steps) && args.steps.length > 0),
+              }
+            }, null, 2) }]
+          };
+        }
+        
+        // Create the reasoning chain
+        const chain = await nodeCreator.createReasoningChain({
+          name: args.chainName as string,
+          description: args.description as string,
+          conclusion: args.conclusion as string,
+          confidenceScore: args.confidenceScore as number,
+          sourceThought: args.thoughtName as string | undefined,
+          creator: "System",
+          methodology: args.methodology as 'deductive' | 'inductive' | 'abductive' | 'analogical' | 'mixed',
+          domain: args.domain as string | undefined,
+          tags: args.tags as string[] | undefined || [],
+          alternativeConclusionsConsidered: args.alternativeConclusionsConsidered as string[] | undefined
+        });
+        
+        // Validate steps before creating them
+        const validSteps = (args.steps as any[]).filter(step => {
+          if (!step.name || !step.content || step.stepNumber === undefined || !step.stepType || step.confidence === undefined) {
+            const missingStepFields = [];
+            if (!step.name) missingStepFields.push('name');
+            if (!step.content) missingStepFields.push('content');
+            if (step.stepNumber === undefined) missingStepFields.push('stepNumber');
+            if (!step.stepType) missingStepFields.push('stepType');
+            if (step.confidence === undefined) missingStepFields.push('confidence');
+            
+            console.error(`Skipping invalid step: missing fields ${missingStepFields.join(', ')}`);
+            return false;
+          }
+          return true;
+        });
+        
+        if (validSteps.length === 0) {
+          console.error("No valid steps found in the provided data");
+          return { 
+            content: [{ type: "text", text: JSON.stringify({
+              warning: "Chain created but no valid steps found to add",
+              chain: chain
+            }, null, 2) }]
+          };
+        }
+        
+        // Create each reasoning step
+        const steps = [];
+        const stepErrors = [];
+        
+        for (const step of validSteps) {
+          try {
+            const createdStep = await nodeCreator.createReasoningStep({
+              chainName: args.chainName as string,
+              name: step.name as string,
+              content: step.content as string,
+              stepNumber: step.stepNumber as number,
+              stepType: step.stepType as 'premise' | 'inference' | 'evidence' | 'counterargument' | 'rebuttal' | 'conclusion',
+              evidenceType: step.evidenceType as 'observation' | 'fact' | 'assumption' | 'inference' | 'expert_opinion' | 'statistical_data' | undefined,
+              supportingReferences: step.supportingReferences as string[] | undefined,
+              confidence: step.confidence as number,
+              alternatives: step.alternatives as string[] | undefined,
+              counterarguments: step.counterarguments as string[] | undefined,
+              assumptions: step.assumptions as string[] | undefined,
+              previousSteps: step.previousSteps as string[] | undefined
+            });
+            steps.push(createdStep);
+          } catch (stepError) {
+            console.error(`Error creating step ${step.name}:`, stepError);
+            stepErrors.push({
+              stepName: step.name,
+              error: stepError.message || String(stepError)
+            });
+          }
+        }
+        
+        // Return report including any errors
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            message: `Created reasoning chain "${args.chainName}" with ${steps.length} steps${stepErrors.length > 0 ? ` (${stepErrors.length} steps failed)` : ''}`,
+            chain: chain,
+            steps: steps,
+            errors: stepErrors.length > 0 ? stepErrors : undefined
+          }, null, 2) }]
+        };
+      } catch (error) {
+        console.error(`Error creating reasoning chain:`, error);
+        // Provide more detailed error information
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            error: `Error creating reasoning chain: ${error.message || error}`,
+            location: "chain creation",
+            chainName: args.chainName,
+            suggestion: "Check that all required fields are provided and that there are no duplicate node names"
+          }, null, 2) }]
+        };
+      }
+            
+    case "get_reasoning_chain":
+      try {
+        console.error(`Retrieving reasoning chain: ${args.chainName as string}`);
+        
+        // Validate the chain name parameter
+        if (!args.chainName) {
+          return { 
+            content: [{ type: "text", text: JSON.stringify({
+              error: "Missing required parameter: chainName",
+            }, null, 2) }]
+          };
+        }
+        
+        // Get the reasoning chain and its steps
+        const result = await nodeRetriever.getReasoningChain(args.chainName as string);
+        
+        let narrative = "";
+        
+        // Generate a narrative about the reasoning chain
+        try {
+          const narrativeOptions: NarrativeOptions = {
+            detailLevel: 'high',
+            includeIntroduction: true,
+            includeSummary: true
+          };
+          
+          narrative = NarrativeGenerator.generateReasoningChainNarrative(
+            result.chain,
+            result.steps,
+            narrativeOptions
+          );
+          
+          console.error(`Successfully generated narrative for chain "${args.chainName}"`);
+        } catch (narrativeError) {
+          console.error(`Error generating narrative for chain "${args.chainName}":`, narrativeError);
+          narrative = `Error generating narrative: ${narrativeError.message}. The chain and steps data are still available.`;
+        }
+        
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            message: `Retrieved reasoning chain "${args.chainName}" with ${result.steps.length} steps`,
+            chain: result.chain,
+            steps: result.steps,
+            narrative: narrative
+          }, null, 2) }]
+        };
+      } catch (error) {
+        console.error(`Error retrieving reasoning chain:`, error);
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            error: `Error retrieving reasoning chain: ${error.message || error}`,
+            chainName: args.chainName,
+            suggestion: "Check that the reasoning chain exists and that the name is spelled correctly"
+          }, null, 2) }]
+        };
+      }
             
     default:
       throw new Error(`Unknown tool: ${name}`);

@@ -60,6 +60,9 @@ export interface NarrativeOptions {
   highlightUncertainty?: boolean;
   focusEntity?: string;
   maxLength?: number;
+  detailLevel?: 'low' | 'medium' | 'high';
+  includeIntroduction?: boolean;
+  includeSummary?: boolean;
 }
 
 /**
@@ -129,6 +132,20 @@ export class NarrativeGenerator {
       description: 'Template for presenting thoughts and analyses',
       applicableNodeTypes: ['Thought'],
       template: `{{#if title}}{{title}}: {{/if}}{{thoughtContent}}{{#if implications}} The implications include: {{#each implications}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}{{/if}}{{#if thoughtConfidenceScore}} (confidence level: {{thoughtConfidenceScore}}){{/if}}`
+    },
+    {
+      id: 'reasoning-chain',
+      name: 'Reasoning Chain',
+      description: 'Template for presenting reasoning chains and their steps',
+      applicableNodeTypes: ['ReasoningChain'],
+      template: `{{name}} is a reasoning chain that {{description}}. It follows {{a_an}} {{methodology}} approach{{#if domain}} in the domain of {{domain}}{{/if}} and concludes that: {{conclusion}}. The overall confidence in this reasoning is {{confidenceScore}}.`
+    },
+    {
+      id: 'reasoning-step',
+      name: 'Reasoning Step',
+      description: 'Template for presenting individual reasoning steps',
+      applicableNodeTypes: ['ReasoningStep'],
+      template: `Step {{stepNumber}}: {{content}} ({{stepType}}{{#if evidenceType}}, based on {{evidenceType}}{{/if}}, confidence: {{confidence}}){{#if assumptions}}. Assumptions: {{#each assumptions}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}{{/if}}`
     }
   ];
 
@@ -634,5 +651,223 @@ export class NarrativeGenerator {
     if (arousal > 1) return "intense";
     if (arousal > 0.5) return "moderate";
     return "calm";
+  }
+
+  /**
+   * Generates a narrative specifically for a reasoning chain and its steps
+   * 
+   * @param chain The reasoning chain object
+   * @param steps The array of reasoning steps
+   * @param options Options for narrative generation
+   * @returns A generated narrative string describing the reasoning chain
+   */
+  public static generateReasoningChainNarrative(
+    chain: any, 
+    steps: any[], 
+    options: NarrativeOptions = {}
+  ): string {
+    // Set default options
+    const defaultOptions: NarrativeOptions = {
+      format: 'detailed',
+      audience: 'general',
+      includeEmotionalDimensions: false,
+      highlightUncertainty: true,
+      maxLength: 5000,
+      detailLevel: 'high',
+      includeIntroduction: true,
+      includeSummary: true
+    };
+
+    const finalOptions = { ...defaultOptions, ...options };
+    
+    let narrative = '';
+    
+    // Add introduction if requested
+    if (finalOptions.includeIntroduction) {
+      narrative += `# ${chain.name}\n\n`;
+      narrative += `## Overview\n`;
+      narrative += `This reasoning chain explores ${chain.description}. `;
+      narrative += `It follows a ${chain.methodology} methodology`;
+      
+      if (chain.domain) {
+        narrative += ` in the domain of ${chain.domain}`;
+      }
+      
+      narrative += ` and arrives at the conclusion: "${chain.conclusion}". `;
+      narrative += `The overall confidence in this reasoning is ${NarrativeGenerator.formatConfidence(chain.confidenceScore)}.\n\n`;
+      
+      if (chain.sourceThought) {
+        narrative += `This reasoning chain is associated with the thought: "${chain.sourceThought}".\n\n`;
+      }
+      
+      if (chain.alternativeConclusionsConsidered && chain.alternativeConclusionsConsidered.length > 0) {
+        narrative += `## Alternative Conclusions Considered\n`;
+        chain.alternativeConclusionsConsidered.forEach((alt: string, i: number) => {
+          narrative += `${i+1}. ${alt}\n`;
+        });
+        narrative += '\n';
+      }
+    }
+    
+    // Add reasoning steps
+    narrative += `## Reasoning Process\n\n`;
+    
+    // Group steps by type for better organization
+    const premiseSteps = steps.filter(s => s.stepType === 'premise');
+    const evidenceSteps = steps.filter(s => s.stepType === 'evidence');
+    const inferenceSteps = steps.filter(s => s.stepType === 'inference');
+    const counterargumentSteps = steps.filter(s => s.stepType === 'counterargument');
+    const rebuttalSteps = steps.filter(s => s.stepType === 'rebuttal');
+    const conclusionSteps = steps.filter(s => s.stepType === 'conclusion');
+    
+    // Add premises
+    if (premiseSteps.length > 0) {
+      narrative += `### Premises\n`;
+      premiseSteps.forEach(step => {
+        narrative += NarrativeGenerator.formatReasoningStep(step, finalOptions);
+      });
+      narrative += '\n';
+    }
+    
+    // Add evidence
+    if (evidenceSteps.length > 0) {
+      narrative += `### Evidence\n`;
+      evidenceSteps.forEach(step => {
+        narrative += NarrativeGenerator.formatReasoningStep(step, finalOptions);
+      });
+      narrative += '\n';
+    }
+    
+    // Add inferences
+    if (inferenceSteps.length > 0) {
+      narrative += `### Inferences\n`;
+      inferenceSteps.forEach(step => {
+        narrative += NarrativeGenerator.formatReasoningStep(step, finalOptions);
+      });
+      narrative += '\n';
+    }
+    
+    // Add counterarguments and rebuttals together
+    if (counterargumentSteps.length > 0 || rebuttalSteps.length > 0) {
+      narrative += `### Counterarguments and Rebuttals\n`;
+      
+      // Pair counterarguments with their rebuttals when possible
+      counterargumentSteps.forEach(counter => {
+        narrative += NarrativeGenerator.formatReasoningStep(counter, finalOptions);
+        
+        // Find rebuttals that reference this counterargument
+        const relatedRebuttals = rebuttalSteps.filter(reb => 
+          reb.previousSteps && reb.previousSteps.includes(counter.name)
+        );
+        
+        if (relatedRebuttals.length > 0) {
+          relatedRebuttals.forEach(rebuttal => {
+            narrative += `   └─ Rebuttal: ${NarrativeGenerator.formatReasoningStep(rebuttal, finalOptions, false)}`;
+          });
+        }
+      });
+      
+      // Add orphaned rebuttals (those not connected to a specific counterargument)
+      const orphanedRebuttals = rebuttalSteps.filter(reb => 
+        !counterargumentSteps.some(counter => 
+          reb.previousSteps && reb.previousSteps.includes(counter.name)
+        )
+      );
+      
+      if (orphanedRebuttals.length > 0) {
+        orphanedRebuttals.forEach(rebuttal => {
+          narrative += NarrativeGenerator.formatReasoningStep(rebuttal, finalOptions);
+        });
+      }
+      
+      narrative += '\n';
+    }
+    
+    // Add conclusion
+    if (conclusionSteps.length > 0) {
+      narrative += `### Conclusion\n`;
+      conclusionSteps.forEach(step => {
+        narrative += NarrativeGenerator.formatReasoningStep(step, finalOptions);
+      });
+      narrative += '\n';
+    }
+    
+    // Add summary if requested
+    if (finalOptions.includeSummary) {
+      narrative += `## Summary\n`;
+      narrative += `This ${chain.methodology} reasoning chain`;
+      
+      if (premiseSteps.length > 0) {
+        narrative += ` begins with ${premiseSteps.length} premise${premiseSteps.length !== 1 ? 's' : ''}`;
+      }
+      
+      if (evidenceSteps.length > 0) {
+        narrative += `, incorporates ${evidenceSteps.length} piece${evidenceSteps.length !== 1 ? 's' : ''} of evidence`;
+      }
+      
+      if (inferenceSteps.length > 0) {
+        narrative += `, makes ${inferenceSteps.length} inference${inferenceSteps.length !== 1 ? 's' : ''}`;
+      }
+      
+      if (counterargumentSteps.length > 0) {
+        narrative += `, addresses ${counterargumentSteps.length} counterargument${counterargumentSteps.length !== 1 ? 's' : ''}`;
+      }
+      
+      narrative += `, and concludes that "${chain.conclusion}" with ${NarrativeGenerator.formatConfidence(chain.confidenceScore)} confidence.\n`;
+    }
+    
+    // Ensure we don't exceed the maximum length
+    if (finalOptions.maxLength && narrative.length > finalOptions.maxLength) {
+      narrative = narrative.substring(0, finalOptions.maxLength - 3) + "...";
+    }
+    
+    return narrative;
+  }
+
+  // Helper functions for reasoning chain narrative generation
+  private static formatReasoningStep(step: any, options: NarrativeOptions, includeLineBreak = true): string {
+    let result = '';
+    
+    if (step.stepNumber) {
+      result += `**Step ${step.stepNumber}**: `;
+    }
+    
+    result += `${step.content}`;
+    
+    if (options.detailLevel === 'high') {
+      result += ` _(${step.stepType}`;
+      
+      if (step.evidenceType) {
+        result += `, ${step.evidenceType}`;
+      }
+      
+      result += `, confidence: ${NarrativeGenerator.formatConfidence(step.confidence)})_`;
+      
+      if (step.supportingReferences && step.supportingReferences.length > 0) {
+        result += `\n   References: ${step.supportingReferences.join(', ')}`;
+      }
+      
+      if (step.assumptions && step.assumptions.length > 0) {
+        result += `\n   Assumptions: ${step.assumptions.join(', ')}`;
+      }
+      
+      if (step.counterarguments && step.counterarguments.length > 0) {
+        result += `\n   Potential counterarguments: ${step.counterarguments.join(', ')}`;
+      }
+    }
+    
+    if (includeLineBreak) {
+      result += '\n';
+    }
+    
+    return result;
+  }
+
+  private static formatConfidence(score: number): string {
+    if (score >= 0.9) return 'very high';
+    if (score >= 0.7) return 'high';
+    if (score >= 0.5) return 'moderate';
+    if (score >= 0.3) return 'low';
+    return 'very low';
   }
 } 
