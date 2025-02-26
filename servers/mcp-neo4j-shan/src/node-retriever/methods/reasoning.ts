@@ -108,63 +108,6 @@ export async function getReasoningChain(
 }
 
 /**
- * Retrieves reasoning chains associated with a thought
- * @param neo4jDriver - Neo4j driver instance
- * @param thoughtName - Name of the thought
- * @returns The thought and its chains
- */
-export async function getReasoningChainsForThought(
-  neo4jDriver: Neo4jDriver,
-  thoughtName: string
-): Promise<{thought: any, chains: any[]}> {
-  const session = neo4jDriver.session();
-  
-  try {
-    console.error(`Retrieving reasoning chains for thought: ${thoughtName}`);
-    
-    // Get the thought and all its reasoning chains
-    const result = await session.executeRead(tx => tx.run(`
-      // Match the thought
-      MATCH (thought:Thought:Memory {name: $thoughtName})
-      
-      // Get all reasoning chains attached to this thought
-      OPTIONAL MATCH (thought)-[:HAS_REASONING]->(chain:ReasoningChain)
-      
-      // Get basic step count for each chain
-      OPTIONAL MATCH (chain)-[rel:CONTAINS_STEP]->(step:ReasoningStep)
-      WITH thought, chain, count(step) as stepCount
-      
-      // Return thought and collected chains with their step counts
-      RETURN thought, collect({chain: chain, stepCount: stepCount}) as chains
-    `, { thoughtName }));
-    
-    if (result.records.length === 0) {
-      throw new Error(`Thought ${thoughtName} not found`);
-    }
-    
-    const record = result.records[0];
-    const thought = record.get('thought').properties;
-    
-    // Process the chains
-    const chains = record.get('chains')
-      .filter((chainObj: any) => chainObj.chain !== null) // Filter out any null chains
-      .map((chainObj: any) => {
-        return {
-          ...chainObj.chain.properties,
-          stepCount: chainObj.stepCount
-        };
-      });
-    
-    return { thought, chains };
-  } catch (error) {
-    console.error(`Error retrieving reasoning chains for thought:`, error);
-    throw error;
-  } finally {
-    await session.close();
-  }
-}
-
-/**
  * Retrieves details for a reasoning step
  * @param neo4jDriver - Neo4j driver instance
  * @param stepName - Name of the step
