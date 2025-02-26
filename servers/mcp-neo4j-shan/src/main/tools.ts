@@ -45,8 +45,8 @@ export function setupTools(
       }
     },
     {
-      name: "create_nodes",
-      description: "Create multiple nodes of various types in the knowledge graph",
+      name: "create_knowledge_graph",
+      description: "Create multiple nodes and relations in the knowledge graph in a single operation",
       inputSchema: {
         type: "object",
         properties: {
@@ -61,17 +61,7 @@ export function setupTools(
               },
               required: ["name", "entityType"]
             }
-          }
-        },
-        required: ["nodes"]
-      }
-    },
-    {
-      name: "create_relations",
-      description: "Create relationships between nodes in the knowledge graph",
-      inputSchema: {
-        type: "object",
-        properties: {
+          },
           relations: {
             type: "array",
             items: {
@@ -86,7 +76,7 @@ export function setupTools(
             }
           }
         },
-        required: ["relations"]
+        required: ["nodes"]
       }
     },
     {
@@ -188,22 +178,6 @@ export function setupTools(
         }
         break;
 
-      case "create_nodes":
-        try {
-          result = await nodeCreator.createEntities(args.nodes as Entity[]);
-        } catch (error) {
-          result = `Error creating nodes: ${error.message}`;
-        }
-        break;
-
-      case "create_relations":
-        try {
-          result = await nodeCreator.createRelations(args.relations as Relation[]);
-        } catch (error) {
-          result = `Error creating relations: ${error.message}`;
-        }
-        break;
-
       case "get_temporal_sequence":
         try {
           const startNodeName = args.startNodeName as string;
@@ -267,6 +241,22 @@ export function setupTools(
           };
         } catch (error) {
           result = `Error retrieving reasoning chain: ${error.message}`;
+        }
+        break;
+
+      case "create_knowledge_graph":
+        try {
+          const nodes = args.nodes as Entity[] || [];
+          const relations = args.relations as Relation[] || [];
+          
+          if (nodes.length === 0) {
+            result = { success: false, message: "No nodes provided to create" };
+            break;
+          }
+          
+          result = await nodeCreator.createNodesAndRelations(nodes, relations);
+        } catch (error) {
+          result = `Error creating knowledge graph: ${error.message}`;
         }
         break;
 

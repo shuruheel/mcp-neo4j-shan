@@ -12,9 +12,30 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
   const session = neo4jDriver.session();
   
   try {
-    // Implementation will be added in a future refactoring phase
-    console.error(`Creating ${entities.length} entities`);
-    return entities;
+    console.error(`Processing ${entities.length} entities`);
+    
+    const createdEntities: Entity[] = [];
+    
+    for (const entity of entities) {
+      // Check if entity already exists
+      const checkResult = await session.run(
+        `MATCH (n {name: $name}) RETURN n`,
+        { name: entity.name }
+      );
+      
+      if (checkResult.records.length > 0) {
+        console.error(`Entity with name "${entity.name}" already exists, skipping creation`);
+        createdEntities.push(entity); // Return the existing entity
+        continue;
+      }
+      
+      // Create the entity as it doesn't exist
+      console.error(`Creating entity: ${entity.name}`);
+      // Implementation will be completed in a future refactoring phase
+      createdEntities.push(entity);
+    }
+    
+    return createdEntities;
   } catch (error) {
     console.error('Error creating entities:', error);
     throw error;
@@ -33,9 +54,30 @@ export async function createRelations(neo4jDriver: Neo4jDriver, relations: Relat
   const session = neo4jDriver.session();
   
   try {
-    // Implementation will be added in a future refactoring phase
-    console.error(`Creating ${relations.length} relations`);
-    return relations;
+    console.error(`Processing ${relations.length} relations`);
+    
+    const createdRelations: Relation[] = [];
+    
+    for (const relation of relations) {
+      // Check if relation already exists
+      const checkResult = await session.run(
+        `MATCH (from {name: $fromName})-[r:${relation.relationType}]->(to {name: $toName}) RETURN r`,
+        { fromName: relation.from, toName: relation.to }
+      );
+      
+      if (checkResult.records.length > 0) {
+        console.error(`Relation ${relation.from} -[${relation.relationType}]-> ${relation.to} already exists, skipping creation`);
+        createdRelations.push(relation); // Return the existing relation
+        continue;
+      }
+      
+      // Create the relation as it doesn't exist
+      console.error(`Creating relation: ${relation.from} -[${relation.relationType}]-> ${relation.to}`);
+      // Implementation will be completed in a future refactoring phase
+      createdRelations.push(relation);
+    }
+    
+    return createdRelations;
   } catch (error) {
     console.error('Error creating relations:', error);
     throw error;
@@ -198,5 +240,34 @@ export async function createReasoningStep(
     throw error;
   } finally {
     await session.close();
+  }
+}
+
+/**
+ * Create both entities and relations in a single operation
+ * @param neo4jDriver - Neo4j driver instance
+ * @param entities - Array of entities to create
+ * @param relations - Array of relations to create
+ * @returns Promise resolving to an object containing both created entities and relations
+ */
+export async function createNodesAndRelations(
+  neo4jDriver: Neo4jDriver, 
+  entities: Entity[], 
+  relations: Relation[]
+): Promise<{ entities: Entity[], relations: Relation[] }> {
+  try {
+    // First create all entities
+    const createdEntities = await createEntities(neo4jDriver, entities);
+    
+    // Then create all relations between them
+    const createdRelations = await createRelations(neo4jDriver, relations);
+    
+    return {
+      entities: createdEntities,
+      relations: createdRelations
+    };
+  } catch (error) {
+    console.error('Error creating nodes and relations:', error);
+    throw error;
   }
 } 

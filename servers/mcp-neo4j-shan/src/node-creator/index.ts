@@ -5,6 +5,7 @@ export { Neo4jCreator } from './creator.js';
 export { 
   createEntities, 
   createRelations,
+  createNodesAndRelations,
   searchNodes, 
   createThought,
   createReasoningChain,

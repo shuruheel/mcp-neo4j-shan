@@ -4,6 +4,7 @@ import { loadGraph, saveGraph } from './utils.js';
 import { 
   createEntities as createEntitiesImpl, 
   createRelations as createRelationsImpl,
+  createNodesAndRelations as createNodesAndRelationsImpl,
   searchNodes as searchNodesImpl,
   createThought as createThoughtImpl,
   createReasoningChain as createReasoningChainImpl,
@@ -138,5 +139,15 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
     previousSteps?: string[];
   }): Promise<Entity> {
     return createReasoningStepImpl(this.neo4jDriver, stepData);
+  }
+
+  /**
+   * Create both entities and relations in a single operation
+   * @param entities - Array of entities to create
+   * @param relations - Array of relations to create
+   * @returns Promise resolving to an object containing both created entities and relations
+   */
+  async createNodesAndRelations(entities: Entity[], relations: Relation[]): Promise<{ entities: Entity[], relations: Relation[] }> {
+    return createNodesAndRelationsImpl(this.neo4jDriver, entities, relations);
   }
 } 
