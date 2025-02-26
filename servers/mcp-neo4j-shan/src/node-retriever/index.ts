@@ -5,8 +5,7 @@ import { KnowledgeGraph, Entity } from '../types/index.js';
 import { 
   robustSearch,
   searchNodes,
-  searchNodesWithFuzzyMatching,
-  processSearchResults
+  searchNodesWithFuzzyMatching
 } from './methods/search.js';
 
 import {
@@ -20,7 +19,6 @@ import {
 
 import {
   getReasoningChain,
-  getReasoningChainsForThought,
   getReasoningStepDetails,
   findReasoningChainsWithSimilarConclusion,
   getReasoningAnalytics
@@ -200,19 +198,6 @@ export class Neo4jRetriever {
   }> {
     return getReasoningChain(this.neo4jDriver, chainName);
   }
-
-  /**
-   * Gets reasoning chains for a thought
-   * @param thoughtName - Name of the thought
-   * @returns The thought and its chains
-   */
-  async getReasoningChainsForThought(thoughtName: string): Promise<{
-    thought: any,
-    chains: any[]
-  }> {
-    return getReasoningChainsForThought(this.neo4jDriver, thoughtName);
-  }
-
   /**
    * Gets details for a reasoning step
    * @param stepName - Name of the step
