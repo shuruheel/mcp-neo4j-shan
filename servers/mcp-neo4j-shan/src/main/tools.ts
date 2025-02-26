@@ -5,6 +5,17 @@ import { Neo4jRetriever } from "../node-retriever/index.js";
 import { NarrativeGenerator } from "../narrative-generator/index.js";
 import { Entity, Relation } from "../types/index.js";
 
+// Import tool descriptions from the old implementation
+const TOOL_DESCRIPTIONS = {
+  "explore_weighted_context": "The PRIMARY tool for exploring the knowledge graph context around a node. Uses relationship weights to prioritize the most important connections, providing an intelligent view focused on the strongest and most relevant relationships first. Particularly useful for understanding complex networks by highlighting significant connections based on their weights.",
+  "explore_context": "DEPRECATED - Use explore_weighted_context instead. This tool will be removed in a future version. Explores the knowledge graph context around a node without considering relationship weights.",
+  "create_nodes": "WHEN the user specifically asks for the knowledge graph to be updated, create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, or physical objects (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge')\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch')\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability')\n- ScientificInsight: Research findings, experimental results, or scientific claims with supporting evidence (e.g., 'Greenhouse Effect', 'Quantum Entanglement')\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion')\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X')\n\nEach node type has specific cognitive attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
+  "create_relations": "Whenever you create new nodes, always create any relevant new relations between nodes in the knowledge graph. Relations should be semantically meaningful and use active voice. IMPORTANT: Always include a brief explanation (context field) for each relationship that describes how and why the nodes are connected (30-50 words).\n\nExample relations between different node types:\n- Entity -> Concept: ADVOCATES, SUPPORTS, UNDERSTANDS\n- Entity -> Event: PARTICIPATED_IN, ORGANIZED, WITNESSED\n- Concept -> Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS\n- Event -> ScientificInsight: LED_TO, DISPROVED, REINFORCED\n- ScientificInsight -> Law: SUPPORTS, CHALLENGES, REFINES\n\nWhen appropriate, include a confidence score (0.0-1.0) and citation sources for the relationship.",
+  "get_temporal_sequence": "Visualize temporal sequences of related events and concepts, showing how they unfold over time. This helps understand causal and chronological relationships between nodes in the knowledge graph. The tool identifies time-bound relationships and provides a chronologically ordered sequence of connected events, scientific insights, and concepts.",
+  "create_reasoning_chain": "Create a new reasoning chain with multiple reasoning steps that represent a chain of logical reasoning. This connects a thought to its underlying logical structure.",
+  "get_reasoning_chain": "Retrieve a reasoning chain and all its steps by name."
+};
+
 /**
  * Sets up all tools for the server
  * @param server - Server instance
@@ -24,7 +35,7 @@ export function setupTools(
   const tools = [
     {
       name: "explore_weighted_context",
-      description: "Explore the context around a node with weighted relationships, prioritizing the most important cognitive connections first",
+      description: TOOL_DESCRIPTIONS["explore_weighted_context"],
       inputSchema: {
         type: "object",
         properties: {
@@ -46,7 +57,7 @@ export function setupTools(
     },
     {
       name: "create_nodes",
-      description: "Create multiple nodes of various types in the knowledge graph",
+      description: TOOL_DESCRIPTIONS["create_nodes"],
       inputSchema: {
         type: "object",
         properties: {
@@ -68,7 +79,7 @@ export function setupTools(
     },
     {
       name: "create_relations",
-      description: "Create relationships between nodes in the knowledge graph",
+      description: TOOL_DESCRIPTIONS["create_relations"],
       inputSchema: {
         type: "object",
         properties: {
@@ -91,7 +102,7 @@ export function setupTools(
     },
     {
       name: "get_temporal_sequence",
-      description: "Get a temporal sequence of events from a starting node",
+      description: TOOL_DESCRIPTIONS["get_temporal_sequence"],
       inputSchema: {
         type: "object",
         properties: {
@@ -104,7 +115,7 @@ export function setupTools(
     },
     {
       name: "create_reasoning_chain",
-      description: "Create a reasoning chain with connected steps",
+      description: TOOL_DESCRIPTIONS["create_reasoning_chain"],
       inputSchema: {
         type: "object",
         properties: {
@@ -120,7 +131,7 @@ export function setupTools(
     },
     {
       name: "get_reasoning_chain",
-      description: "Get a reasoning chain and its steps",
+      description: TOOL_DESCRIPTIONS["get_reasoning_chain"],
       inputSchema: {
         type: "object",
         properties: {
