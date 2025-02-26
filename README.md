@@ -4,9 +4,9 @@ This repository contains a collection of MCP Clients and Servers that enable LLM
 
 ## Servers
 
-### `mcp-neo4j-shan` - knowledge graph memory stored in Neo4j with node types and relations
+### `mcp-neo4j-shan` 
 
-A sophisticated knowledge graph memory system that stores interconnected information with rich semantic structure.
+A sophisticated knowledge graph memory system that stores interconnected information with rich semantic structure using Neo4j.
 
 #### Key Features
 
