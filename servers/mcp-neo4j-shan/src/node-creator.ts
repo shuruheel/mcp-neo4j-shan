@@ -6,6 +6,14 @@ import neo4j, { Integer, Node, Relationship, Driver as Neo4jDriver, DateTime } f
 
 import { KnowledgeGraphMemory, Entity, KnowledgeGraph, Relation } from "@neo4j/graphrag-memory";
 
+// Add the RelationshipCategory enum
+export enum RelationshipCategory {
+  HIERARCHICAL = 'hierarchical', // parent-child, category-instance
+  LATERAL = 'lateral',           // similarity, contrast, analogy
+  TEMPORAL = 'temporal',         // before-after, causes-results
+  COMPOSITIONAL = 'compositional' // part-whole, component-system
+}
+
 // Base interface for all node types
 export interface BaseNode {
   name: string;
@@ -125,6 +133,12 @@ export interface EnhancedRelation extends Relation {
   confidenceScore?: number;  // Added field for confidence scoring
   sources?: string[];  // Added field for citation sources
   weight?: number;     // Weight of the relationship (0.0-1.0), used for traversal prioritization
+  
+  // New cognitive enhancement fields
+  contextType?: 'hierarchical' | 'associative' | 'causal' | 'temporal' | 'analogical';
+  contextStrength?: number; // 0.0-1.0 indicating how strong this particular context is
+  memoryAids?: string[]; // Phrases or cues that help recall this relationship
+  relationshipCategory?: RelationshipCategory; // Categorization of relationship type
 }
 
 export type EntityRelationship = Relationship<Integer, Relation>
@@ -605,7 +619,13 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
                                        toType: $toNodeType,
                                        context: $context,
                                        confidenceScore: $confidenceScore,
-                                       sources: $sources
+                                       sources: $sources,
+                                       weight: $weight,
+                                       // New cognitive enhancement fields
+                                       contextType: $contextType,
+                                       contextStrength: $contextStrength,
+                                       memoryAids: $memoryAids,
+                                       relationshipCategory: $relationshipCategory
                                      }, to, {})
           YIELD rel
           RETURN rel
@@ -617,7 +637,13 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
           toNodeType: toNodeType,
           context: (enhancedRelation as any).context || null,
           confidenceScore: (enhancedRelation as any).confidenceScore || null,
-          sources: (enhancedRelation as any).sources || []
+          sources: (enhancedRelation as any).sources || [],
+          weight: (enhancedRelation as any).weight || null,
+          // New cognitive enhancement fields
+          contextType: (enhancedRelation as any).contextType || null,
+          contextStrength: (enhancedRelation as any).contextStrength || null,
+          memoryAids: (enhancedRelation as any).memoryAids || [],
+          relationshipCategory: (enhancedRelation as any).relationshipCategory || null
         }));
         
         if (result.records.length > 0) {

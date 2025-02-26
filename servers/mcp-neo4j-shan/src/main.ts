@@ -22,8 +22,8 @@ const __dirname = path.dirname(__filename);
 // const args = process.argv.slice(2);
 
 const neo4jDriver = connectToNeo4j(
-  'neo4j+s://x.databases.neo4j.io',
-  Neo4jAuth.basic('neo4j', 'pwd')
+  'neo4j+s://9df4bc56.databases.neo4j.io',
+  Neo4jAuth.basic('neo4j', 'jrOZqvLnVYUQ7OF0JdmuOo4PqSlbGfvD50HXVXZrmEE')
 )
 
 // Create instances for node creation and retrieval
@@ -190,6 +190,18 @@ const TOOL_PROMPTS = {
   - weight: Number between 0.0-1.0 indicating the strength/importance of the relationship
   - sources: Array of citation sources
   
+  Cognitive enhancement fields (based on cognitive science principles):
+  - contextType: The type of context this relationship represents ('hierarchical', 'associative', 'causal', 'temporal', 'analogical')
+  - contextStrength: How strong this particular context is (0.0-1.0)
+  - memoryAids: Phrases or cues that help recall this relationship
+  - relationshipCategory: Categorization of the relationship type ('hierarchical', 'lateral', 'temporal', 'compositional')
+  
+  Guidelines for relationship categories:
+  - HIERARCHICAL: Parent-child relationships, category-instance, is-a, taxonomic structures
+  - LATERAL: Similarity relationships, contrasts, analogies, associations
+  - TEMPORAL: Before-after relationships, causes-results, sequences
+  - COMPOSITIONAL: Part-whole relationships, component-system, contains/contained
+  
   Guidelines for weights:
   - Higher weights (0.8-1.0): Direct, strong, and crucial relationships (e.g., defining characteristics, direct causation)
   - Medium weights (0.4-0.7): Important but not defining relationships (e.g., significant influences, correlations)
@@ -232,6 +244,31 @@ const TOOL_PROMPTS = {
     * thoughts: Array of related thought names
     
   Focus on extracting cognitive dimensions naturally from context rather than asking the user directly. Use linguistic cues, semantic analysis, and contextual understanding to determine these values.`,
+
+  "get_temporal_sequence": `You are a temporal sequence visualization assistant. This tool helps users understand how events, concepts, and insights unfold over time by retrieving temporally connected nodes from the knowledge graph.
+
+  When presenting temporal sequence results:
+  1. Organize events chronologically, using either explicit dates when available or implicit sequence when dates are missing
+  2. Highlight cause-and-effect relationships between events (CAUSED, RESULTED_IN relationships)
+  3. Emphasize the temporal flow with appropriate transition phrases
+  4. Identify key turning points or pivotal events in the sequence
+  5. Note any significant time gaps or compression in the timeline
+  
+  Input parameters:
+  - nodeName (required): The name of the node to start the temporal sequence from
+  - direction (optional): 
+    * "forward" - show events that came after the starting node
+    * "backward" - show events that came before the starting node
+    * "both" (default) - show events in both directions
+  - maxEvents (optional): Maximum number of events to include (default: 10)
+  
+  This tool is particularly useful for:
+  - Understanding historical developments and their causal relationships
+  - Tracking the evolution of concepts over time
+  - Visualizing cause-and-effect chains in complex scenarios
+  - Creating narrative structures from interconnected events
+  
+  Present the results as a coherent narrative that follows temporal progression, making it easier for users to understand how events and concepts are connected through time.`
 };
 
 // Define the PROMPTS constant that's used in the GetPromptRequestSchema handler
@@ -500,6 +537,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     items: { type: "string" },
                     description: "Citation sources supporting this relationship" 
                   },
+                  // New cognitive enhancement fields
+                  contextType: { 
+                    type: "string", 
+                    enum: ["hierarchical", "associative", "causal", "temporal", "analogical"],
+                    description: "The type of context this relationship represents"
+                  },
+                  contextStrength: { 
+                    type: "number", 
+                    description: "How strong this particular context is (0.0-1.0)"
+                  },
+                  memoryAids: { 
+                    type: "array", 
+                    items: { type: "string" },
+                    description: "Phrases or cues that help recall this relationship"
+                  },
+                  relationshipCategory: {
+                    type: "string",
+                    enum: ["hierarchical", "lateral", "temporal", "compositional"],
+                    description: "Categorization of the relationship type"
+                  }
                 },
                 required: ["from", "to", "relationType"],
               },
@@ -586,6 +643,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ["title", "thoughtContent"],
+        },
+      },
+      {
+        name: "get_temporal_sequence",
+        description: "Visualize temporal sequences of related events and concepts, showing how they unfold over time. This helps understand causal and chronological relationships between nodes in the knowledge graph. The tool identifies time-bound relationships and provides a chronologically ordered sequence of connected events, scientific insights, and concepts.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeName: { 
+              type: "string", 
+              description: "The name of the node to start the temporal sequence from" 
+            },
+            direction: { 
+              type: "string", 
+              enum: ["forward", "backward", "both"],
+              description: "Direction of temporal sequence: 'forward' (later events), 'backward' (earlier events), or 'both'",
+              default: "both"
+            },
+            maxEvents: { 
+              type: "number", 
+              description: "Maximum number of events to include in the sequence",
+              default: 10
+            }
+          },
+          required: ["nodeName"],
         },
       }
     ],
@@ -837,6 +919,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { 
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
       };
+            
+    case "get_temporal_sequence":
+      try {
+        const { nodeName, direction, maxEvents } = args;
+        console.error(`Getting temporal sequence for: ${nodeName}, direction: ${direction || 'both'}, maxEvents: ${maxEvents || 10}`);
+        
+        // Call the getTemporalSequence method
+        result = await nodeRetriever.getTemporalSequence(
+          nodeName as string,
+          direction as 'forward' | 'backward' | 'both' || 'both',
+          maxEvents as number || 10
+        );
+        
+        return { 
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+        };
+      } catch (error) {
+        console.error(`Error in get_temporal_sequence tool: ${error}`);
+        return { 
+          content: [{ type: "text", text: JSON.stringify({
+            error: `Error getting temporal sequence: ${error.message || error}`,
+            nodeName: args.nodeName
+          }, null, 2) }]
+        };
+      }
             
     default:
       throw new Error(`Unknown tool: ${name}`);
