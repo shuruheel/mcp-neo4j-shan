@@ -1,24 +1,16 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { driver as connectToNeo4j, auth as Neo4jAuth } from 'neo4j-driver';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
 import { Neo4jCreator } from '../node-creator/index.js';
 import { Neo4jRetriever } from '../node-retriever/index.js';
 import { NarrativeGenerator } from '../narrative-generator/index.js';
 import { setupTools } from './tools.js';
 import { SYSTEM_PROMPT, TOOL_PROMPTS } from './prompts.js';
-
-// Load environment variables from .env file
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 /**
  * Main function to initialize and start the server
@@ -28,8 +20,8 @@ async function main() {
   
   // Initialize Neo4j connection
   const neo4jDriver = connectToNeo4j(
-    'neo4j+s://9df4bc56.databases.neo4j.io',
-    Neo4jAuth.basic('neo4j', 'jrOZqvLnVYUQ7OF0JdmuOo4PqSlbGfvD50HXVXZrmEE')
+    'neo4j+s://x.databases.neo4j.io',
+    Neo4jAuth.basic('neo4j', 'pwd')
   )
   
   console.error('Connected to Neo4j database');
