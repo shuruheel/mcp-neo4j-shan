@@ -38,23 +38,24 @@ A sophisticated knowledge graph memory system that stores interconnected informa
 - **Semantic Relationships**: Creates meaningful connections between nodes with:
   - Active voice relationship types (e.g., ADVOCATES, PARTICIPATED_IN)
   - Directional relationships with contextual explanations
-  - Confidence scores and citation sources for academic claims
+  - Relationship weights indicating importance (0.0-1.0)
+  - Relationship categories (hierarchical, lateral, temporal, compositional)
+  - Memory aids and context types for enhanced recall
 
 - **Available Tools**:
   - **Graph Exploration**:
-    - `explore_context`: Reveals the neighborhood around nodes with rich contextual information
-    - `explore_weighted_context`: Prioritizes important connections based on relationship weights
-    - `robust_search`: Performs multi-strategy searches with fallback options
+    - `explore_weighted_context`: The PRIMARY tool for exploring the knowledge graph, prioritizing important connections based on relationship weights
+    - `explore_context`: (Deprecated) Basic context exploration without weight prioritization
+    - `get_temporal_sequence`: Visualizes how events and concepts unfold over time
   
   - **Knowledge Creation**:
     - `create_nodes`: Adds new information to the graph with specialized node types
     - `create_relations`: Establishes meaningful connections between nodes with metadata
     - `create_thoughts`: Captures AI analysis and insights about the conversation
   
-  - **Search and Analysis**:
-    - `search_nodes`: Finds nodes matching specific text patterns
-    - `search_nodes_with_fuzzy_matching`: Uses fuzzy text matching for more flexible searches
-    - `generate_narrative`: Creates coherent narratives based on graph knowledge
+  - **Reasoning and Analysis**:
+    - `create_reasoning_chain`: Creates structured representations of logical reasoning with well-defined steps
+    - `get_reasoning_chain`: Retrieves reasoning chains with their steps and generates narratives
 
 #### Use Cases
 
@@ -63,6 +64,8 @@ A sophisticated knowledge graph memory system that stores interconnected informa
 - Capturing complex relationships between concepts, entities, and events
 - Preserving context with emotional and cognitive dimensions
 - Enabling sophisticated knowledge exploration and retrieval
+- Documenting chains of reasoning with explicit logical steps
+- Visualizing temporal sequences and causal relationships
 
 ## Contributing
 
