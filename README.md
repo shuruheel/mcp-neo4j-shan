@@ -14,17 +14,19 @@ This lets you use Claude Desktop, or any MCP Client, to use natural language to 
 
 ### `mcp-neo4j-shan` - knowledge graph memory stored in Neo4j with node types and relations
 
-A sophisticated knowledge graph memory system that stores interconnected information with rich semantic structure. This server enables LLMs to build, maintain, and explore a comprehensive knowledge graph with cognitive neuroscience-inspired features.
+A sophisticated knowledge graph memory system that stores interconnected information with rich semantic structure.
 
 #### Key Features
 
-- **Rich Node Type System**: Supports six specialized node types, each with tailored attributes:
+- **Rich Node Type System**: Supports eight specialized node types, each with tailored attributes:
   - **Entity**: People, organizations, products, physical objects
   - **Event**: Time-bound occurrences with temporal attributes
   - **Concept**: Abstract ideas, theories, principles, frameworks
   - **ScientificInsight**: Research findings with supporting evidence
   - **Law**: Established principles, rules, or regularities
   - **Thought**: Analyses, interpretations, or reflections
+  - **ReasoningChain**: Structured representations of logical reasoning
+  - **ReasoningStep**: Individual steps in a reasoning process
 
 - **Cognitive Dimensions**: Captures emotional and cognitive aspects of information:
   - Emotional valence and arousal ratings
@@ -32,6 +34,8 @@ A sophisticated knowledge graph memory system that stores interconnected informa
   - Evidence strength for scientific insights
   - Causal relationships between events
   - Confidence scores for thoughts and relations
+  - Metaphorical mappings for concepts
+  - Formal notations for reasoning steps
 
 - **Semantic Relationships**: Creates meaningful connections between nodes with:
   - Active voice relationship types (e.g., ADVOCATES, PARTICIPATED_IN)
@@ -49,7 +53,6 @@ A sophisticated knowledge graph memory system that stores interconnected informa
   - **Knowledge Creation**:
     - `create_nodes`: Adds new information to the graph with specialized node types
     - `create_relations`: Establishes meaningful connections between nodes with metadata
-    - `create_thoughts`: Captures AI analysis and insights about the conversation
   
   - **Reasoning and Analysis**:
     - `create_reasoning_chain`: Creates structured representations of logical reasoning with well-defined steps

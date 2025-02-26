@@ -203,38 +203,6 @@ export function setupTools(
         }
         break;
 
-      case "create_thought":
-        try {
-          // Use specific type for thought creation
-          const thoughtData = {
-            entityName: args.entityName as string,
-            title: args.title as string,
-            thoughtContent: args.thoughtContent as string,
-            entities: args.entities as string[],
-            concepts: args.concepts as string[],
-            events: args.events as string[],
-            scientificInsights: args.scientificInsights as string[],
-            laws: args.laws as string[],
-            thoughts: args.thoughts as string[],
-            confidence: args.confidence as number,
-            source: args.source as string,
-            createdBy: args.createdBy as string,
-            tags: args.tags as string[],
-            impact: args.impact as string,
-            emotionalValence: args.emotionalValence as number,
-            emotionalArousal: args.emotionalArousal as number,
-            evidentialBasis: args.evidentialBasis as string[],
-            thoughtCounterarguments: args.thoughtCounterarguments as string[],
-            implications: args.implications as string[],
-            thoughtConfidenceScore: args.thoughtConfidenceScore as number
-          };
-          
-          result = await nodeCreator.createThought(thoughtData);
-        } catch (error) {
-          result = `Error creating thought: ${error.message}`;
-        }
-        break;
-
       case "get_temporal_sequence":
         try {
           const startNodeName = args.startNodeName as string;
