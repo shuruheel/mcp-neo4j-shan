@@ -4,14 +4,13 @@ import { Neo4jCreator } from "../node-creator/index.js";
 import { Neo4jRetriever } from "../node-retriever/index.js";
 import { NarrativeGenerator } from "../narrative-generator/index.js";
 import { Entity, Relation } from "../types/index.js";
-import { generateReasoningChainNarrative } from "../narrative-generator/reasoning-chain-narrative.js";
 
 /**
  * Sets up all tools for the server
  * @param server - Server instance
  * @param nodeCreator - Node creator instance
  * @param nodeRetriever - Node retriever instance
- * @param narrativeGenerator - Narrative generator instance
+ * @param narrativeGenerator - Narrative generator instance (kept for backward compatibility)
  */
 export function setupTools(
   server: Server,
@@ -155,11 +154,9 @@ export function setupTools(
           const minWeight = args.minWeight as number || 0.0;
           
           const graph = await nodeRetriever.exploreContextWeighted(nodeName, maxDepth, minWeight);
-          result = narrativeGenerator.generateNarrative(graph, { 
-            focusEntity: nodeName,
-            detailLevel: "high",
-            includeEmotionalDimensions: true
-          });
+          
+          // Return raw graph data instead of using narrative generator
+          result = JSON.stringify(graph, null, 2);
         } catch (error) {
           result = `Error exploring weighted context: ${error.message}`;
         }
@@ -171,7 +168,9 @@ export function setupTools(
           const maxDepth = args.maxDepth as number || 2;
           
           const graph = await nodeRetriever.exploreContext(nodeName, maxDepth);
-          result = narrativeGenerator.generateNarrative(graph, { focusEntity: nodeName });
+          
+          // Return raw graph data instead of using narrative generator
+          result = JSON.stringify(graph, null, 2);
         } catch (error) {
           result = `Error exploring context: ${error.message}`;
         }
@@ -181,7 +180,9 @@ export function setupTools(
         try {
           const query = args.query as string;
           const graph = await nodeRetriever.searchNodes(query);
-          result = narrativeGenerator.generateNarrative(graph, { detailLevel: "medium" });
+          
+          // Return raw graph data instead of using narrative generator
+          result = JSON.stringify(graph, null, 2);
         } catch (error) {
           result = `Error searching nodes: ${error.message}`;
         }
@@ -262,12 +263,7 @@ export function setupTools(
           const chainResult = await nodeRetriever.getReasoningChain(chainName);
           result = {
             chain: chainResult.chain,
-            steps: chainResult.steps,
-            narrative: generateReasoningChainNarrative(
-              chainResult.chain,
-              chainResult.steps,
-              { format: 'detailed', audience: 'general', detailLevel: 'medium' }
-            )
+            steps: chainResult.steps
           };
         } catch (error) {
           result = `Error retrieving reasoning chain: ${error.message}`;
