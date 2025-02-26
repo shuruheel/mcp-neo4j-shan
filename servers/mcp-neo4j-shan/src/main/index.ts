@@ -28,11 +28,8 @@ async function main() {
   
   // Initialize Neo4j connection
   const neo4jDriver = connectToNeo4j(
-    process.env.NEO4J_URI || 'neo4j+s://x.databases.neo4j.io',
-    Neo4jAuth.basic(
-      process.env.NEO4J_USER || 'neo4j',
-      process.env.NEO4J_PASSWORD || 'pwd'
-    )
+    'neo4j+s://x.databases.neo4j.io',
+    Neo4jAuth.basic('neo4j', 'pwd')
   );
   
   console.error('Connected to Neo4j database');

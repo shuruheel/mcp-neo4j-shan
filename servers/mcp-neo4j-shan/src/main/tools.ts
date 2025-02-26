@@ -7,13 +7,6 @@ import { Entity, Relation } from "../types/index.js";
 import { generateReasoningChainNarrative } from "../narrative-generator/reasoning-chain-narrative.js";
 
 /**
- * Interface to augment server type with the tools we need
- */
-interface ExtendedServer extends Server {
-  addTool: (tool: any) => void;
-}
-
-/**
  * Sets up all tools for the server
  * @param server - Server instance
  * @param nodeCreator - Node creator instance
@@ -50,38 +43,6 @@ export function setupTools(
           }
         },
         required: ["nodeName"]
-      }
-    },
-    {
-      name: "explore_context",
-      description: "DEPRECATED - Explore the context around a node (use explore_weighted_context instead)",
-      inputSchema: {
-        type: "object",
-        properties: {
-          nodeName: {
-            type: "string",
-            description: "Name of the node to explore"
-          },
-          maxDepth: {
-            type: "number",
-            description: "Maximum depth to explore (default: 2)"
-          }
-        },
-        required: ["nodeName"]
-      }
-    },
-    {
-      name: "search_nodes",
-      description: "Search for nodes by name or properties",
-      inputSchema: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "Search query"
-          }
-        },
-        required: ["query"]
       }
     },
     {
@@ -127,19 +88,6 @@ export function setupTools(
           }
         },
         required: ["relations"]
-      }
-    },
-    {
-      name: "create_thought",
-      description: "Create a thought node with connections to existing nodes",
-      inputSchema: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "Title of the thought" },
-          thoughtContent: { type: "string", description: "Content of the thought" }
-          // Additional properties would be defined here
-        },
-        required: ["title", "thoughtContent"]
       }
     },
     {
