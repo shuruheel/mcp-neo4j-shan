@@ -59,6 +59,67 @@ A sophisticated knowledge graph memory system that stores interconnected informa
 - Documenting chains of reasoning with explicit logical steps
 - Visualizing temporal sequences and causal relationships
 
-## Contributing
+## Installation and Setup
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) v18 or newer
+- [npm](https://www.npmjs.com/) v9 or newer
+- [Neo4j](https://neo4j.com/) database (hosted or local instance)
+
+### Building the Project
+
+This project uses Nx for build management. To build all servers:
+
+```bash
+# Install dependencies
+npm install
+
+# Build all servers
+npx nx run-many -t build -p "*"
+
+# Build a specific server
+npx nx build mcp-neo4j-shan
+```
+
+### Running a Server
+
+```bash
+# Run a specific server
+npx nx serve mcp-neo4j-shan
+```
+
+## Integrating with Claude Desktop
+
+To use these MCP servers with Claude Desktop, you need to add server configurations to your Claude Desktop configuration file:
+
+1. Locate your Claude Desktop config file at:
+   - Mac: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+   - Linux: `~/.config/Claude/claude_desktop_config.json`
+
+2. Add server configurations to the `mcpServers` section:
+
+```json
+{
+  "mcpServers": {
+    "mcp-neo4j-shan": {
+      "command": "node",
+      "args": [
+        "/path/to/mcp-neo4j/dist/servers/mcp-neo4j-shan/main/index.js"
+      ],
+      "env": {
+        "NEO4J_URI": "your-neo4j-instance-uri",
+        "NEO4J_USERNAME": "your-username",
+        "NEO4J_PASSWORD": "your-password"
+      }
+    }
+  }
+}
+```
+
+Replace `/path/to/mcp-neo4j` with the absolute path to your cloned repository, and update the Neo4j credentials with your own.
+
+3. Restart Claude Desktop to apply the changes.
+
+4. In your Claude conversation, you can now use the configured server by typing `/mcp mcp-neo4j-shan` followed by a query to the knowledge graph.
