@@ -1,6 +1,6 @@
 # MCP Semantic Graph Memory
 
-This repository contains a collection of MCP Clients and Servers that enable LLMs to build, maintain, and explore a comprehensive knowledge graph with cognitive neuroscience-inspired features.
+This repository contains a collection of Servers that enable LLMs to build, maintain, and explore a comprehensive knowledge graph with cognitive neuroscience-inspired features.
 
 ## Servers
 
