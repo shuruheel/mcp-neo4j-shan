@@ -137,12 +137,53 @@ export class Neo4jRetriever {
         searchAttempts.push(`Exact match: error - ${error.message}`);
       }
       
-      // Second attempt: Case-insensitive exact match
+      // Second attempt: Full text search (good balance of speed and relevance)
       try {
-        console.error('Trying case-insensitive exact match');
-        const caseInsensitiveExactResult = await session.executeRead(tx => tx.run(`
+        console.error('Trying full text search');
+        const fullTextResult = await session.executeRead(tx => tx.run(`
+          // Search in all the fields that might contain relevant text
+          CALL db.index.fulltext.queryNodes("entityContentIndex", $query) YIELD node, score
+          
+          // Only get memory nodes and sort by relevance score
+          WHERE node:Memory
+          WITH node as entity, score
+          ORDER BY score DESC
+          
+          // Get relationships for each matching node
+          WITH entity
+          OPTIONAL MATCH (entity)-[r]->(other)
+          WITH entity, collect(r) as outRels
+          OPTIONAL MATCH (other)-[inRel]->(entity)
+          
+          RETURN entity, outRels as relations, collect(inRel) as inRelations
+          LIMIT 10
+        `, { query: searchQuery }));
+        
+        searchAttempts.push(`Full text: ${fullTextResult.records.length} results`);
+        console.error(`Full text search found ${fullTextResult.records.length} results`);
+        
+        if (fullTextResult.records.length > 0) {
+          return this.processSearchResults(fullTextResult.records);
+        }
+      } catch (error) {
+        // This is expected to fail if the fulltext index doesn't exist
+        console.error(`Error in full text search: ${error}`);
+        searchAttempts.push(`Full text: error - ${error.message}`);
+      }
+      
+      // Third attempt: Fuzzy name matching (more flexible, catches spelling variations)
+      try {
+        console.error('Trying fuzzy name matching');
+        const fuzzyResult = await session.executeRead(tx => tx.run(`
           MATCH (entity:Memory)
-          WHERE toLower(entity.name) = toLower($query)
+          WHERE entity:Entity OR entity:Concept OR entity:Event OR 
+                entity:ScientificInsight OR entity:Law OR entity:Thought OR 
+                entity:ReasoningChain OR entity:ReasoningStep
+          
+          // Use fuzzy matching to find similar node names
+          WITH entity, apoc.text.fuzzyMatch(toLower(entity.name), toLower($query)) as score
+          WHERE score > 0.7
+          ORDER BY score DESC
           
           // Get relationships
           WITH entity
@@ -151,29 +192,35 @@ export class Neo4jRetriever {
           OPTIONAL MATCH (other)-[inRel]->(entity)
           
           RETURN entity, outRels as relations, collect(inRel) as inRelations
+          LIMIT 10
         `, { query: searchQuery }));
         
-        searchAttempts.push(`Case-insensitive exact match: ${caseInsensitiveExactResult.records.length} results`);
-        console.error(`Case-insensitive exact match found ${caseInsensitiveExactResult.records.length} results`);
+        searchAttempts.push(`Fuzzy name: ${fuzzyResult.records.length} results`);
+        console.error(`Fuzzy name matching found ${fuzzyResult.records.length} results`);
         
-        if (caseInsensitiveExactResult.records.length > 0) {
-          return this.processSearchResults(caseInsensitiveExactResult.records);
+        if (fuzzyResult.records.length > 0) {
+          return this.processSearchResults(fuzzyResult.records);
         }
       } catch (error) {
-        console.error(`Error in case-insensitive exact match search: ${error}`);
-        searchAttempts.push(`Case-insensitive exact match: error - ${error.message}`);
+        console.error(`Error in fuzzy name matching: ${error}`);
+        searchAttempts.push(`Fuzzy name: error - ${error.message}`);
       }
       
-      // Third attempt: String containment search
+      // Fourth attempt: Content search (looks for the query in node content fields)
       try {
-        console.error('Trying string containment search');
-        const containmentResult = await session.executeRead(tx => tx.run(`
+        console.error('Trying content search');
+        const contentResult = await session.executeRead(tx => tx.run(`
           MATCH (entity:Memory)
-          WHERE toLower(entity.name) CONTAINS toLower($query)
-             OR (entity.content IS NOT NULL AND toLower(entity.content) CONTAINS toLower($query))
-             OR (entity.definition IS NOT NULL AND toLower(entity.definition) CONTAINS toLower($query))
-             OR (entity.nodeType = 'Entity' AND entity.observations IS NOT NULL AND 
-                 any(obs IN entity.observations WHERE obs IS NOT NULL AND toLower(obs) CONTAINS toLower($query)))
+          WHERE 
+            // Search in entity/concept/event text fields
+            (entity:Entity AND entity.description CONTAINS $query) OR
+            (entity:Concept AND (entity.definition CONTAINS $query OR entity.description CONTAINS $query)) OR
+            (entity:Event AND entity.description CONTAINS $query) OR
+            (entity:ScientificInsight AND (entity.hypothesis CONTAINS $query OR entity.description CONTAINS $query)) OR
+            (entity:Law AND entity.content CONTAINS $query) OR
+            (entity:Thought AND entity.thoughtContent CONTAINS $query) OR
+            (entity:ReasoningChain AND (entity.description CONTAINS $query OR entity.conclusion CONTAINS $query)) OR
+            (entity:ReasoningStep AND entity.content CONTAINS $query)
           
           // Get relationships
           WITH entity
@@ -182,68 +229,49 @@ export class Neo4jRetriever {
           OPTIONAL MATCH (other)-[inRel]->(entity)
           
           RETURN entity, outRels as relations, collect(inRel) as inRelations
-          LIMIT 20
+          LIMIT 10
         `, { query: searchQuery }));
         
-        searchAttempts.push(`String containment: ${containmentResult.records.length} results`);
-        console.error(`String containment search found ${containmentResult.records.length} results`);
+        searchAttempts.push(`Content: ${contentResult.records.length} results`);
+        console.error(`Content search found ${contentResult.records.length} results`);
         
-        if (containmentResult.records.length > 0) {
-          return this.processSearchResults(containmentResult.records);
+        if (contentResult.records.length > 0) {
+          return this.processSearchResults(contentResult.records);
         }
       } catch (error) {
-        console.error(`Error in containment search: ${error}`);
-        searchAttempts.push(`String containment: error - ${error.message}`);
+        console.error(`Error in content search: ${error}`);
+        searchAttempts.push(`Content: error - ${error.message}`);
       }
       
-      // Fourth attempt: Token-based search (split query into tokens and search for each)
+      // Final attempt: Relationship context (looks for relationships containing the query)
       try {
-        console.error('Trying token-based search');
-        const tokens = searchQuery.split(/\s+/).filter(token => token.length > 2);
+        console.error('Trying relationship context search');
+        const relationshipResult = await session.executeRead(tx => tx.run(`
+          // Match relationships that have context containing the search query
+          MATCH (entity:Memory)-[rel]->(other:Memory)
+          WHERE rel.context CONTAINS $query
+          
+          // Get full relationship context
+          WITH entity, collect(rel) as outRels
+          OPTIONAL MATCH (other)-[inRel]->(entity)
+          
+          RETURN entity, outRels as relations, collect(inRel) as inRelations
+          LIMIT 10
+        `, { query: searchQuery }));
         
-        if (tokens.length > 0) {
-          const tokenQuery = `
-            MATCH (entity:Memory)
-            WHERE 
-              ${tokens.map((_, i) => `
-                toLower(entity.name) CONTAINS toLower($token${i})
-                OR (entity.content IS NOT NULL AND toLower(entity.content) CONTAINS toLower($token${i}))
-                OR (entity.definition IS NOT NULL AND toLower(entity.definition) CONTAINS toLower($token${i}))
-              `).join(' OR ')}
-            
-            // Get relationships
-            WITH entity
-            OPTIONAL MATCH (entity)-[r]->(other)
-            WITH entity, collect(r) as outRels
-            OPTIONAL MATCH (other)-[inRel]->(entity)
-            
-            RETURN entity, outRels as relations, collect(inRel) as inRelations
-            LIMIT 20
-          `;
-          
-          const params = {};
-          tokens.forEach((token, i) => {
-            params[`token${i}`] = token;
-          });
-          
-          const tokenResult = await session.executeRead(tx => tx.run(tokenQuery, params));
-          
-          searchAttempts.push(`Token-based search: ${tokenResult.records.length} results`);
-          console.error(`Token-based search found ${tokenResult.records.length} results`);
-          
-          if (tokenResult.records.length > 0) {
-            return this.processSearchResults(tokenResult.records);
-          }
+        searchAttempts.push(`Relationship context: ${relationshipResult.records.length} results`);
+        console.error(`Relationship context search found ${relationshipResult.records.length} results`);
+        
+        if (relationshipResult.records.length > 0) {
+          return this.processSearchResults(relationshipResult.records);
         }
       } catch (error) {
-        console.error(`Error in token-based search: ${error}`);
-        searchAttempts.push(`Token-based search: error - ${error.message}`);
+        console.error(`Error in relationship context search: ${error}`);
+        searchAttempts.push(`Relationship context: error - ${error.message}`);
       }
       
-      // Log all search attempts to help diagnose issues
-      console.error(`All search attempts exhausted: ${searchAttempts.join(', ')}`);
-      
-      // Return empty results if nothing found
+      // If no results found through any method
+      console.error(`No results found for query "${searchQuery}" after trying multiple methods: ${searchAttempts.join(', ')}`);
       return { entities: [], relations: [] };
     } catch (error) {
       console.error(`Error in robust search: ${error}`);
@@ -867,124 +895,94 @@ export class Neo4jRetriever {
     scientificInsights?: string[],
     laws?: string[],
     thoughts?: string[],
+    reasoningChains?: string[],
+    reasoningSteps?: string[],
     fuzzyThreshold?: number
   }): Promise<KnowledgeGraph> {
     const session = this.neo4jDriver.session();
-    const threshold = searchTerms.fuzzyThreshold || 0.7; // Default threshold
+    const threshold = searchTerms.fuzzyThreshold || 0.7;
     
     try {
-      // Initialize results arrays
-      let matchedEntities: Entity[] = [];
-      let matchedRelations: Relation[] = [];
+      console.error(`Performing fuzzy matching search with threshold ${threshold}`);
       
-      // Function to run fuzzy search for a specific node type
+      // Generate a unique map of search terms to avoid duplicates
+      const allSearchTerms = new Map<string, {
+        term: string,
+        nodeTypes: string[]
+      }>();
+      
+      // Helper function to add search terms for a node type
       const searchNodeType = async (nodeType: string, searchTerms: string[]) => {
-        if (!searchTerms || searchTerms.length === 0) return;
+        if (!searchTerms || searchTerms.length === 0) return [];
         
-        // Execute fuzzy search against specific node type
-        const result = await session.executeRead(tx => tx.run(`
-          MATCH (entity:Memory)
-          WHERE entity.nodeType = $nodeType
-          
-          // For each search term, check for fuzzy matches
-          WITH entity, [term in $searchTerms | 
-            CASE
-              WHEN apoc.text.fuzzyMatch(entity.name, term) > $threshold THEN 
-                apoc.text.fuzzyMatch(entity.name, term) * 2
-              WHEN entity.content IS NOT NULL AND apoc.text.fuzzyMatch(entity.content, term) > $threshold THEN
-                apoc.text.fuzzyMatch(entity.content, term) * 1.5
-              WHEN entity.definition IS NOT NULL AND apoc.text.fuzzyMatch(entity.definition, term) > $threshold THEN
-                apoc.text.fuzzyMatch(entity.definition, term) * 1.5
-              ELSE 0
-            END
-          ] AS scores
-          
-          // Calculate overall match score
-          WITH entity, reduce(s = 0, score in scores | CASE WHEN score > s THEN score ELSE s END) as matchScore
-          
-          // Filter and order by score
-          WHERE matchScore > 0
-          ORDER BY matchScore DESC
-          
-          // Get relationships
-          WITH entity
-          OPTIONAL MATCH (entity)-[r]->(other)
-          WITH entity, collect(r) as outRels
-          OPTIONAL MATCH (other)-[inRel]->(entity)
-          
-          RETURN entity, outRels as relations, collect(inRel) as inRelations
-        `, { nodeType, searchTerms, threshold }));
+        console.error(`Searching for ${nodeType} nodes matching: ${searchTerms.join(', ')}`);
         
-        // Process results
-        result.records.forEach(record => {
-          const entityNode = record.get('entity');
-          const outRelationships = record.get('relations');
-          const inRelationships = record.get('inRelations');
-          
-          // Convert Neo4j node to Entity format
-          const entity: Entity = {
-            name: entityNode.properties.name,
-            entityType: entityNode.properties.nodeType || 'Entity',
-            observations: 'observations' in entityNode.properties ? 
-              entityNode.properties.observations : []
-          };
-          
-          // Add to matched entities if not already included
-          if (!matchedEntities.some(e => e.name === entity.name)) {
-            matchedEntities.push(entity);
-          }
-          
-          // Add outgoing relationships
-          if (outRelationships && Array.isArray(outRelationships)) {
-            outRelationships.forEach(rel => {
-              if (rel && rel.properties) {
-                const relation = rel.properties as unknown as Relation;
-                if (!matchedRelations.some(r => 
-                  r.from === relation.from && 
-                  r.to === relation.to && 
-                  r.relationType === relation.relationType
-                )) {
-                  matchedRelations.push(relation);
-                }
-              }
-            });
-          }
-          
-          // Add incoming relationships
-          if (inRelationships && Array.isArray(inRelationships)) {
-            inRelationships.forEach(rel => {
-              if (rel && rel.properties) {
-                const relation = {
-                  ...rel.properties as unknown as Relation,
-                  relationDirection: 'incoming'
-                };
-                if (!matchedRelations.some(r => 
-                  r.from === relation.from && 
-                  r.to === relation.to && 
-                  r.relationType === relation.relationType
-                )) {
-                  matchedRelations.push(relation);
-                }
-              }
+        // For each search term, add it to the map with its node type
+        searchTerms.forEach(term => {
+          if (allSearchTerms.has(term)) {
+            // Add this node type to existing term
+            allSearchTerms.get(term)!.nodeTypes.push(nodeType);
+          } else {
+            // Create new entry
+            allSearchTerms.set(term, {
+              term,
+              nodeTypes: [nodeType]
             });
           }
         });
       };
       
-      // Execute search for each node type with corresponding search terms
-      await searchNodeType('Entity', searchTerms.entities || []);
-      await searchNodeType('Concept', searchTerms.concepts || []);
-      await searchNodeType('Event', searchTerms.events || []);
-      await searchNodeType('ScientificInsight', searchTerms.scientificInsights || []);
-      await searchNodeType('Law', searchTerms.laws || []);
-      await searchNodeType('Thought', searchTerms.thoughts || []);
+      // Add search terms for each node type
+      if (searchTerms.entities) await searchNodeType('Entity', searchTerms.entities);
+      if (searchTerms.concepts) await searchNodeType('Concept', searchTerms.concepts);
+      if (searchTerms.events) await searchNodeType('Event', searchTerms.events);
+      if (searchTerms.scientificInsights) await searchNodeType('ScientificInsight', searchTerms.scientificInsights);
+      if (searchTerms.laws) await searchNodeType('Law', searchTerms.laws);
+      if (searchTerms.thoughts) await searchNodeType('Thought', searchTerms.thoughts);
+      // Add new node types
+      if (searchTerms.reasoningChains) await searchNodeType('ReasoningChain', searchTerms.reasoningChains);
+      if (searchTerms.reasoningSteps) await searchNodeType('ReasoningStep', searchTerms.reasoningSteps);
       
-      return {
-        entities: matchedEntities,
-        relations: matchedRelations
-      };
+      // If no search terms provided, return empty result
+      if (allSearchTerms.size === 0) {
+        console.error('No search terms provided');
+        return { entities: [], relations: [] };
+      }
+      
+      // Convert map values to array for processing
+      const searchTermArray = Array.from(allSearchTerms.values());
+      console.error(`Searching for ${searchTermArray.length} unique terms across multiple node types`);
+      
+      // Execute search for all terms
+      const result = await session.executeRead(tx => tx.run(`
+        // Find nodes that match the search terms with fuzzy matching
+        UNWIND $searchTerms as searchItem
+        MATCH (node:Memory)
+        WHERE (
+          // Check if node matches any of the specified types for this term
+          ANY(nodeType IN searchItem.nodeTypes WHERE node:\${nodeType})
+          // And the node name matches the search term with fuzzy matching
+          AND apoc.text.fuzzyMatch(node.name, searchItem.term) > $threshold
+        )
+        
+        // Get relationships for matching nodes
+        WITH DISTINCT node
+        OPTIONAL MATCH (node)-[r]->(other)
+        WITH node, collect(r) as outRelations
+        OPTIONAL MATCH (other)-[inRel]->(node)
+        
+        // Return nodes and their relationships
+        RETURN node, outRelations as relations, collect(inRel) as inRelations
+      `, { 
+        searchTerms: searchTermArray,
+        threshold
+      }));
+      
+      console.error(`Found ${result.records.length} matching nodes`);
+      
+      return this.processSearchResults(result.records);
     } catch (error) {
-      console.error("Error in fuzzy search:", error);
+      console.error(`Error in fuzzy matching search: ${error}`);
       return { entities: [], relations: [] };
     } finally {
       await session.close();
@@ -1129,6 +1127,298 @@ export class Neo4jRetriever {
     } catch (error) {
       console.error('Error retrieving temporal sequence:', error);
       return { sequence: [], connections: [] };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getReasoningChain(chainName: string): Promise<{
+    chain: any,
+    steps: any[]
+  }> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      console.error(`Retrieving reasoning chain: ${chainName}`);
+      
+      // Get the chain and its steps in one query
+      const result = await session.executeRead(tx => tx.run(`
+        // Match the chain
+        MATCH (chain:ReasoningChain:Memory {name: $chainName})
+        
+        // Get all steps ordered by the 'order' property
+        OPTIONAL MATCH (chain)-[rel:CONTAINS_STEP]->(step:ReasoningStep)
+        WITH chain, step, rel
+        ORDER BY rel.order
+        
+        // Return chain and collected ordered steps
+        RETURN chain, collect({step: step, order: rel.order}) as steps
+      `, { chainName }));
+      
+      if (result.records.length === 0) {
+        throw new Error(`ReasoningChain ${chainName} not found`);
+      }
+      
+      const record = result.records[0];
+      const chain = record.get('chain').properties;
+      
+      // Process the steps, maintaining their order
+      const steps = record.get('steps')
+        .filter((stepObj: any) => stepObj.step !== null) // Filter out any null steps
+        .map((stepObj: any) => {
+          return {
+            ...stepObj.step.properties,
+            order: stepObj.order
+          };
+        })
+        .sort((a: any, b: any) => a.order - b.order); // Ensure steps are ordered
+      
+      return { chain, steps };
+    } catch (error) {
+      console.error(`Error retrieving reasoning chain:`, error);
+      throw error;
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getReasoningChainsForThought(thoughtName: string): Promise<{
+    thought: any,
+    chains: any[]
+  }> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      console.error(`Retrieving reasoning chains for thought: ${thoughtName}`);
+      
+      // Get the thought and all its reasoning chains
+      const result = await session.executeRead(tx => tx.run(`
+        // Match the thought
+        MATCH (thought:Thought:Memory {name: $thoughtName})
+        
+        // Get all reasoning chains attached to this thought
+        OPTIONAL MATCH (thought)-[:HAS_REASONING]->(chain:ReasoningChain)
+        
+        // Get basic step count for each chain
+        OPTIONAL MATCH (chain)-[rel:CONTAINS_STEP]->(step:ReasoningStep)
+        WITH thought, chain, count(step) as stepCount
+        
+        // Return thought and collected chains with their step counts
+        RETURN thought, collect({chain: chain, stepCount: stepCount}) as chains
+      `, { thoughtName }));
+      
+      if (result.records.length === 0) {
+        throw new Error(`Thought ${thoughtName} not found`);
+      }
+      
+      const record = result.records[0];
+      const thought = record.get('thought').properties;
+      
+      // Process the chains
+      const chains = record.get('chains')
+        .filter((chainObj: any) => chainObj.chain !== null) // Filter out any null chains
+        .map((chainObj: any) => {
+          return {
+            ...chainObj.chain.properties,
+            stepCount: chainObj.stepCount
+          };
+        });
+      
+      return { thought, chains };
+    } catch (error) {
+      console.error(`Error retrieving reasoning chains for thought:`, error);
+      throw error;
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getReasoningStepDetails(stepName: string): Promise<{
+    step: any,
+    supportingReferences: any[],
+    previousSteps: any[],
+    nextSteps: any[]
+  }> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      console.error(`Retrieving reasoning step details: ${stepName}`);
+      
+      // Get the step with its references and connections
+      const result = await session.executeRead(tx => tx.run(`
+        // Match the step
+        MATCH (step:ReasoningStep:Memory {name: $stepName})
+        
+        // Get referenced nodes
+        OPTIONAL MATCH (step)-[:REFERENCES]->(ref:Memory)
+        WITH step, collect(ref) as refs
+        
+        // Get previous steps that lead to this one
+        OPTIONAL MATCH (prev:ReasoningStep)-[:LEADS_TO]->(step)
+        WITH step, refs, collect(prev) as prevSteps
+        
+        // Get next steps that this one leads to
+        OPTIONAL MATCH (step)-[:LEADS_TO]->(next:ReasoningStep)
+        
+        // Return everything
+        RETURN step, refs as supportingReferences, prevSteps, collect(next) as nextSteps
+      `, { stepName }));
+      
+      if (result.records.length === 0) {
+        throw new Error(`ReasoningStep ${stepName} not found`);
+      }
+      
+      const record = result.records[0];
+      const step = record.get('step').properties;
+      
+      // Process supporting references
+      const supportingReferences = record.get('supportingReferences')
+        .map((ref: any) => ref.properties);
+      
+      // Process previous steps
+      const previousSteps = record.get('prevSteps')
+        .map((prev: any) => prev.properties);
+      
+      // Process next steps
+      const nextSteps = record.get('nextSteps')
+        .map((next: any) => next.properties);
+      
+      return { 
+        step, 
+        supportingReferences, 
+        previousSteps, 
+        nextSteps 
+      };
+    } catch (error) {
+      console.error(`Error retrieving reasoning step details:`, error);
+      throw error;
+    } finally {
+      await session.close();
+    }
+  }
+
+  async findReasoningChainsWithSimilarConclusion(conclusion: string, limit: number = 5): Promise<any[]> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      console.error(`Finding reasoning chains with similar conclusion: ${conclusion}`);
+      
+      // Use full-text search if available, or fallback to simplified string matching
+      const result = await session.executeRead(tx => tx.run(`
+        // Match ReasoningChain nodes
+        MATCH (chain:ReasoningChain:Memory)
+        
+        // Calculate similarity score
+        // This is a simple implementation - in production consider vector embeddings
+        WITH chain, 
+             apoc.text.sorensenDiceSimilarity(toLower(chain.conclusion), toLower($conclusion)) as similarityScore
+        
+        // Filter by minimum threshold and sort by similarity
+        WHERE similarityScore > 0.3
+        RETURN chain, similarityScore
+        ORDER BY similarityScore DESC
+        LIMIT $limit
+      `, { 
+        conclusion,
+        limit: neo4j.int(limit)
+      }));
+      
+      // Process and return the results
+      return result.records.map(record => {
+        const chain = record.get('chain').properties;
+        const score = record.get('similarityScore');
+        
+        return {
+          ...chain,
+          similarityScore: score
+        };
+      });
+    } catch (error) {
+      console.error(`Error finding similar reasoning chains:`, error);
+      throw error;
+    } finally {
+      await session.close();
+    }
+  }
+
+  async getReasoningAnalytics(): Promise<{
+    totalChains: number,
+    totalSteps: number,
+    methodologyDistribution: Record<string, number>,
+    averageStepsPerChain: number,
+    topChainsByStepCount: any[]
+  }> {
+    const session = this.neo4jDriver.session();
+    
+    try {
+      console.error(`Retrieving reasoning analytics`);
+      
+      // Get chain statistics
+      const statsResult = await session.executeRead(tx => tx.run(`
+        // Count total chains and steps
+        MATCH (chain:ReasoningChain:Memory)
+        OPTIONAL MATCH (chain)-[:CONTAINS_STEP]->(step:ReasoningStep)
+        
+        RETURN count(DISTINCT chain) as totalChains,
+               count(step) as totalSteps
+      `));
+      
+      // Get methodology distribution
+      const methodologyResult = await session.executeRead(tx => tx.run(`
+        // Count chains by methodology
+        MATCH (chain:ReasoningChain:Memory)
+        RETURN chain.methodology as methodology, count(chain) as count
+        ORDER BY count DESC
+      `));
+      
+      // Get top chains by step count
+      const topChainsResult = await session.executeRead(tx => tx.run(`
+        // Find chains with the most steps
+        MATCH (chain:ReasoningChain:Memory)
+        OPTIONAL MATCH (chain)-[:CONTAINS_STEP]->(step:ReasoningStep)
+        WITH chain, count(step) as stepCount
+        RETURN chain.name as chainName, 
+               chain.description as description,
+               chain.methodology as methodology,
+               stepCount
+        ORDER BY stepCount DESC
+        LIMIT 5
+      `));
+      
+      // Process results
+      const statsRecord = statsResult.records[0];
+      const totalChains = statsRecord.get('totalChains').toNumber();
+      const totalSteps = statsRecord.get('totalSteps').toNumber();
+      const averageStepsPerChain = totalChains > 0 ? totalSteps / totalChains : 0;
+      
+      const methodologyDistribution: Record<string, number> = {};
+      methodologyResult.records.forEach(record => {
+        const methodology = record.get('methodology');
+        const count = record.get('count').toNumber();
+        if (methodology) {
+          methodologyDistribution[methodology] = count;
+        }
+      });
+      
+      const topChainsByStepCount = topChainsResult.records.map(record => {
+        return {
+          name: record.get('chainName'),
+          description: record.get('description'),
+          methodology: record.get('methodology'),
+          stepCount: record.get('stepCount').toNumber()
+        };
+      });
+      
+      return {
+        totalChains,
+        totalSteps,
+        methodologyDistribution,
+        averageStepsPerChain,
+        topChainsByStepCount
+      };
+    } catch (error) {
+      console.error(`Error retrieving reasoning analytics:`, error);
+      throw error;
     } finally {
       await session.close();
     }

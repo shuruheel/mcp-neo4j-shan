@@ -86,18 +86,14 @@ TOOL USAGE WORKFLOW:
 
 5. For exploring temporal information, use the \`get_temporal_sequence\` tool to visualize how events and concepts unfold over time.
 
-COGNITIVE ORGANIZATION GUIDELINES:
-- Categorize relationships appropriately (hierarchical, lateral, temporal, compositional)
-- Use weights to indicate importance (higher weights = more important connections)
-- Include memory aids and context information to enhance recall
-- Consider emotional dimensions when representing knowledge
-
-QUALITY GUIDELINES:
-- Create concise, specific, and uniquely identifiable node names
-- Provide comprehensive attributes for each node type
-- Construct meaningful relationships that clearly show how nodes are connected
-- Build a coherent network structure that captures the semantic richness of information
-- Focus on creating high-quality nodes with detailed attributes and meaningful relationships
+6. When the user wants to understand or represent chains of reasoning or arguments, use the \`create_reasoning_chain\` tool:
+   - Create a structured representation of logical reasoning with well-defined steps
+   - Connect reasoning chains to existing thoughts
+   - Specify methodology (deductive, inductive, abductive, analogical, mixed)
+   - Create individual steps with distinct logical roles (premise, inference, evidence, counterargument, rebuttal, conclusion)
+   - Include confidence scores for each step and the overall chain
+   - Link to supporting references and evidence
+   - Consider alternatives and counterarguments
 
 The knowledge graph is designed to build connections between ideas over time. Your role is to help users interact with this knowledge structure effectively, extracting insights and adding new information in a structured, meaningful way.`;
 
@@ -275,7 +271,36 @@ const TOOL_PROMPTS = {
   - Visualizing cause-and-effect chains in complex scenarios
   - Creating narrative structures from interconnected events
   
-  Present the results as a coherent narrative that follows temporal progression, making it easier for users to understand how events and concepts are connected through time.`
+  Present the results as a coherent narrative that follows temporal progression, making it easier for users to understand how events and concepts are connected through time.`,
+
+  "create_reasoning_chain": `You are a knowledge graph reasoning assistant with cognitive science capabilities. When creating reasoning chains:
+  
+  1. Create a clear, structured chain of reasoning with well-defined steps
+  2. Connect the reasoning to existing thoughts and concepts in the knowledge graph
+  3. Use appropriate methodology types (deductive, inductive, abductive, analogical, mixed)
+  4. Create steps with distinct roles (premise, inference, evidence, counterargument, rebuttal, conclusion)
+  5. Provide confidence scores for each step and the overall reasoning chain
+  6. Link to supporting references when available
+  7. Consider alternative paths and counterarguments
+  
+  The reasoning chain structure includes:
+  - ReasoningChain node that represents the overall argument or line of thinking
+  - ReasoningStep nodes that represent each individual step in the reasoning process
+  - Connections between steps showing how they build upon each other
+  - References to supporting evidence from other nodes in the knowledge graph
+  
+  This tool helps create explicit chains of reasoning that connect thoughts to their underlying logical structure, making the thought process transparent and available for future reference and exploration.`,
+
+  "get_reasoning_chain": `You are a reasoning chain retrieval assistant with cognitive science capabilities. When retrieving a reasoning chain:
+  
+  1. Use the reasoning chain name to identify the relevant chain and its steps
+  2. Retrieve the chain and its steps from the knowledge graph
+  3. Generate a narrative about the reasoning chain
+  
+  Input parameters:
+  - chainName (required): The name of the reasoning chain to retrieve
+  
+  This tool helps users understand the reasoning process and its implications by providing a narrative summary of the reasoning chain.`,
 };
 
 // Define the PROMPTS constant that's used in the GetPromptRequestSchema handler
@@ -695,6 +720,218 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["nodeName"],
         },
+      },
+      {
+        name: "create_reasoning_chain",
+        description: "Create a new reasoning chain with multiple reasoning steps that represent a chain of logical reasoning. This connects a thought to its underlying logical structure.",
+        parameters: {
+          properties: {
+            thoughtName: {
+              type: "string",
+              description: "Name of the thought node to attach this reasoning chain to (optional)"
+            },
+            chainName: {
+              type: "string", 
+              description: "Name for the reasoning chain"
+            },
+            description: {
+              type: "string",
+              description: "Description of what this reasoning chain demonstrates or argues"
+            },
+            conclusion: {
+              type: "string",
+              description: "The final conclusion that the reasoning chain leads to"
+            },
+            methodology: {
+              type: "string",
+              enum: ["deductive", "inductive", "abductive", "analogical", "mixed"],
+              description: "The methodological approach used in this reasoning"
+            },
+            confidenceScore: {
+              type: "number",
+              description: "Confidence in the overall reasoning (0.0-1.0)"
+            },
+            domain: {
+              type: "string",
+              description: "The domain or field this reasoning pertains to (optional)"
+            },
+            alternativeConclusionsConsidered: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Other conclusions that were considered but not ultimately accepted (optional)"
+            },
+            steps: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: {
+                    type: "string",
+                    description: "Unique name for this reasoning step"
+                  },
+                  content: {
+                    type: "string",
+                    description: "The actual content of this reasoning step"
+                  },
+                  stepNumber: {
+                    type: "number",
+                    description: "Position of this step in the reasoning chain (1-based)"
+                  },
+                  stepType: {
+                    type: "string",
+                    enum: ["premise", "inference", "evidence", "counterargument", "rebuttal", "conclusion"],
+                    description: "The logical role this step plays in the reasoning"
+                  },
+                  evidenceType: {
+                    type: "string",
+                    enum: ["observation", "fact", "assumption", "inference", "expert_opinion", "statistical_data"],
+                    description: "The type of evidence provided in this step (optional)"
+                  },
+                  supportingReferences: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Names of nodes that support this reasoning step (optional)"
+                  },
+                  confidence: {
+                    type: "number",
+                    description: "Confidence in this particular step (0.0-1.0)"
+                  },
+                  alternatives: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Alternative paths that could be taken at this step (optional)"
+                  },
+                  counterarguments: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Known challenges to this reasoning step (optional)"
+                  },
+                  assumptions: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Underlying assumptions for this step (optional)"
+                  },
+                  previousSteps: {
+                    type: "array",
+                    items: {
+                      type: "string"
+                    },
+                    description: "Names of steps that directly lead to this one (for branching) (optional)"
+                  }
+                },
+                required: ["name", "content", "stepNumber", "stepType", "confidence"]
+              },
+              description: "Array of reasoning steps that make up this chain"
+            }
+          },
+          required: ["chainName", "description", "conclusion", "methodology", "confidenceScore", "steps"]
+        },
+        requestHandler: async (params) => {
+          try {
+            console.error(`Creating reasoning chain: ${params.chainName}`);
+            
+            // Create the reasoning chain
+            const chain = await nodeCreator.createReasoningChain({
+              name: params.chainName,
+              description: params.description,
+              conclusion: params.conclusion,
+              confidenceScore: params.confidenceScore,
+              sourceThought: params.thoughtName,
+              creator: "System",
+              methodology: params.methodology,
+              domain: params.domain,
+              tags: [],
+              alternativeConclusionsConsidered: params.alternativeConclusionsConsidered
+            });
+            
+            // Create each reasoning step
+            const steps = [];
+            for (const step of params.steps) {
+              const createdStep = await nodeCreator.createReasoningStep({
+                chainName: params.chainName,
+                name: step.name,
+                content: step.content,
+                stepNumber: step.stepNumber,
+                stepType: step.stepType,
+                evidenceType: step.evidenceType,
+                supportingReferences: step.supportingReferences,
+                confidence: step.confidence,
+                alternatives: step.alternatives,
+                counterarguments: step.counterarguments,
+                assumptions: step.assumptions,
+                previousSteps: step.previousSteps
+              });
+              steps.push(createdStep);
+            }
+            
+            return {
+              content: {
+                message: `Successfully created reasoning chain "${params.chainName}" with ${steps.length} steps`,
+                chain: chain,
+                steps: steps
+              }
+            };
+          } catch (error) {
+            console.error("Error creating reasoning chain:", error);
+            return { error: error.message };
+          }
+        }
+      },
+      {
+        name: "get_reasoning_chain",
+        description: "Retrieve a reasoning chain and all its steps by name.",
+        parameters: {
+          properties: {
+            chainName: {
+              type: "string",
+              description: "Name of the reasoning chain to retrieve"
+            }
+          },
+          required: ["chainName"]
+        },
+        requestHandler: async (params) => {
+          try {
+            console.error(`Retrieving reasoning chain: ${params.chainName}`);
+            
+            // Get the reasoning chain and its steps
+            const result = await nodeRetriever.getReasoningChain(params.chainName);
+            
+            // Generate a narrative about the reasoning chain
+            const narrativeOptions: NarrativeOptions = {
+              detailLevel: 'high',
+              includeIntroduction: true,
+              includeSummary: true
+            };
+            
+            const narrative = NarrativeGenerator.generateReasoningChainNarrative(
+              result.chain,
+              result.steps,
+              narrativeOptions
+            );
+            
+            return {
+              content: {
+                message: `Retrieved reasoning chain "${params.chainName}" with ${result.steps.length} steps`,
+                chain: result.chain,
+                steps: result.steps,
+                narrative: narrative
+              }
+            };
+          } catch (error) {
+            console.error("Error retrieving reasoning chain:", error);
+            return { error: error.message };
+          }
+        }
       }
     ],
 }});
