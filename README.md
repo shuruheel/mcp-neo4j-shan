@@ -24,7 +24,7 @@ A sophisticated knowledge graph memory system that stores interconnected informa
   - Abstraction levels for concepts
   - Evidence strength for scientific insights
   - Causal relationships between events
-  - Confidence scores for thoughts and relations
+  - Confidence scores for reasoning chains and relations
   - Metaphorical mappings for concepts
   - Formal notations for reasoning steps
 
@@ -33,7 +33,6 @@ A sophisticated knowledge graph memory system that stores interconnected informa
   - Directional relationships with contextual explanations
   - Relationship weights indicating importance (0.0-1.0)
   - Relationship categories (hierarchical, lateral, temporal, compositional)
-  - Memory aids and context types for enhanced recall
 
 - **Available Tools**:
   - **Graph Exploration**:
