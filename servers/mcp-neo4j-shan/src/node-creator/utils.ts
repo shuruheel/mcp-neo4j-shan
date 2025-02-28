@@ -1,5 +1,97 @@
-import { Driver as Neo4jDriver } from 'neo4j-driver';
+import { Driver as Neo4jDriver, DateTime as Neo4jDateTime, isDateTime } from 'neo4j-driver';
 import { KnowledgeGraph, EntityWithRelationsResult, Entity } from '../types/index.js';
+
+/**
+ * Converts a Neo4j DateTime object to a JavaScript Date object
+ * @param neo4jDateTime - Neo4j DateTime object
+ * @returns JavaScript Date object
+ */
+export function neo4jDateTimeToJSDate(neo4jDateTime: Neo4jDateTime | any): Date | null {
+  if (!neo4jDateTime) return null;
+  
+  if (isDateTime(neo4jDateTime)) {
+    // If it's already a Neo4j DateTime object, use its built-in toStandardDate method
+    return neo4jDateTime.toStandardDate();
+  }
+  
+  // Handle the case where we get the nested object representation
+  if (neo4jDateTime.year && neo4jDateTime.month && neo4jDateTime.day) {
+    const year = typeof neo4jDateTime.year === 'object' ? neo4jDateTime.year.low : neo4jDateTime.year;
+    const month = typeof neo4jDateTime.month === 'object' ? neo4jDateTime.month.low : neo4jDateTime.month;
+    const day = typeof neo4jDateTime.day === 'object' ? neo4jDateTime.day.low : neo4jDateTime.day;
+    const hour = neo4jDateTime.hour ? 
+      (typeof neo4jDateTime.hour === 'object' ? neo4jDateTime.hour.low : neo4jDateTime.hour) : 0;
+    const minute = neo4jDateTime.minute ? 
+      (typeof neo4jDateTime.minute === 'object' ? neo4jDateTime.minute.low : neo4jDateTime.minute) : 0;
+    const second = neo4jDateTime.second ? 
+      (typeof neo4jDateTime.second === 'object' ? neo4jDateTime.second.low : neo4jDateTime.second) : 0;
+    const millisecond = neo4jDateTime.nanosecond ? 
+      Math.floor((typeof neo4jDateTime.nanosecond === 'object' ? 
+        neo4jDateTime.nanosecond.low : neo4jDateTime.nanosecond) / 1000000) : 0;
+    
+    // Create the JavaScript date (month is 0-indexed in JS Date)
+    return new Date(year, month - 1, day, hour, minute, second, millisecond);
+  }
+  
+  return null;
+}
+
+/**
+ * Formats a Neo4j DateTime object as a string
+ * @param neo4jDateTime - Neo4j DateTime object
+ * @param format - Optional format string (default is ISO string)
+ * @returns Formatted date string
+ */
+export function formatNeo4jDateTime(neo4jDateTime: Neo4jDateTime | any, format: string = 'iso'): string | null {
+  const jsDate = neo4jDateTimeToJSDate(neo4jDateTime);
+  if (!jsDate) return null;
+  
+  switch (format.toLowerCase()) {
+    case 'iso':
+      return jsDate.toISOString();
+    case 'simple':
+      return jsDate.toLocaleString();
+    case 'date':
+      return jsDate.toLocaleDateString();
+    case 'time':
+      return jsDate.toLocaleTimeString();
+    default:
+      return jsDate.toISOString();
+  }
+}
+
+/**
+ * Processes an entity object, converting any Neo4j DateTime properties to JavaScript Date objects
+ * @param entity - Entity object with potential Neo4j DateTime properties
+ * @returns Entity with converted date properties
+ */
+export function processEntityDates(entity: any): any {
+  const processed = { ...entity };
+  
+  // Convert common date fields
+  if (processed.createdAt) {
+    processed.createdAt = neo4jDateTimeToJSDate(processed.createdAt);
+  }
+  
+  if (processed.lastUpdated) {
+    processed.lastUpdated = neo4jDateTimeToJSDate(processed.lastUpdated);
+  }
+  
+  // Handle Event-specific date fields
+  if (processed.startDate) {
+    processed.startDate = neo4jDateTimeToJSDate(processed.startDate);
+  }
+  
+  if (processed.endDate) {
+    processed.endDate = neo4jDateTimeToJSDate(processed.endDate);
+  }
+  
+  if (processed.timestamp) {
+    processed.timestamp = neo4jDateTimeToJSDate(processed.timestamp);
+  }
+  
+  return processed;
+}
 
 /**
  * Load the current graph from the Neo4j database
@@ -32,12 +124,25 @@ export async function loadGraph(neo4jDriver: Neo4jDriver): Promise<KnowledgeGrap
         observations: 'observations' in entityNode.properties ? 
           entityNode.properties.observations : []
       };
-
-      entities.push(entity);
+      
+      // Process any date fields in the entity
+      const processedEntity = processEntityDates({ 
+        ...entity, 
+        ...entityNode.properties 
+      });
+      
+      // Keep only the Entity interface properties
+      entities.push({
+        name: processedEntity.name,
+        entityType: processedEntity.entityType,
+        observations: processedEntity.observations
+      });
       
       // Add relations
       for (const rel of entityRelationships) {
-        relations.push(rel.properties);
+        // Process date fields in relations if any
+        const processedRelation = processEntityDates(rel.properties);
+        relations.push(processedRelation);
       }
     }
 

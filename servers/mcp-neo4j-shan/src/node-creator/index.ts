@@ -1,15 +1,21 @@
 // Re-export the main creator class
 export { Neo4jCreator } from './creator.js';
 
-// Re-export specific creator methods
+// Re-export utility functions
 export { 
-  createEntities, 
+  loadGraph, 
+  saveGraph, 
+  neo4jDateTimeToJSDate, 
+  formatNeo4jDateTime, 
+  processEntityDates 
+} from './utils.js';
+
+// Re-export method implementations
+export {
+  createEntities,
   createRelations,
-  searchNodes, 
+  searchNodes,
   createThought,
   createReasoningChain,
   createReasoningStep
-} from './methods.js';
-
-// Re-export utility functions
-export { loadGraph, saveGraph } from './utils.js'; 
+} from './methods.js'; 

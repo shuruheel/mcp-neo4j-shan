@@ -198,6 +198,8 @@ export interface Entity extends BaseEntity {
   significance?: string;
   causalPredecessors?: string[];
   causalSuccessors?: string[];
+  timestamp?: string; // Added for Event entity
+  duration?: string;  // Added for Event entity
   // Additional properties from Concept
   definition?: string;
   domain?: string;
@@ -238,6 +240,21 @@ export interface Entity extends BaseEntity {
   historicalPrecedents?: string[];
   counterexamples?: string[];
   formalRepresentation?: string;
+  // Additional properties from ReasoningChain
+  conclusion?: string;                           // Added for ReasoningChain
+  confidenceScore?: number;                      // Added for ReasoningChain
+  sourceThought?: string;                        // Added for ReasoningChain
+  numberOfSteps?: number;                        // Added for ReasoningChain
+  alternativeConclusionsConsidered?: string[];   // Added for ReasoningChain
+  // Additional properties from ReasoningStep
+  content?: string;                              // Added for ReasoningStep
+  stepType?: string;                             // Added for ReasoningStep
+  evidenceType?: string;                         // Added for ReasoningStep
+  supportingReferences?: string[];               // Added for ReasoningStep
+  alternatives?: string[];                       // Added for ReasoningStep
+  counterarguments?: string[];                   // Added for ReasoningStep
+  assumptions?: string[];                        // Added for ReasoningStep
+  formalNotation?: string;                       // Added for ReasoningStep
 }
 
 export interface Relation extends BaseRelation {
