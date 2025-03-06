@@ -10,8 +10,8 @@ const TOOL_DESCRIPTIONS = {
   "create_nodes": "WHEN the user specifically asks for the knowledge graph to be updated, create new nodes in the knowledge graph for ALL the following node types in the conversation:\n\n- Entity: People, organizations, products, physical objects, or any tangible item (e.g., 'John Smith', 'Apple Inc.', 'Golden Gate Bridge'). Include attributes like description, source, confidence, biography, keyContributions, emotionalValence, and emotionalArousal when available.\n\n- Event: Time-bound occurrences with temporal attributes (e.g., 'World War II', 'Company Merger', 'Product Launch'). Include attributes like startDate, endDate, status, location, participants, outcome, significance, timestamp, duration, causalPredecessors, and causalSuccessors when available.\n\n- Concept: Abstract ideas, theories, principles, or frameworks (e.g., 'Democracy', 'Machine Learning', 'Sustainability'). Include attributes like definition, description, examples, relatedConcepts, domain, significance, perspectives, historicalDevelopment, emotionalValence, emotionalArousal, and abstractionLevel when available.\n\n- Attribute: Qualities or properties that can be assigned to entities (e.g., 'Color', 'Height', 'Temperature'). Include attributes like value, unit, valueType, possibleValues, and description when available.\n\n- Proposition: Facts, claims, rules, or pieces of knowledge (e.g., 'CO2 levels influence global temperature', 'Einstein won the 1921 Nobel Prize'). Include attributes like statement, status, confidence, truthValue, sources, domain, emotionalValence, emotionalArousal, evidenceStrength, and counterEvidence when available.\n\n- Emotion: Emotional states and feelings (e.g., 'Joy', 'Sadness', 'Fear'). Include attributes like intensity, valence, category, subcategory, and description when available.\n\n- Agent: Cognitive entities capable of action or belief (e.g., 'AI Assistant', 'Customer Service Rep', 'Researcher'). Include attributes like agentType, description, capabilities, beliefs, knowledge, preferences, and emotionalState when available.\n\n- ScientificInsight: Research findings, experimental results, or scientific claims (e.g., 'Greenhouse Effect', 'Quantum Entanglement'). Include attributes like hypothesis, evidence, methodology, confidence, field, publications, emotionalValence, emotionalArousal, evidenceStrength, scientificCounterarguments, applicationDomains, replicationStatus, and surpriseValue when available.\n\n- Law: Established principles, rules, or regularities that describe phenomena (e.g., 'Law of Supply and Demand', 'Newton's Laws of Motion'). Include attributes like statement, conditions, exceptions, domain, proofs, emotionalValence, emotionalArousal, domainConstraints, historicalPrecedents, counterexamples, and formalRepresentation when available.\n\n- Thought: Analyses, interpretations, or reflections about other nodes in the graph (e.g., 'Analysis of Market Trends', 'Critique of Theory X'). Include attributes like thoughtContent, references, confidence, source, createdBy, tags, impact, emotionalValence, emotionalArousal, evidentialBasis, thoughtCounterarguments, implications, and thoughtConfidenceScore when available.\n\n- ReasoningChain: Structured logical reasoning with multiple steps (e.g., 'Analysis of Climate Policy Impact', 'Argument for Economic Reform'). Include attributes like description, conclusion, confidenceScore, creator, methodology, domain, tags, sourceThought, numberOfSteps, and alternativeConclusionsConsidered when available.\n\n- ReasoningStep: Steps within a reasoning chain. Include attributes like content, stepType, evidenceType, supportingReferences, confidence, alternatives, counterarguments, assumptions, formalNotation, and propositions when available.\n\nEach node type has specific cognitive attributes that should be populated when available. Ensure node names are concise, specific, and uniquely identifiable.",
   "create_relations": "Whenever you create new nodes, always create any relevant new relations between nodes in the knowledge graph. Relations should be semantically meaningful and use active voice. All relations MUST include the following:\n\n1. from: The name of the source node\n2. to: The name of the target node\n3. relationType: A descriptive label for the relationship (e.g., ADVOCATES, CONTRIBUTES_TO)\n4. relationshipType: A standardized relationship type from the RelationshipType enum\n5. context: A brief explanation (30-50 words) that describes how and why the nodes are connected\n\nWhenever possible, also include these important attributes:\n- confidenceScore: A number from 0.0 to 1.0 indicating confidence in this relationship\n- weight: A number from 0.0 to 1.0 indicating the strength/importance of this relationship (used for traversal prioritization)\n- sources: Array of citation sources for this relationship\n- contextType: One of 'hierarchical', 'associative', 'causal', 'temporal', 'analogical', or 'attributive'\n\nExample relationships by category:\n\n- HIERARCHICAL: isA, instanceOf, subClassOf, superClassOf\n- COMPOSITIONAL: hasPart, partOf\n- SPATIAL: locatedIn, hasLocation\n- TEMPORAL: hasTime, occursOn, before, after, during\n- PARTICIPATION: participant, hasParticipant, agent, hasAgent, patient, hasPatient\n- CAUSAL: causes, causedBy, influences, influencedBy\n- SEQUENTIAL: next, previous\n- SOCIAL: knows, friendOf, memberOf\n- PROPERTY: hasProperty, propertyOf\n- GENERAL: relatedTo, associatedWith\n- EMOTIONAL: expressesEmotion, feels, evokesEmotion\n- BELIEF: believes, supports, contradicts\n- SOURCE: derivedFrom, cites, source\n\nExample relations between different node types:\n- Entity -> Concept: ADVOCATES, SUPPORTS, UNDERSTANDS\n- Entity -> Event: PARTICIPATED_IN, ORGANIZED, WITNESSED\n- Concept -> Concept: RELATES_TO, BUILDS_UPON, CONTRADICTS\n- Event -> ScientificInsight: LED_TO, DISPROVED, REINFORCED\n- ScientificInsight -> Law: SUPPORTS, CHALLENGES, REFINES\n- Entity -> Attribute: HAS_PROPERTY, EXHIBITS\n- Proposition -> Entity: DESCRIBES, REFERS_TO\n- Agent -> Proposition: BELIEVES, DOUBTS\n- Event -> Emotion: EVOKES, TRIGGERS\n- Entity -> Agent: KNOWS, COLLABORATES_WITH",
   "get_temporal_sequence": "ESSENTIAL tool for analyzing CHRONOLOGICAL and CAUSAL relationships within the knowledge graph. Visualizes temporal sequences of related events, concepts, and insights showing how they unfold over time. Use this tool WHENEVER you need to:\n\n- Understand historical progression of events (e.g., 'Evolution of Artificial Intelligence', 'Stages of the Industrial Revolution')\n- Identify cause-and-effect relationships by temporal ordering\n- Track the development of scientific insights over time\n- Map the influence of events on concept development\n\nThe tool provides the ability to look FORWARD in time (future events/consequences), BACKWARD in time (historical causes/precedents), or BOTH directions from any starting node. Results are returned as a chronologically ordered sequence with timestamps and relationship descriptions, making it ideal for constructing timelines and narratives.",
-  "create_reasoning_chain": "POWERFUL tool for documenting and structuring explicit logical reasoning within the knowledge graph. Creates a new reasoning chain node with multiple structured reasoning steps that represent a formal logical analysis. USE THIS TOOL when you need to:\n\n- Capture complex multi-step reasoning processes (e.g., 'Analysis of Climate Change Impacts', 'Evaluation of Economic Policy')\n- Document critical thinking paths with clear premises and conclusions\n- Preserve the logical structure behind important insights or decisions\n- Build verifiable reasoning that others can examine and critique\n\nThe chain includes metadata such as methodology type (deductive, inductive, abductive, analogical, or mixed), confidence scores, alternative conclusions considered, and domain information. EACH STEP in the chain represents a distinct logical move with its own premises, inference rule, and conclusion. The full chain becomes a first-class node in the knowledge graph that can be referenced, critiqued, or extended.\n\nThe chain can now be linked to Proposition nodes to represent the formal statements being reasoned about.",
-  "get_reasoning_chain": "RETRIEVAL tool for accessing complete reasoning chains and all their constituent steps from the knowledge graph. Use this tool WHENEVER you need to:\n\n- Examine the logical structure behind a complex conclusion or thought\n- Review step-by-step reasoning for educational or verification purposes\n- Build upon existing reasoning chains with new insights or corrections\n- Compare different reasoning approaches to the same problem\n\nThe tool returns the full chain metadata (including methodology, confidence score, and domain) along with ALL reasoning steps in their proper sequence. Each step includes its premises, inference rule, and intermediate conclusion. This is PARTICULARLY VALUABLE for understanding how conclusions were reached and for conducting critical analysis of complex reasoning."
+  "create_reasoning_chain": "POWERFUL tool for documenting and structuring explicit logical reasoning within the knowledge graph. Creates a new reasoning chain node with multiple structured reasoning steps that represent a formal logical analysis. USE THIS TOOL when you need to:\n\n- Capture complex multi-step reasoning processes (e.g., 'Analysis of Climate Change Impacts', 'Evaluation of Economic Policy')\n- Document critical thinking paths with clear premises and conclusions\n- Preserve the logical structure behind important insights or decisions\n- Build verifiable reasoning that others can examine and critique\n\nEach reasoning chain requires the following core parameters:\n\n1. chainName: A concise, descriptive name for the chain (e.g., \"Climate Policy Impact Analysis\")\n2. description: An overview of what the reasoning chain accomplishes\n3. conclusion: The final conclusion reached through the reasoning\n4. confidenceScore: How confident you are in the conclusion (0.0-1.0)\n5. steps: An array of reasoning steps in logical order\n\nOptional but valuable parameters include:\n- methodology: The reasoning approach used (deductive, inductive, abductive, analogical, mixed)\n- domain: The field or subject area of the reasoning (e.g., \"Economics\", \"Climate Science\")\n- sourceThought: The name of a Thought node this reasoning chain is derived from\n- tags: Keywords that categorize the reasoning chain\n\nEACH STEP in the chain represents a distinct logical move with specific properties:\n- name: A unique identifier for the step (e.g., \"ClimatePolicy_Step1_Premise\")\n- content: The actual content of the reasoning step\n- stepNumber: The position in the sequence (1, 2, 3, etc.)\n- stepType: One of 'premise', 'inference', 'evidence', 'counterargument', 'rebuttal', 'conclusion'\n- confidence: How confident you are in this specific step (0.0-1.0)\n- supportingReferences: Names of existing nodes that support this step\n- previousSteps: Names of steps that logically precede this one\n\nExample input structure:\n```json\n{\n  \"chainName\": \"Climate Policy Impact Analysis\",\n  \"description\": \"Analysis of carbon pricing policies and their effectiveness\",\n  \"conclusion\": \"Carbon taxes are more effective than cap-and-trade in reducing emissions while maintaining economic growth\",\n  \"confidenceScore\": 0.85,\n  \"methodology\": \"mixed\",\n  \"domain\": \"Climate Policy\",\n  \"steps\": [\n    {\n      \"name\": \"ClimatePolicy_Step1\",\n      \"content\": \"Carbon pricing mechanisms are the most economically efficient way to reduce emissions\",\n      \"stepNumber\": 1,\n      \"stepType\": \"premise\",\n      \"confidence\": 0.9,\n      \"supportingReferences\": [\"IPCC Report 2022\", \"Carbon Economics Study\"]\n    },\n    {\n      \"name\": \"ClimatePolicy_Step2\",\n      \"content\": \"Carbon taxes provide price certainty while cap-and-trade provides quantity certainty\",\n      \"stepNumber\": 2,\n      \"stepType\": \"evidence\",\n      \"evidenceType\": \"fact\",\n      \"confidence\": 0.95,\n      \"previousSteps\": [\"ClimatePolicy_Step1\"]\n    }\n  ]\n}\n```\n\nThe chain becomes a first-class node in the knowledge graph that can be retrieved later using the get_reasoning_chain tool.",
+  "get_reasoning_chain": "POWERFUL retrieval tool for accessing reasoning chains and all their constituent steps from the knowledge graph. This tool supports two query modes:\n\n1. BY NAME: Retrieve a specific reasoning chain by exact name\n   Example: {\"chainName\": \"Climate Change Impact Analysis\"}\n\n2. BY TOPICS: Find reasoning chains related to specific entities and concepts\n   Example: {\"entities\": [\"United States\", \"Tesla\"], \"concepts\": [\"Electric Vehicles\", \"Climate Policy\"]}\n\nUse this tool WHENEVER you need to:\n\n- Find reasoning chains relevant to specific topics or entities being discussed\n- Examine the logical structure behind complex conclusions\n- Review step-by-step reasoning processes for verification purposes\n- Build upon existing reasoning chains with new insights\n- Compare different reasoning approaches to similar problems\n\nThe tool returns the full chain metadata (methodology, confidence, domain) along with ALL reasoning steps in their proper sequence. Each step includes its content, type, evidence, and connections to other steps.\n\nExample inputs:\n1. {\"chainName\": \"Analysis of Carbon Pricing Policy\"}\n2. {\"entities\": [\"Elon Musk\", \"SpaceX\"], \"concepts\": [\"Space Exploration\"]}\n3. {\"concepts\": [\"Nuclear Energy\", \"Climate Change\", \"Energy Policy\"]}\n\nNote: When searching by topics, provide the most specific and relevant entities and concepts for best results."
 };
 
 /**
@@ -310,12 +310,110 @@ export function setupTools(
       inputSchema: {
         type: "object",
         properties: {
-          chainName: { type: "string", description: "Name of the reasoning chain" },
-          description: { type: "string", description: "Description of the reasoning chain" },
-          conclusion: { type: "string", description: "Final conclusion of the reasoning" },
-          confidenceScore: { type: "number", description: "Overall confidence score (0.0-1.0)" },
-          steps: { type: "array", items: { type: "object" } }
-          // Additional properties would be defined here
+          chainName: { 
+            type: "string", 
+            description: "A concise, descriptive name for the reasoning chain (e.g., 'Climate Policy Impact Analysis')" 
+          },
+          description: { 
+            type: "string", 
+            description: "An overview description of what the reasoning chain accomplishes" 
+          },
+          conclusion: { 
+            type: "string", 
+            description: "The final conclusion reached through the reasoning process" 
+          },
+          confidenceScore: { 
+            type: "number", 
+            description: "Overall confidence score in the conclusion (0.0-1.0)" 
+          },
+          methodology: { 
+            type: "string", 
+            enum: ["deductive", "inductive", "abductive", "analogical", "mixed"],
+            description: "The reasoning methodology used in this chain (default: mixed)" 
+          },
+          domain: { 
+            type: "string", 
+            description: "The field or subject area of the reasoning (e.g., 'Economics', 'Climate Science')" 
+          },
+          sourceThought: { 
+            type: "string", 
+            description: "The name of a Thought node this reasoning chain is derived from" 
+          },
+          tags: { 
+            type: "array", 
+            items: { type: "string" }, 
+            description: "Keywords that categorize the reasoning chain" 
+          },
+          alternativeConclusionsConsidered: { 
+            type: "array", 
+            items: { type: "string" }, 
+            description: "Other possible conclusions that were considered" 
+          },
+          steps: { 
+            type: "array", 
+            items: { 
+              type: "object",
+              properties: {
+                name: { 
+                  type: "string", 
+                  description: "A unique identifier for the step (e.g., 'ClimatePolicy_Step1')" 
+                },
+                content: { 
+                  type: "string", 
+                  description: "The actual content of the reasoning step" 
+                },
+                stepNumber: { 
+                  type: "number", 
+                  description: "The position in the sequence (1, 2, 3, etc.)" 
+                },
+                stepType: { 
+                  type: "string", 
+                  enum: ["premise", "inference", "evidence", "counterargument", "rebuttal", "conclusion"],
+                  description: "The type of reasoning step" 
+                },
+                evidenceType: { 
+                  type: "string", 
+                  enum: ["observation", "fact", "assumption", "inference", "expert_opinion", "statistical_data"],
+                  description: "For evidence steps, the type of evidence presented" 
+                },
+                confidence: { 
+                  type: "number", 
+                  description: "Confidence score for this specific step (0.0-1.0)" 
+                },
+                supportingReferences: { 
+                  type: "array", 
+                  items: { type: "string" }, 
+                  description: "Names of existing nodes that support this step" 
+                },
+                alternatives: { 
+                  type: "array", 
+                  items: { type: "string" }, 
+                  description: "Alternative formulations of this step that were considered" 
+                },
+                counterarguments: { 
+                  type: "array", 
+                  items: { type: "string" }, 
+                  description: "Potential counterarguments to this step" 
+                },
+                assumptions: { 
+                  type: "array", 
+                  items: { type: "string" }, 
+                  description: "Underlying assumptions for this step" 
+                },
+                formalNotation: { 
+                  type: "string", 
+                  description: "Formal logical or mathematical notation for this step" 
+                },
+                previousSteps: { 
+                  type: "array", 
+                  items: { type: "string" }, 
+                  description: "Names of steps that logically precede this one" 
+                }
+              },
+              required: ["name", "content", "stepNumber", "stepType", "confidence"]
+            },
+            description: "An array of reasoning steps in logical order"
+          }
         },
         required: ["chainName", "description", "conclusion", "confidenceScore", "steps"]
       }
@@ -326,9 +424,30 @@ export function setupTools(
       inputSchema: {
         type: "object",
         properties: {
-          chainName: { type: "string", description: "Name of the reasoning chain" }
+          chainName: { 
+            type: "string", 
+            description: "Exact name of a specific reasoning chain to retrieve" 
+          },
+          entities: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of Entity node names to find related reasoning chains for"
+          },
+          concepts: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of Concept node names to find related reasoning chains for"
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of reasoning chains to return (default: 3)"
+          }
         },
-        required: ["chainName"]
+        oneOf: [
+          { required: ["chainName"] },
+          { required: ["entities"] },
+          { required: ["concepts"] }
+        ]
       }
     }
   ];
@@ -495,24 +614,94 @@ export function setupTools(
 
       case "get_reasoning_chain":
         try {
-          const chainName = args.chainName as string;
-          const knowledgeGraph = await nodeRetriever.getReasoningChain(chainName);
-          
-          // Extract chain and steps from entities in the knowledge graph
-          const chain = knowledgeGraph.entities.find(e => e.entityType === 'ReasoningChain');
-          const steps = knowledgeGraph.entities
-            .filter(e => e.entityType === 'ReasoningStep')
-            .sort((a, b) => {
-              // Sort by step number if available
-              const aStepNumber = (a as any).stepNumber || 0;
-              const bStepNumber = (b as any).stepNumber || 0;
-              return aStepNumber - bStepNumber;
-            });
-          
-          result = {
-            chain,
-            steps
-          };
+          // Check if we're retrieving by exact chain name
+          if (args.chainName) {
+            const chainName = args.chainName as string;
+            const knowledgeGraph = await nodeRetriever.getReasoningChain(chainName);
+            
+            // Extract chain and steps from entities in the knowledge graph
+            const chain = knowledgeGraph.entities.find(e => e.entityType === 'ReasoningChain');
+            const steps = knowledgeGraph.entities
+              .filter(e => e.entityType === 'ReasoningStep')
+              .sort((a, b) => {
+                // Sort by step number if available
+                const aStepNumber = (a as any).stepNumber || 0;
+                const bStepNumber = (b as any).stepNumber || 0;
+                return aStepNumber - bStepNumber;
+              });
+            
+            result = {
+              chains: [{ chain, steps }]
+            };
+          } 
+          // Otherwise, search for related chains based on entities and concepts
+          else {
+            let topics: string[] = [];
+            
+            // Collect entity names
+            if (args.entities && Array.isArray(args.entities)) {
+              topics = topics.concat(args.entities);
+            }
+            
+            // Collect concept names
+            if (args.concepts && Array.isArray(args.concepts)) {
+              topics = topics.concat(args.concepts);
+            }
+            
+            if (topics.length === 0) {
+              result = "No entities or concepts provided. Please specify at least one entity or concept to find related reasoning chains.";
+              break;
+            }
+            
+            // Get the limit parameter with a default of 3
+            const limit = typeof args.limit === 'number' ? args.limit : 3;
+            
+            // Collect results for each topic
+            const chains = [];
+            console.error(`Finding reasoning chains related to topics: ${topics.join(', ')}`);
+            
+            for (const topic of topics) {
+              // Find reasoning chains with similar conclusions to the topic
+              const topicLimit = Math.max(1, Math.floor(limit / topics.length));
+              const knowledgeGraph = await nodeRetriever.findReasoningChainsWithSimilarConclusion(topic, topicLimit);
+              
+              // Extract chains from the knowledge graph
+              const foundChains = knowledgeGraph.entities.filter(e => e.entityType === 'ReasoningChain');
+              
+              for (const chain of foundChains) {
+                // Get steps for each chain
+                const chainSteps = knowledgeGraph.entities
+                  .filter(e => e.entityType === 'ReasoningStep' && 
+                           knowledgeGraph.relations.some(r => 
+                             r.from === chain.name && 
+                             r.to === e.name && 
+                             r.relationType === 'CONTAINS_STEP'))
+                  .sort((a, b) => {
+                    // Sort by step number if available
+                    const aStepNumber = (a as any).stepNumber || 0;
+                    const bStepNumber = (b as any).stepNumber || 0;
+                    return aStepNumber - bStepNumber;
+                  });
+                
+                chains.push({
+                  chain,
+                  steps: chainSteps,
+                  relevantTopic: topic
+                });
+              }
+            }
+            
+            // Ensure we don't exceed the overall limit
+            const uniqueChains = chains
+              .filter((chain, index, self) => 
+                self.findIndex(c => c.chain.name === chain.chain.name) === index)
+              .slice(0, limit);
+            
+            result = {
+              chains: uniqueChains,
+              count: uniqueChains.length
+            };
+          }
         } catch (error) {
           result = `Error retrieving reasoning chain: ${error.message}`;
         }

@@ -29,40 +29,27 @@ export async function getReasoningChain(
       return { entities: [], relations: [] };
     }
     
-    // Get the chain and its ordered steps
+    // Use apoc.path.subgraphAll to efficiently retrieve the complete subgraph
     const result = await session.executeRead(tx => tx.run(`
       // Find the chain
       MATCH (chain:ReasoningChain:Memory {name: $chainName})
       
-      // Find all steps in this chain
-      OPTIONAL MATCH (chain)-[r:HAS_STEP]->(step:ReasoningStep)
+      // Use subgraphAll to get the complete subgraph with all relationships
+      CALL apoc.path.subgraphAll(chain, {
+        relationshipFilter: "CONTAINS_STEP>|HAS_REASONING<|RELATED_TO>|REFERENCES>|LEADS_TO>",
+        maxLevel: 3
+      })
+      YIELD nodes, relationships
       
-      // Get related propositions
-      OPTIONAL MATCH (chain)-[:RELATED_TO]->(prop:Proposition)
+      // Unwind the nodes to process them individually
+      WITH nodes, relationships
+      UNWIND nodes as node
       
-      // Collect all relevant nodes
-      WITH chain, 
-           collect(step) as steps,
-           collect(prop) as props
-      
-      // Get all nodes in the collection
-      WITH [chain] + steps + props as allNodes
-      
-      // Get relationships for each node
-      UNWIND allNodes as node
-      
-      WITH DISTINCT node
-      
-      // Get outgoing relationships
-      OPTIONAL MATCH (node)-[outRel]->(connected)
-      
-      // Get incoming relationships
-      OPTIONAL MATCH (other)-[inRel]->(node)
-      
+      // Return in the format expected by processSearchResults
       RETURN 
         node as entity,
-        collect(DISTINCT outRel) as relations,
-        collect(DISTINCT inRel) as inRelations
+        [rel IN relationships WHERE startNode(rel) = node] as relations,
+        [rel IN relationships WHERE endNode(rel) = node] as inRelations
     `, { chainName }));
     
     console.error(`Retrieved reasoning chain with ${result.records.length} related nodes`);
@@ -96,27 +83,39 @@ export async function getReasoningStepDetails(
       // Find the reasoning step
       MATCH (step:ReasoningStep:Memory {name: $stepName})
       
-      // Get evidence and related nodes
-      OPTIONAL MATCH (step)-[:SUPPORTED_BY]->(evidence)
-      OPTIONAL MATCH (step)-[:USES_PROPOSITION]->(prop:Proposition)
+      // Find the chain this step belongs to
+      MATCH (chain:ReasoningChain)-[r:CONTAINS_STEP]->(step)
       
-      // Get parent chain
-      OPTIONAL MATCH (chain:ReasoningChain)-[:HAS_STEP]->(step)
+      // Use neighbor functions to find adjacent steps efficiently
+      CALL {
+        MATCH (step:ReasoningStep {name: $stepName})
+        
+        // Get all nodes directly connected to this step with specified relationships
+        CALL apoc.neighbors.byhop(step, "REFERENCES>|LEADS_TO>|<LEADS_TO|USES_PROPOSITION>", 1)
+        YIELD nodes as connectedNodes
+        
+        UNWIND connectedNodes as connected
+        RETURN collect(DISTINCT connected) as relatedNodes
+      }
       
-      // Get alternative steps if any
-      OPTIONAL MATCH (step)-[:HAS_ALTERNATIVE]->(alt:ReasoningStep)
+      // Get any referenced entities from the step
+      CALL {
+        MATCH (step:ReasoningStep {name: $stepName})
+        OPTIONAL MATCH (step)-[:REFERENCES]->(reference)
+        RETURN collect(DISTINCT reference) as references
+      }
       
-      // Collect all relevant nodes
-      WITH step, 
-           collect(DISTINCT evidence) as evidenceNodes,
-           collect(DISTINCT prop) as propositions,
-           collect(DISTINCT chain) as chains,
-           collect(DISTINCT alt) as alternatives
+      // Combine all nodes of interest
+      WITH step, chain, relatedNodes, references
+      
+      // Get all step details in the same chain for context
+      OPTIONAL MATCH (chain)-[:CONTAINS_STEP]->(otherStep:ReasoningStep)
+      WHERE otherStep <> step
       
       // Combine all nodes
-      WITH [step] + evidenceNodes + propositions + chains + alternatives as allNodes
+      WITH [step] + [chain] + relatedNodes + references + collect(DISTINCT otherStep) as allNodes
       
-      // Get relationships for each node
+      // Process each node to get its relationships
       UNWIND allNodes as node
       
       WITH DISTINCT node
@@ -163,49 +162,36 @@ export async function findReasoningChainsWithSimilarConclusion(
     console.error(`Finding reasoning chains with conclusions similar to: ${topic}`);
     
     const result = await session.executeRead(tx => tx.run(`
-      // Find reasoning chains with similar conclusions
-      MATCH (chain:ReasoningChain:Memory)
-      WHERE apoc.text.fuzzyMatch(chain.conclusion, $topic, 0.7)
-         OR chain.conclusion CONTAINS $topic
-         OR chain.description CONTAINS $topic
-      
-      // Get connections to other node types for context
-      OPTIONAL MATCH (chain)-[:RELATED_TO]->(prop:Proposition)
-      OPTIONAL MATCH (chain)-[:SUPPORTS]->(concept:Concept)
-      OPTIONAL MATCH (chain)-[:HAS_STEP]->(step:ReasoningStep)
-      
-      // Gather nodes in one collection for processing
-      WITH chain, 
-           collect(DISTINCT prop) as propositions,
-           collect(DISTINCT concept) as concepts,
-           collect(DISTINCT step) as steps,
-           apoc.text.fuzzyMatch(chain.conclusion, $topic, 0.7) as score
-      
-      // Order by similarity score
-      ORDER BY score DESC
+      // Use text search to efficiently find chains with similar conclusions
+      CALL db.index.fulltext.queryNodes("reasoningChainContent", $searchTerm) 
+      YIELD node as chain, score
+      WHERE chain:ReasoningChain:Memory
+
+      // Order by similarity score, then confidence score
+      ORDER BY score DESC, chain.confidenceScore DESC
       LIMIT $limit
       
-      // Combine all nodes
-      WITH chain, propositions, concepts, steps, score
-      WITH [chain] + propositions + concepts + steps as allNodes
+      // With the best matching chains, use subgraphAll to get related nodes
+      WITH collect(chain) as matchingChains
+      UNWIND matchingChains as chain
       
-      // Get relationships for each node
-      UNWIND allNodes as node
+      // Get a subgraph for each chain with its most important relationships
+      CALL apoc.path.subgraphAll(chain, {
+        relationshipFilter: "CONTAINS_STEP>|HAS_REASONING<",
+        maxLevel: 1
+      })
+      YIELD nodes, relationships
       
-      WITH DISTINCT node
-      
-      // Get outgoing relationships
-      OPTIONAL MATCH (node)-[outRel]->(connected)
-      
-      // Get incoming relationships
-      OPTIONAL MATCH (other)-[inRel]->(node)
+      // Return in the format expected by processSearchResults
+      WITH nodes, relationships
+      UNWIND nodes as node
       
       RETURN 
         node as entity,
-        collect(DISTINCT outRel) as relations,
-        collect(DISTINCT inRel) as inRelations
+        [rel IN relationships WHERE startNode(rel) = node] as relations,
+        [rel IN relationships WHERE endNode(rel) = node] as inRelations
     `, { 
-      topic,
+      searchTerm: `${topic}~`,
       limit 
     }));
     
@@ -213,8 +199,61 @@ export async function findReasoningChainsWithSimilarConclusion(
     
     return processSearchResults(result.records);
   } catch (error) {
-    console.error(`Error finding similar reasoning chains: ${error}`);
-    throw error;
+    // Fulltext search might not be available, use fuzzy matching as fallback
+    try {
+      console.error(`Fulltext search failed, using fallback: ${error}`);
+      
+      const fallbackResult = await session.executeRead(tx => tx.run(`
+        // Find reasoning chains with similar conclusions using fuzzy matching
+        MATCH (chain:ReasoningChain:Memory)
+        WHERE apoc.text.fuzzyMatch(chain.conclusion, $topic, 0.7)
+           OR chain.conclusion CONTAINS $topic
+           OR chain.description CONTAINS $topic
+        
+        // Use similar patterns to collect relevant nodes
+        WITH chain, 
+             apoc.text.fuzzyMatch(chain.conclusion, $topic, 0.7) as score,
+             chain.confidenceScore as confidence
+        
+        // Order by similarity score, then confidence score
+        ORDER BY score DESC, confidence DESC
+        LIMIT $limit
+        
+        // Collect the chains and their steps
+        OPTIONAL MATCH (chain)-[:CONTAINS_STEP]->(step:ReasoningStep)
+        OPTIONAL MATCH (thought:Thought)-[:HAS_REASONING]->(chain)
+        
+        // Combine nodes
+        WITH chain, collect(step) as steps, collect(thought) as thoughts
+        WITH [chain] + steps + thoughts as allNodes
+        
+        // Process each node
+        UNWIND allNodes as node
+        
+        WITH DISTINCT node
+        
+        // Get outgoing relationships
+        OPTIONAL MATCH (node)-[outRel]->(connected)
+        
+        // Get incoming relationships
+        OPTIONAL MATCH (other)-[inRel]->(node)
+        
+        RETURN 
+          node as entity,
+          collect(DISTINCT outRel) as relations,
+          collect(DISTINCT inRel) as inRelations
+      `, { 
+        topic,
+        limit 
+      }));
+      
+      console.error(`Fallback search found ${fallbackResult.records.length} nodes related to similar reasoning chains`);
+      
+      return processSearchResults(fallbackResult.records);
+    } catch (fallbackError) {
+      console.error(`Error finding similar reasoning chains using fallback: ${fallbackError}`);
+      throw fallbackError;
+    }
   } finally {
     await session.close();
   }
@@ -251,59 +290,95 @@ export async function getReasoningAnalytics(
     }
     
     const result = await session.executeRead(tx => tx.run(`
-      // Find all reasoning chains and their steps
+      // Find all reasoning chains matching the filters
       MATCH (chain:ReasoningChain:Memory)
       WHERE true ${filterConditions}
       
-      // Get steps, sorted by chain and sequence
-      OPTIONAL MATCH (chain)-[r:HAS_STEP]->(step:ReasoningStep)
+      // Calculate analytics per chain
+      WITH chain
       
-      // Get connected propositions
-      OPTIONAL MATCH (chain)-[:RELATED_TO]->(prop:Proposition)
-      OPTIONAL MATCH (step)-[:USES_PROPOSITION]->(stepProp:Proposition)
+      // Get step count and confidence using pattern comprehension
+      OPTIONAL MATCH (chain)-[:CONTAINS_STEP]->(step:ReasoningStep)
+      WITH chain, 
+           count(step) as stepCount,
+           CASE WHEN count(step) > 0 THEN avg(step.confidence) ELSE null END as avgConfidence
       
-      // Get other significant connections
-      OPTIONAL MATCH (chain)-[:SUPPORTS|CONTRADICTS]->(entity)
-      WHERE entity:Concept OR entity:ScientificInsight OR entity:Proposition
+      // Only include chains with at least one step
+      WHERE stepCount > 0
+      WITH chain, stepCount, avgConfidence
+           
+      // Use subgraph expansion to get key connected entities
+      CALL apoc.path.subgraphAll(chain, {
+        relationshipFilter: "CONTAINS_STEP>|HAS_REASONING<|REFERENCES>",
+        maxLevel: 2,
+        limit: 100  // Limit to prevent very large subgraphs
+      })
+      YIELD nodes, relationships
       
-      // Gather all nodes
-      WITH chain,
-           collect(DISTINCT step) as steps,
-           collect(DISTINCT prop) + collect(DISTINCT stepProp) as propositions,
-           collect(DISTINCT entity) as supportedConcepts,
-           count(DISTINCT step) as stepCount,
-           avg(step.confidence) as avgConfidence
+      // Calculate additional analytics per subgraph
+      WITH chain, stepCount, avgConfidence, nodes, relationships,
+           [n IN nodes WHERE n:ReasoningStep] as stepNodes,
+           [n IN nodes WHERE n:Thought] as thoughtNodes,
+           [r IN relationships WHERE type(r) = 'REFERENCES'] as referenceRels
       
-      // Combine into a single collection
-      WITH chain, steps, propositions, supportedConcepts, stepCount, avgConfidence
-      WITH [chain] + steps + propositions + supportedConcepts as allNodes,
-           chain.name as chainName,
-           stepCount,
-           avgConfidence
-      
-      // Process each node
-      UNWIND allNodes as node
-      
-      WITH DISTINCT node, chainName, stepCount, avgConfidence
-      
-      // Get outgoing relationships
-      OPTIONAL MATCH (node)-[outRel]->(connected)
-      
-      // Get incoming relationships
-      OPTIONAL MATCH (other)-[inRel]->(node)
-      
+      // Return the subgraph with analytics
       RETURN 
-        node as entity,
-        collect(DISTINCT outRel) as relations,
-        collect(DISTINCT inRel) as inRelations,
-        chainName,
+        nodes as entities,
+        relationships as relations,
+        chain.name as chainName,
+        chain.methodology as methodology,
         stepCount,
-        avgConfidence
+        avgConfidence,
+        size(stepNodes) as totalSteps,
+        size(thoughtNodes) as relatedThoughts,
+        size(referenceRels) as totalReferences
     `, params));
     
-    console.error(`Retrieved reasoning analytics with ${result.records.length} nodes`);
+    console.error(`Retrieved reasoning analytics with ${result.records.length} chains`);
     
-    return processSearchResults(result.records);
+    // Process the results in a format compatible with processSearchResults
+    const processedRecords = result.records.flatMap(record => {
+      const entities = record.get('entities');
+      const relations = record.get('relations');
+      const chainName = record.get('chainName');
+      const methodology = record.get('methodology');
+      const stepCount = record.get('stepCount').toNumber();
+      const avgConfidence = record.get('avgConfidence');
+      const totalSteps = record.get('totalSteps').toNumber();
+      const relatedThoughts = record.get('relatedThoughts').toNumber();
+      const totalReferences = record.get('totalReferences').toNumber();
+      
+      // Format nodes to be processed by processSearchResults
+      return entities.map((entity: any) => {
+        // Add analytics metadata to chain entities
+        if (entity.labels.includes('ReasoningChain') && entity.properties.name === chainName) {
+          return {
+            entity: entity,
+            relations: relations.filter((r: any) => r.start.equals(entity.identity)),
+            inRelations: relations.filter((r: any) => r.end.equals(entity.identity)),
+            // Include analytics in properties
+            analyticsData: {
+              stepCount,
+              avgConfidence,
+              totalSteps,
+              relatedThoughts,
+              totalReferences,
+              methodology
+            }
+          };
+        }
+        
+        // Standard format for other entities
+        return {
+          entity: entity,
+          relations: relations.filter((r: any) => r.start.equals(entity.identity)),
+          inRelations: relations.filter((r: any) => r.end.equals(entity.identity))
+        };
+      });
+    });
+    
+    // Process the records using the existing processSearchResults function
+    return processSearchResults(processedRecords);
   } catch (error) {
     console.error(`Error retrieving reasoning analytics: ${error}`);
     throw error;
