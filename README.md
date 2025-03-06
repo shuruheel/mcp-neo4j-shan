@@ -10,10 +10,14 @@ A sophisticated knowledge graph memory system that stores interconnected informa
 
 #### Key Features
 
-- **Rich Node Type System**: Supports seven specialized node types, each with tailored attributes:
+- **Rich Node Type System**: Supports twelve specialized node types, each with tailored attributes:
   - **Entity**: People, organizations, products, physical objects
   - **Event**: Time-bound occurrences with temporal attributes
   - **Concept**: Abstract ideas, theories, principles, frameworks
+  - **Attribute**: Qualities or properties that can be assigned to entities
+  - **Proposition**: Facts, claims, rules, or pieces of knowledge
+  - **Emotion**: Emotional states and feelings
+  - **Agent**: Cognitive entities capable of action or belief
   - **ScientificInsight**: Research findings with supporting evidence
   - **Law**: Established principles, rules, or regularities
   - **ReasoningChain**: Structured representations of logical reasoning
@@ -27,6 +31,7 @@ A sophisticated knowledge graph memory system that stores interconnected informa
   - Confidence scores for reasoning chains and relations
   - Metaphorical mappings for concepts
   - Formal notations for reasoning steps
+  - Memory aid for relations between node types
 
 - **Semantic Relationships**: Creates meaningful connections between nodes with:
   - Active voice relationship types (e.g., ADVOCATES, PARTICIPATED_IN)
@@ -36,8 +41,12 @@ A sophisticated knowledge graph memory system that stores interconnected informa
 
 - **Available Tools**:
   - **Graph Exploration**:
-    - `explore_weighted_context`: The PRIMARY tool for exploring the knowledge graph, prioritizing important connections based on relationship weights
-    - `explore_context`: (Deprecated) Basic context exploration without weight prioritization
+    - `explore_weighted_context`: The PRIMARY tool for exploring the knowledge graph, now enhanced with:
+      - **Multi-node exploration**: Accepts multiple Entity and Concept nodes simultaneously for comprehensive context exploration
+      - **Intelligent topic decomposition**: Provides guidance for decomposing complex topics into individual entities and concepts
+      - **Advanced path traversal**: Finds meaningful connections between multiple starting nodes using Neo4j APOC procedures
+      - **Weighted relationship prioritization**: Focuses on stronger connections based on relationship weights
+      - **Node type filtering**: Targets specific node types to deliver more relevant context
     - `get_temporal_sequence`: Visualizes how events and concepts unfold over time
   
   - **Knowledge Creation**:
