@@ -2,6 +2,8 @@
 
 This repository contains a collection of Servers that enable LLMs to build, maintain, and explore a comprehensive knowledge graph with cognitive neuroscience-inspired features.
 
+Note: I'm currently working on the new-schema branch, which has better cognitive schema and graph exploration tools.
+
 ## Servers
 
 ### `mcp-neo4j-shan` 
