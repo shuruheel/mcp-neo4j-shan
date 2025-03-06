@@ -1,6 +1,5 @@
 import fs from 'fs-extra';
 import path from 'path';
-import pdfParse from 'pdf-parse';
 import { ContentExtractor } from './types.js';
 import { Logger } from 'winston';
 
@@ -23,11 +22,16 @@ export class TextExtractor implements ContentExtractor {
   /**
    * Extract content from a text file
    * @param file - File path
-   * @returns Promise resolving to the file content
+   * @returns Extracted text content
    */
   async extractContent(file: string): Promise<string> {
-    this.logger.debug(`Extracting content from text file: ${file}`);
-    return fs.readFile(file, 'utf-8');
+    try {
+      this.logger.info(`Extracting content from text file: ${file}`);
+      return await fs.readFile(file, 'utf8');
+    } catch (error) {
+      this.logger.error(`Error extracting text content: ${(error as Error).message}`);
+      throw new Error(`Failed to extract content from text file: ${(error as Error).message}`);
+    }
   }
 }
 
@@ -40,33 +44,37 @@ export class PDFExtractor implements ContentExtractor {
   /**
    * Check if this extractor can handle the given file
    * @param file - File path
-   * @returns True if the file is a PDF
+   * @returns True if the file is a PDF file
    */
   canHandle(file: string): boolean {
-    return path.extname(file).toLowerCase() === '.pdf';
+    const ext = path.extname(file).toLowerCase();
+    return ext === '.pdf';
   }
 
   /**
    * Extract content from a PDF file
    * @param file - File path
-   * @returns Promise resolving to the extracted text
+   * @returns Extracted text content
    */
   async extractContent(file: string): Promise<string> {
-    this.logger.debug(`Extracting content from PDF file: ${file}`);
-    const dataBuffer = await fs.readFile(file);
-    
     try {
-      const pdf = await pdfParse(dataBuffer);
-      return pdf.text;
+      // Dynamically import pdf-parse only when needed
+      const pdfParse = await import('pdf-parse');
+      
+      this.logger.info(`Extracting content from PDF: ${file}`);
+      const dataBuffer = await fs.readFile(file);
+      const result = await pdfParse.default(dataBuffer);
+      
+      return result.text;
     } catch (error) {
-      this.logger.error(`Error parsing PDF file ${file}: ${(error as Error).message}`);
+      this.logger.error(`Error extracting PDF content: ${(error as Error).message}`);
       throw new Error(`Failed to extract content from PDF: ${(error as Error).message}`);
     }
   }
 }
 
 /**
- * Content extractor factory
+ * Factory for creating content extractors
  */
 export class ContentExtractorFactory {
   private extractors: ContentExtractor[];
@@ -79,23 +87,21 @@ export class ContentExtractorFactory {
     this.extractors = [
       new TextExtractor(logger),
       new PDFExtractor(logger)
-      // Add more extractors as needed
     ];
   }
 
   /**
-   * Get an appropriate extractor for the given file
+   * Get an extractor for a file
    * @param file - File path
-   * @returns Content extractor that can handle the file
+   * @returns Content extractor for the file
    */
   getExtractor(file: string): ContentExtractor {
-    const extractor = this.extractors.find(e => e.canHandle(file));
-    
-    if (!extractor) {
-      this.logger.error(`No suitable extractor found for file: ${file}`);
-      throw new Error(`No suitable extractor found for file: ${file}`);
+    for (const extractor of this.extractors) {
+      if (extractor.canHandle(file)) {
+        return extractor;
+      }
     }
-    
-    return extractor;
+
+    throw new Error(`No content extractor available for file: ${file}`);
   }
 } 

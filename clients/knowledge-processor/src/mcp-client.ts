@@ -1,7 +1,10 @@
-import { ClientSession, StdioServerParameters } from '@modelcontextprotocol/sdk';
-import { stdio_client } from '@modelcontextprotocol/sdk/dist/client/stdio.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport, StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Tool, ListToolsResponse } from '@modelcontextprotocol/sdk/types.js';
 import { Anthropic } from '@anthropic-ai/sdk';
 import { Logger } from 'winston';
+import fs from 'fs-extra';
+import path from 'path';
 import { 
   Config, 
   ProcessingResult, 
@@ -14,11 +17,14 @@ import {
   RelationshipType
 } from './types.js';
 
+// Define constant for Node.js path
+const NODE_PATH = '/opt/homebrew/opt/node@20/bin/node';
+
 /**
  * MCP client manager for connecting to and interacting with MCP servers
  */
 export class MCPClientManager {
-  private session: ClientSession | null = null;
+  private client: Client | null = null;
   private anthropic: Anthropic;
   private logger: Logger;
   private config: Config;
@@ -44,6 +50,12 @@ export class MCPClientManager {
       this.logger.info(`Connecting to MCP server at: ${this.config.mcp.serverPath}`);
       
       const serverPath = this.config.mcp.serverPath;
+      
+      // Check if the server file exists
+      if (!fs.existsSync(serverPath)) {
+        throw new Error(`MCP server file not found at: ${serverPath}`);
+      }
+      
       const isJavaScript = serverPath.endsWith('.js');
       const isPython = serverPath.endsWith('.py');
       
@@ -51,27 +63,32 @@ export class MCPClientManager {
         throw new Error('MCP server path must end with .js or .py');
       }
       
-      const command = isPython ? 'python' : 'node';
+      // Use absolute path for node if it's a JavaScript file
+      const command = isPython ? 'python' : NODE_PATH;
       
-      const serverParams = StdioServerParameters({
+      this.logger.info(`Using command: ${command} with server path: ${serverPath}`);
+      
+      const serverParams: StdioServerParameters = {
         command,
         args: [serverPath],
-        env: this.config.neo4j ? {
-          NEO4J_URI: this.config.neo4j.uri,
-          NEO4J_USERNAME: this.config.neo4j.username,
-          NEO4J_PASSWORD: this.config.neo4j.password
-        } : undefined
-      });
+        env: {
+          ...process.env, // Include all current environment variables
+          ...(this.config.neo4j ? {
+            NEO4J_URI: this.config.neo4j.uri,
+            NEO4J_USERNAME: this.config.neo4j.username,
+            NEO4J_PASSWORD: this.config.neo4j.password
+          } : {})
+        }
+      };
       
-      const stdioTransport = await stdio_client(serverParams);
-      const [stdio, write] = stdioTransport;
+      const transport = new StdioClientTransport(serverParams);
       
-      this.session = new ClientSession(stdio, write);
-      await this.session.initialize();
+      this.client = new Client({ name: "KnowledgeProcessor", version: "1.0.0" });
+      await this.client.connect(transport);
       
       // List available tools to confirm connection
-      const toolsResponse = await this.session.list_tools();
-      this.logger.info(`Connected to MCP server with tools: ${toolsResponse.tools.map((t: any) => t.name).join(', ')}`);
+      const toolsResponse = await this.client.listTools();
+      this.logger.info(`Connected to MCP server with tools: ${toolsResponse.tools.map((t: Tool) => t.name).join(', ')}`);
     } catch (error) {
       this.logger.error(`Failed to connect to MCP server: ${(error as Error).message}`);
       throw new Error(`Failed to connect to MCP server: ${(error as Error).message}`);
@@ -86,7 +103,7 @@ export class MCPClientManager {
    * @returns Processing result with nodes, relations, and reasoning chains
    */
   async processChunk(chunk: string, source: string): Promise<ProcessingResult> {
-    if (!this.session) {
+    if (!this.client) {
       throw new Error('MCP client not connected. Call connect() first.');
     }
     
@@ -119,15 +136,15 @@ export class MCPClientManager {
    * @returns Entity and relation extraction result
    */
   private async extractEntitiesAndRelations(chunk: string, source: string): Promise<EntityRelationResult> {
-    if (!this.session) {
+    if (!this.client) {
       throw new Error('MCP client not connected. Call connect() first.');
     }
     
     this.logger.info(`Extracting entities and relations from chunk source: ${source}`);
     
     // First, get available tools
-    const toolsResponse = await this.session.list_tools();
-    const availableTools = toolsResponse.tools.map((tool: any) => ({
+    const toolsResponse = await this.client.listTools();
+    const availableTools = toolsResponse.tools.map((tool: Tool) => ({
       name: tool.name,
       description: tool.description,
       input_schema: tool.inputSchema
@@ -198,7 +215,6 @@ Output ONLY a JSON structure with arrays for nodes and relations:
     });
     
     // Parse the response to extract JSON
-    // Get content from the content blocks, accounting for possible different types
     const contentText = response.content[0].type === 'text' 
       ? response.content[0].text 
       : JSON.stringify(response.content[0]);
@@ -228,8 +244,8 @@ Output ONLY a JSON structure with arrays for nodes and relations:
         source: node.source || source
       }));
       
-      // Call create_nodes tool
-      const createNodesResponse = await this.session.call_tool('create_nodes', {
+      // Call create_nodes tool with correct parameter format
+      const createNodesResponse = await this.client.callTool('create_nodes', {
         nodes: nodesWithSource
       });
       
@@ -243,8 +259,8 @@ Output ONLY a JSON structure with arrays for nodes and relations:
       
       this.logger.info(`Extracted ${validRelations.length} valid relations from chunk`);
       
-      // Call create_relations tool
-      const createRelationsResponse = await this.session.call_tool('create_relations', {
+      // Call create_relations tool with correct parameter format
+      const createRelationsResponse = await this.client.callTool('create_relations', {
         relations: validRelations
       });
       
@@ -261,7 +277,7 @@ Output ONLY a JSON structure with arrays for nodes and relations:
    * @returns Reasoning chain extraction result
    */
   private async extractReasoningChains(chunk: string, source: string): Promise<ReasoningChainResult> {
-    if (!this.session) {
+    if (!this.client) {
       throw new Error('MCP client not connected. Call connect() first.');
     }
     
@@ -336,7 +352,6 @@ Output ONLY a JSON structure with an array of reasoning chain fragments:
     });
     
     // Parse the response to extract JSON
-    // Get content from the content blocks, accounting for possible different types
     const contentText = response.content[0].type === 'text' 
       ? response.content[0].text 
       : JSON.stringify(response.content[0]);
@@ -377,8 +392,8 @@ Output ONLY a JSON structure with an array of reasoning chain fragments:
         // Process each complete reasoning chain
         for (const chain of completeChains) {
           try {
-            // Call create_reasoning_chain tool
-            const createChainResponse = await this.session.call_tool('create_reasoning_chain', {
+            // Call create_reasoning_chain tool with correct parameter format
+            const createChainResponse = await this.client.callTool('create_reasoning_chain', {
               chainName: chain.chainName,
               description: chain.description,
               conclusion: chain.conclusion,
@@ -392,7 +407,7 @@ Output ONLY a JSON structure with an array of reasoning chain fragments:
             
             // Create reasoning steps
             for (const step of chain.steps) {
-              const createStepResponse = await this.session.call_tool('create_reasoning_step', {
+              const createStepResponse = await this.client.callTool('create_reasoning_step', {
                 chainName: chain.chainName,
                 name: step.name,
                 content: step.content,
@@ -549,9 +564,9 @@ Output ONLY a JSON structure with an array of reasoning chain fragments:
    * Close the connection to the MCP server
    */
   async disconnect(): Promise<void> {
-    if (this.session) {
+    if (this.client) {
       this.logger.info('Disconnecting from MCP server');
-      // No explicit close method in ClientSession, but we should clean up if needed
+      // No explicit close method in Client, but we should clean up if needed
     }
   }
 } 
