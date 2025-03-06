@@ -33,45 +33,65 @@ export async function getTemporalSequence(
     // Generate type filter
     const typeFilter = nodeTypes.map(type => `node:${type}`).join(' OR ');
     
-    // Build relationship pattern based on direction
-    let relationshipPattern = '';
-    if (direction === 'forward' || direction === 'both') {
-      relationshipPattern += '(start)-[:FOLLOWS|PRECEDES|CAUSED_BY|CAUSES|NEXT|PREVIOUS|BEFORE|AFTER]->(node)';
-    }
-    if (direction === 'backward' || direction === 'both') {
-      if (relationshipPattern) relationshipPattern += ' OR ';
-      relationshipPattern += '(node)-[:FOLLOWS|PRECEDES|CAUSED_BY|CAUSES|NEXT|PREVIOUS|BEFORE|AFTER]->(start)';
+    // Build relationship filter for APOC procedure based on direction
+    let relationshipFilter = '';
+    if (direction === 'forward') {
+      relationshipFilter = 'FOLLOWS>|CAUSES>|NEXT>|AFTER>';
+    } else if (direction === 'backward') {
+      relationshipFilter = '<FOLLOWS|<CAUSES|<NEXT|<AFTER|PRECEDES>|CAUSED_BY>|PREVIOUS>|BEFORE>';
+    } else { // both
+      relationshipFilter = 'FOLLOWS>|CAUSES>|NEXT>|AFTER>|<FOLLOWS|<CAUSES|<NEXT|<AFTER|PRECEDES>|CAUSED_BY>|PREVIOUS>|BEFORE>';
     }
     
-    // Query to find the temporal sequence
+    // Use APOC path expansion procedure for more efficient and flexible path discovery
     const result = await session.executeRead(tx => tx.run(`
       // Start with the node by name
       MATCH (start:Memory {name: $startNodeName})
       
-      // Find connected nodes with temporal relationships
-      MATCH (related:Memory)
-      WHERE ${relationshipPattern}
-      AND (${typeFilter.replace(/node/g, 'related')})
+      // Use APOC path expansion with proper relationship filter
+      CALL apoc.path.expandConfig(start, {
+        relationshipFilter: $relationshipFilter,
+        labelFilter: $labelFilter,
+        uniqueness: "NODE_GLOBAL",
+        minLevel: 1,
+        maxLevel: 3
+      }) YIELD path
       
-      // Get relationship properties for proper sequencing
-      WITH start, related,
+      // Extract nodes from path
+      WITH DISTINCT nodes(path) AS pathNodes
+      UNWIND pathNodes AS node
+      
+      // Ensure node meets type criteria
+      WHERE (${typeFilter})
+      
+      // Get temporal relationship to start node
+      OPTIONAL MATCH (start)-[r1:FOLLOWS|PRECEDES|CAUSED_BY|CAUSES|NEXT|PREVIOUS|BEFORE|AFTER]->(node)
+      OPTIONAL MATCH (node)-[r2:FOLLOWS|PRECEDES|CAUSED_BY|CAUSES|NEXT|PREVIOUS|BEFORE|AFTER]->(start)
+      
+      // Calculate time position relative to start node
+      WITH start, node,
            CASE 
-             WHEN (start)-[:FOLLOWS]->(related) THEN 1
-             WHEN (related)-[:FOLLOWS]->(start) THEN -1
-             WHEN (start)-[:PRECEDES]->(related) THEN -1
-             WHEN (related)-[:PRECEDES]->(start) THEN 1
-             WHEN (start)-[:CAUSED_BY]->(related) THEN -1
-             WHEN (related)-[:CAUSED_BY]->(start) THEN 1
-             WHEN (start)-[:CAUSES]->(related) THEN 1
-             WHEN (related)-[:CAUSES]->(start) THEN -1
-             WHEN (start)-[:NEXT]->(related) THEN 1
-             WHEN (related)-[:NEXT]->(start) THEN -1
-             WHEN (start)-[:PREVIOUS]->(related) THEN -1
-             WHEN (related)-[:PREVIOUS]->(start) THEN 1
-             WHEN (start)-[:BEFORE]->(related) THEN -1
-             WHEN (related)-[:BEFORE]->(start) THEN 1
-             WHEN (start)-[:AFTER]->(related) THEN 1
-             WHEN (related)-[:AFTER]->(start) THEN -1
+             WHEN (start)-[:FOLLOWS]->(node) THEN -1
+             WHEN (node)-[:FOLLOWS]->(start) THEN 1
+             WHEN (start)-[:PRECEDES]->(node) THEN 1
+             WHEN (node)-[:PRECEDES]->(start) THEN -1
+             WHEN (start)-[:CAUSED_BY]->(node) THEN -1
+             WHEN (node)-[:CAUSED_BY]->(start) THEN 1
+             WHEN (start)-[:CAUSES]->(node) THEN 1
+             WHEN (node)-[:CAUSES]->(start) THEN -1
+             WHEN (start)-[:NEXT]->(node) THEN 1
+             WHEN (node)-[:NEXT]->(start) THEN -1
+             WHEN (start)-[:PREVIOUS]->(node) THEN -1
+             WHEN (node)-[:PREVIOUS]->(start) THEN 1
+             WHEN (start)-[:BEFORE]->(node) THEN -1
+             WHEN (node)-[:BEFORE]->(start) THEN 1
+             WHEN (start)-[:AFTER]->(node) THEN 1
+             WHEN (node)-[:AFTER]->(start) THEN -1
+             // If no direct relationship, calculate based on timestamps or dates if available
+             WHEN node.timestamp IS NOT NULL AND start.timestamp IS NOT NULL THEN
+               CASE WHEN node.timestamp > start.timestamp THEN 1 ELSE -1 END
+             WHEN node.startDate IS NOT NULL AND start.startDate IS NOT NULL THEN
+               CASE WHEN node.startDate > start.startDate THEN 1 ELSE -1 END
              ELSE 0
            END as sequenceOrder
       
@@ -80,22 +100,24 @@ export async function getTemporalSequence(
       LIMIT $maxEvents
       
       // Get relationships for each node
-      WITH start, related, sequenceOrder
-      OPTIONAL MATCH (related)-[outRel]->(connected)
-      WITH related, sequenceOrder, collect(outRel) as outRels
+      WITH node, sequenceOrder
+      OPTIONAL MATCH (node)-[outRel]->(connected)
+      WITH node, sequenceOrder, collect(outRel) as outRels
       
-      OPTIONAL MATCH (other)-[inRel]->(related)
+      OPTIONAL MATCH (other)-[inRel]->(node)
       
       // Return nodes with their relationships
       RETURN 
-        related as entity,
+        node as entity,
         outRels as relations,
         collect(inRel) as inRelations,
         sequenceOrder
       ORDER BY sequenceOrder
     `, {
       startNodeName,
-      maxEvents
+      maxEvents,
+      relationshipFilter,
+      labelFilter: '+' + nodeTypes.join('|')
     }));
     
     console.error(`Found ${result.records.length} nodes in temporal sequence`);
@@ -156,9 +178,17 @@ export async function findTemporalGaps(
     const result = await session.executeRead(tx => tx.run(`
       // Match events without temporal relationships
       MATCH (event:Event)
-      WHERE NOT exists((event)-[:BEFORE|AFTER|FOLLOWS|PRECEDES|NEXT|PREVIOUS]->()) 
-        AND NOT exists(()-[:BEFORE|AFTER|FOLLOWS|PRECEDES|NEXT|PREVIOUS]->(event))
+      WHERE NOT exists((event)-[:BEFORE|AFTER|FOLLOWS|PRECEDES|NEXT|PREVIOUS|CAUSES|CAUSED_BY]->()) 
+        AND NOT exists(()-[:BEFORE|AFTER|FOLLOWS|PRECEDES|NEXT|PREVIOUS|CAUSES|CAUSED_BY]->(event))
         ${domainCondition}
+      
+      // Check if event has timestamp/date properties but no temporal relationships
+      WITH event,
+           (event.timestamp IS NULL AND event.startDate IS NULL) AS missingDateInfo
+      
+      // Order by those missing both relationships and date properties first
+      ORDER BY missingDateInfo DESC
+      LIMIT $limit
       
       // Get relationships for these events
       WITH event
@@ -171,7 +201,6 @@ export async function findTemporalGaps(
         event as entity,
         outRels as relations,
         collect(inRel) as inRelations
-      LIMIT $limit
     `, {
       domainFilter,
       limit
@@ -213,17 +242,21 @@ export async function traceCausalChains(
     
     // Build the query based on whether a start node is provided
     let query;
-    let params: any = { maxLength, minWeight: includeProbable ? 0.3 : 0.7 };
+    let params: any = { 
+      maxLength, 
+      minWeight: includeProbable ? 0.3 : 0.7,
+      relationshipFilter: "CAUSES>|INFLUENCES>"
+    };
     
     if (startNode) {
-      // For specific start node
+      // For specific start node using APOC path expansion
       query = `
         // Start with specified node
         MATCH (start:Memory {name: $startNode})
         
         // Find causal chains using path expansion
         CALL apoc.path.expandConfig(start, {
-          relationshipFilter: "CAUSES>|INFLUENCES>",
+          relationshipFilter: $relationshipFilter,
           minLevel: 1,
           maxLevel: $maxLength,
           uniqueness: "NODE_GLOBAL"
@@ -232,13 +265,19 @@ export async function traceCausalChains(
         // Filter by relationship weight if needed
         WHERE all(rel in relationships(path) WHERE rel.weight >= $minWeight)
         
-        // Extract nodes and relationships
-        WITH nodes(path) as pathNodes, relationships(path) as pathRels
+        // Get path strength (product of weights)
+        WITH path,
+             reduce(s = 1.0, rel in relationships(path) | s * coalesce(rel.weight, 0.5)) as chainStrength,
+             length(path) as chainLength
         
-        // Process each node
+        // Order by strength and length
+        ORDER BY chainStrength DESC, chainLength DESC
+        
+        // Extract nodes and relationships
+        WITH nodes(path) as pathNodes
         UNWIND pathNodes as node
         
-        // Get all relationships for context
+        // Process each node
         WITH DISTINCT node
         OPTIONAL MATCH (node)-[outRel]->(connected)
         WITH node, collect(outRel) as outRels
@@ -261,18 +300,16 @@ export async function traceCausalChains(
         
         // Calculate chain strength
         WITH path, 
-             reduce(s = 1.0, rel in relationships(path) | s * rel.weight) as chainStrength,
+             reduce(s = 1.0, rel in relationships(path) | s * coalesce(rel.weight, 0.5)) as chainStrength,
              length(path) as chainLength
         ORDER BY chainStrength DESC, chainLength DESC
         LIMIT 10
         
         // Extract nodes and relationships
-        WITH nodes(path) as pathNodes, relationships(path) as pathRels
-        
-        // Process each node
+        WITH nodes(path) as pathNodes
         UNWIND pathNodes as node
         
-        // Get all relationships for context
+        // Process each node
         WITH DISTINCT node
         OPTIONAL MATCH (node)-[outRel]->(connected)
         WITH node, collect(outRel) as outRels
