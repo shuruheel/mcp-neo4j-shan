@@ -45,10 +45,6 @@ export function setupTools(
             items: { type: "string" },
             description: "Array of up to 3 most relevant Concept node names to explore"
           },
-          nodeName: {
-            type: "string",
-            description: "DEPRECATED: Legacy support for single node name to explore"
-          },
           maxDepth: {
             type: "number",
             description: "Maximum depth to explore (default: 2)"
