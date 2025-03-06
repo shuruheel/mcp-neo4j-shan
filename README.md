@@ -39,15 +39,44 @@ A sophisticated knowledge graph memory system that stores interconnected informa
   - Relationship weights indicating importance (0.0-1.0)
   - Relationship categories (hierarchical, lateral, temporal, compositional)
 
+- **Cognitive Schema-Based Knowledge Storage**:
+  - **Node Creation System**: Implements a schema-based approach to knowledge representation through the `Neo4jCreator` class:
+    - Type-specific attribute capture (e.g., temporal information for Events, evidence for ScientificInsights)
+    - Rich metadata support with emotional dimensions (valence, arousal)
+    - Reasoning chains with formal logic structure and confidence scoring
+    - Stepwise reasoning capture with premises, inferences, and conclusions
+
+  - **Advanced Cypher Queries**: Uses sophisticated Neo4j query patterns:
+    - Parametrized MERGE operations for deduplication and efficient updates
+    - Dynamic property setting based on node type
+    - Temporal data handling with Neo4j's datetime functions
+    - Multi-relationship pattern matching for complex knowledge structures
+
+- **Cognitively-Inspired Retrieval Methods**:
+  - **Spreading Activation Retrieval**: The `Neo4jRetriever` class implements retrieval patterns modeled after human memory:
+    - Weighted relationship traversal prioritizing stronger connections
+    - Fuzzy matching with configurable thresholds for approximate name matching
+    - Subgraph exploration with relationship filters and type-based constraints
+    - APOC path-finding algorithms for efficient graph traversal
+
+  - **Specialized Retrieval Patterns**:
+    - Temporal sequence retrieval with forward/backward traversal options
+    - Conceptual association finding based on shared connections
+    - Multi-node context exploration with weight-based prioritization
+    - Reasoning chain retrieval with complete step context
+    - Causal chain tracing with probability assessment
+
 - **Available Tools**:
   - **Graph Exploration**:
-    - `explore_weighted_context`: The PRIMARY tool for exploring the knowledge graph, now enhanced with:
+    - `explore_weighted_context`: The PRIMARY tool for exploring the knowledge graph, enhanced with:
       - **Multi-node exploration**: Accepts multiple Entity and Concept nodes simultaneously for comprehensive context exploration
       - **Intelligent topic decomposition**: Provides guidance for decomposing complex topics into individual entities and concepts
       - **Advanced path traversal**: Finds meaningful connections between multiple starting nodes using Neo4j APOC procedures
       - **Weighted relationship prioritization**: Focuses on stronger connections based on relationship weights
       - **Node type filtering**: Targets specific node types to deliver more relevant context
     - `get_temporal_sequence`: Visualizes how events and concepts unfold over time
+    - `find_conceptual_associations`: Discovers semantically related concepts based on shared connections (not tested)
+    - `find_cognitive_path`: Traces pathways between nodes with custom traversal rules (not tested)
   
   - **Knowledge Creation**:
     - `create_nodes`: Adds new information to the graph with specialized node types
@@ -56,6 +85,8 @@ A sophisticated knowledge graph memory system that stores interconnected informa
   - **Reasoning and Analysis**:
     - `create_reasoning_chain`: Creates structured representations of logical reasoning with well-defined steps
     - `get_reasoning_chain`: Retrieves reasoning chains with their steps and generates narratives
+    - `find_reasoning_chains_with_similar_conclusion`: Finds related reasoning on similar topics (not tested)
+    - `get_reasoning_analytics`: Analyzes reasoning patterns across domains and methodologies (not tested)
 
 #### Use Cases
 
