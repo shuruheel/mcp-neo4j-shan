@@ -26,7 +26,8 @@ export async function exploreContextWeighted(
     maxNodes?: number,
     includeTypes?: string[],
     excludeTypes?: string[],
-    includeRelationships?: string[]
+    includeRelationships?: string[],
+    fuzzyThreshold?: number  // New parameter for controlling fuzzy matching
   } = {}
 ): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
@@ -36,6 +37,7 @@ export async function exploreContextWeighted(
   
   // Set default options
   const maxNodes = options.maxNodes || 50;
+  const fuzzyThreshold = options.fuzzyThreshold || 0.7; // Default fuzzy matching threshold (70% similarity)
   
   // Default to include all node types if not specified
   const includeTypes = options.includeTypes || [
@@ -52,18 +54,58 @@ export async function exploreContextWeighted(
   const relationshipFilter = generateRelationshipFilterQuery(includeRelationships);
   
   try {
-    // If we have multiple starting nodes, use the more powerful subgraphAll approach
-    if (nodeNames.length > 1) {
-      console.error(`Exploring context for multiple nodes: ${nodeNames.join(', ')}`);
+    // First, let's try to find the nodes using fuzzy matching
+    console.error(`Searching for nodes using fuzzy matching with threshold ${fuzzyThreshold}: ${nodeNames.join(', ')}`);
+    
+    const findNodesQuery = `
+      // Collect all memory nodes
+      MATCH (n:Memory)
+      WHERE n.name IS NOT NULL
+      
+      // Filter to nodes that are fuzzy matches to our input names
+      WITH n, [searchName IN $nodeNames | 
+        apoc.text.fuzzyMatch(n.name, searchName) >= $fuzzyThreshold] AS matches
+      
+      // Keep nodes that matched at least one input name
+      WHERE ANY(matched IN matches WHERE matched = true)
+      
+      // Return the matched node along with its similarity to the best matching input
+      RETURN n, 
+        MAX([searchName IN $nodeNames | apoc.text.fuzzyMatch(n.name, searchName)]) AS similarity
+      ORDER BY similarity DESC
+      LIMIT $maxNodes
+    `;
+    
+    const matchingNodesResult = await session.executeRead(tx =>
+      tx.run(findNodesQuery, { 
+        nodeNames: nodeNames,
+        fuzzyThreshold: fuzzyThreshold
+      })
+    );
+    
+    const matchedNodes = matchingNodesResult.records.map(record => record.get('n'));
+    
+    // Log which nodes were found
+    if (matchedNodes.length > 0) {
+      console.error(`Found ${matchedNodes.length} matching nodes:`);
+      matchedNodes.forEach(node => {
+        const similarity = matchingNodesResult.records.find(r => 
+          r.get('n').identity.equals(node.identity)).get('similarity');
+        console.error(`- ${node.properties.name} (${node.properties.nodeType || 'Unknown'}, similarity: ${similarity.toFixed(2)})`);
+      });
+    } else {
+      console.error('No matching nodes found in the knowledge graph');
+      return { entities: [], relations: [] };
+    }
+    
+    // If we have multiple matched nodes, use the subgraphAll approach
+    if (matchedNodes.length > 1) {
+      console.error(`Exploring context for multiple fuzzy-matched nodes`);
       
       // Optimized Cypher query using APOC's subgraphAll
       const query = `
-        // Find all starting nodes
-        MATCH (startNodes:Memory)
-        WHERE startNodes.name IN $nodeNames
-        
-        // Use subgraphAll to find the connections between these nodes
-        CALL apoc.path.subgraphAll(startNodes, {
+        // Use subgraphAll with the matched nodes
+        CALL apoc.path.subgraphAll($startNodes, {
           relationshipFilter: ">|<",  // All relationships in any direction
           labelFilter: "${labelFilter}",
           maxLevel: $maxDepth,
@@ -80,10 +122,10 @@ export async function exploreContextWeighted(
         RETURN collect(distinct nodes) as nodes, collect(distinct weightFilteredRels) as relationships
       `;
       
-      // Execute the optimized query for multiple starting nodes
+      // Execute the optimized query with the matched nodes
       const result = await session.executeRead(tx =>
         tx.run(query, { 
-          nodeNames: nodeNames,
+          startNodes: matchedNodes,  // Pass the actual node objects
           maxDepth: maxDepth,
           minWeight: minWeight,
           maxNodes: maxNodes
@@ -91,7 +133,7 @@ export async function exploreContextWeighted(
       );
       
       if (result.records.length === 0) {
-        console.error(`No nodes found with names: ${nodeNames.join(', ')}`);
+        console.error(`No subgraph found from the matched nodes`);
         return { entities: [], relations: [] };
       }
       
@@ -112,17 +154,13 @@ export async function exploreContextWeighted(
       return processExplorationResults([{ nodes, relationships }]);
     }
     
-    // If we only have one node, use the original implementation
-    // Use original implementation for single node exploration without type filtering
-    console.error(`Exploring context for single node: ${nodeNames[0]}`);
+    // If we only have one node, use the original implementation with the matched node
+    console.error(`Exploring context for single fuzzy-matched node: ${matchedNodes[0].properties.name}`);
     
     // Enhanced Cypher query that uses relationship weights for traversal costs
     const query = `
-      // First find the starting node
-      MATCH (start:Memory {name: $nodeName})
-      
       // Use variable-length path with weighted cost traversal
-      CALL apoc.path.expandConfig(start, {
+      CALL apoc.path.expandConfig($startNode, {
         relationshipFilter: "${relationshipFilter || '>'}"  // Use specific relationships or all outgoing
         , labelFilter: "${labelFilter || '>Memory'}" // Use label filter or default to Memory nodes
         , uniqueness: "NODE_GLOBAL"  // Avoid cycles
@@ -156,19 +194,19 @@ export async function exploreContextWeighted(
         CASE WHEN SIZE(allRelArrays) > 0 THEN REDUCE(s = [], arr IN allRelArrays | s + arr) ELSE [] END as relationships
     `;
     
-    // Execute the query and get the result
+    // Execute the query with the matched node
     const result = await session.executeRead(tx =>
       tx.run(query, { 
-        nodeName: nodeNames[0],
+        startNode: matchedNodes[0],  // Pass the actual node object
         maxDepth,
         minWeight,
         maxNodes
       })
     );
     
-    // Process the result using the original method
+    // Process the result
     if (result.records.length === 0) {
-      console.error(`No nodes found with name: ${nodeNames[0]}`);
+      console.error(`No paths found from matched node: ${matchedNodes[0].properties.name}`);
       return { entities: [], relations: [] };
     }
     
