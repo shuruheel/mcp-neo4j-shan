@@ -8,7 +8,6 @@ import { driver as connectToNeo4j, auth as Neo4jAuth } from 'neo4j-driver';
 
 import { Neo4jCreator } from '../node-creator/index.js';
 import { Neo4jRetriever } from '../node-retriever/index.js';
-import { NarrativeGenerator } from '../narrative-generator/index.js';
 import { setupTools } from './tools.js';
 import { SYSTEM_PROMPT, TOOL_PROMPTS } from './prompts.js';
 
@@ -20,8 +19,8 @@ export async function main() {
   
   // Initialize Neo4j connection
   const neo4jDriver = connectToNeo4j(
-    'neo4j+s://x.databases.neo4j.io',
-    Neo4jAuth.basic('neo4j', 'pwd')
+    'neo4j+s://248f8da5.databases.neo4j.io',
+    Neo4jAuth.basic('neo4j', 'p_d9UkjKKbbM_F_9061l-q6sPUs3xUrwvuVx31D1AYA')
   )
   
   console.error('Connected to Neo4j database');
@@ -29,7 +28,6 @@ export async function main() {
   // Create instances for node creation and retrieval
   const nodeCreator = new Neo4jCreator(neo4jDriver);
   const nodeRetriever = new Neo4jRetriever(neo4jDriver);
-  const narrativeGenerator = new NarrativeGenerator();
   
   // Create the server instance
   const server = new Server(
@@ -46,7 +44,7 @@ export async function main() {
   );
   
   // Set up tools
-  setupTools(server, nodeCreator, nodeRetriever, narrativeGenerator);
+  setupTools(server, nodeCreator, nodeRetriever);
   
   // Add system prompt
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {

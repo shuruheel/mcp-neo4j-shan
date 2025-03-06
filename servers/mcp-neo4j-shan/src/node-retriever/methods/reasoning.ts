@@ -1,179 +1,143 @@
 import { Driver as Neo4jDriver } from 'neo4j-driver';
+import { KnowledgeGraph } from '../../types/index.js';
+import { processSearchResults } from './search.js';
 
 /**
  * Retrieves a reasoning chain and its steps by name
- * @param neo4jDriver - Neo4j driver instance
- * @param chainName - Name of the reasoning chain
- * @returns The chain and its steps
+ *
+ * @param neo4jDriver Neo4j driver instance
+ * @param chainName Name of the reasoning chain to retrieve
+ * @returns Promise resolving to a KnowledgeGraph containing the chain and its steps
  */
 export async function getReasoningChain(
   neo4jDriver: Neo4jDriver,
   chainName: string
-): Promise<{chain: any, steps: any[]}> {
+): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
   
   try {
-    console.error(`Retrieving reasoning chain: "${chainName}"`);
+    console.error(`Retrieving reasoning chain: ${chainName}`);
     
-    // First check if the chain exists
+    // Check if chain exists
     const chainExists = await session.executeRead(tx => tx.run(`
       MATCH (chain:ReasoningChain:Memory {name: $chainName})
       RETURN chain
     `, { chainName }));
     
     if (chainExists.records.length === 0) {
-      const errorMsg = `ReasoningChain "${chainName}" not found`;
-      console.error(errorMsg);
-      throw new Error(errorMsg);
+      console.error(`No reasoning chain found with name: ${chainName}`);
+      return { entities: [], relations: [] };
     }
     
-    console.error(`Found reasoning chain: "${chainName}"`);
-    
-    // Get the chain and its steps in one query
+    // Get the chain and its ordered steps
     const result = await session.executeRead(tx => tx.run(`
-      // Match the chain
+      // Find the chain
       MATCH (chain:ReasoningChain:Memory {name: $chainName})
       
-      // Get all steps ordered by the 'order' property
-      OPTIONAL MATCH (chain)-[rel:CONTAINS_STEP]->(step:ReasoningStep)
-      WITH chain, step, rel
-      ORDER BY rel.order
+      // Find all steps in this chain
+      OPTIONAL MATCH (chain)-[r:HAS_STEP]->(step:ReasoningStep)
       
-      // Return chain and collected ordered steps
-      RETURN chain, collect({step: step, order: rel.order}) as steps
+      // Get related propositions
+      OPTIONAL MATCH (chain)-[:RELATED_TO]->(prop:Proposition)
+      
+      // Collect all relevant nodes
+      WITH chain, 
+           collect(step) as steps,
+           collect(prop) as props
+      
+      // Get all nodes in the collection
+      WITH [chain] + steps + props as allNodes
+      
+      // Get relationships for each node
+      UNWIND allNodes as node
+      
+      WITH DISTINCT node
+      
+      // Get outgoing relationships
+      OPTIONAL MATCH (node)-[outRel]->(connected)
+      
+      // Get incoming relationships
+      OPTIONAL MATCH (other)-[inRel]->(node)
+      
+      RETURN 
+        node as entity,
+        collect(DISTINCT outRel) as relations,
+        collect(DISTINCT inRel) as inRelations
     `, { chainName }));
     
-    if (result.records.length === 0) {
-      // This shouldn't happen since we already checked the chain exists
-      const errorMsg = `Failed to retrieve reasoning chain "${chainName}" after confirming it exists`;
-      console.error(errorMsg);
-      throw new Error(errorMsg);
-    }
+    console.error(`Retrieved reasoning chain with ${result.records.length} related nodes`);
     
-    const record = result.records[0];
-    const chain = record.get('chain').properties;
-    
-    // Process the steps, maintaining their order
-    const steps = record.get('steps')
-      .filter((stepObj: any) => stepObj.step !== null) // Filter out any null steps
-      .map((stepObj: any) => {
-        return {
-          ...stepObj.step.properties,
-          order: stepObj.order
-        };
-      })
-      .sort((a: any, b: any) => a.order - b.order); // Ensure steps are ordered
-    
-    console.error(`Retrieved reasoning chain "${chainName}" with ${steps.length} steps`);
-    
-    // If there are steps with supportingReferences or previousSteps, get those details
-    const stepsWithReferences = steps.filter(s => 
-      (s.supportingReferences && s.supportingReferences.length > 0) || 
-      (s.previousSteps && s.previousSteps.length > 0)
-    );
-    
-    if (stepsWithReferences.length > 0) {
-      console.error(`Retrieving additional details for ${stepsWithReferences.length} steps with references`);
-      
-      // For each step with references, get the reference details
-      for (const step of stepsWithReferences) {
-        try {
-          const stepDetails = await getReasoningStepDetails(neo4jDriver, step.name);
-          // Merge in the details for supportingReferences and previousSteps
-          step.supportingReferencesDetails = stepDetails.supportingReferences;
-          step.previousStepsDetails = stepDetails.previousSteps;
-          step.nextStepsDetails = stepDetails.nextSteps;
-        } catch (detailError) {
-          console.error(`Error getting details for step ${step.name}:`, detailError);
-          // Don't fail the entire operation for one step's details
-        }
-      }
-    }
-    
-    return { chain, steps };
+    return processSearchResults(result.records);
   } catch (error) {
-    // Enhanced error message with more context
-    const errorMessage = `Error retrieving reasoning chain "${chainName}": ${error.message || error}`;
-    console.error(errorMessage);
-    
-    // If it's a Neo4j driver error, log more details
-    if (error.code) {
-      console.error(`Neo4j error code: ${error.code}`);
-    }
-    
-    throw new Error(errorMessage);
+    console.error(`Error retrieving reasoning chain: ${error}`);
+    throw error;
   } finally {
     await session.close();
   }
 }
 
 /**
- * Retrieves details for a reasoning step
- * @param neo4jDriver - Neo4j driver instance
- * @param stepName - Name of the step
- * @returns The step and related information
+ * Retrieves detailed information about a specific reasoning step
+ *
+ * @param neo4jDriver Neo4j driver instance
+ * @param stepName Name of the reasoning step to retrieve details for
+ * @returns Promise resolving to a KnowledgeGraph containing the step and related nodes
  */
 export async function getReasoningStepDetails(
   neo4jDriver: Neo4jDriver,
   stepName: string
-): Promise<{
-  step: any,
-  supportingReferences: any[],
-  previousSteps: any[],
-  nextSteps: any[]
-}> {
+): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
   
   try {
-    console.error(`Retrieving reasoning step details: ${stepName}`);
+    console.error(`Retrieving details for reasoning step: ${stepName}`);
     
-    // Get the step with its references and connections
     const result = await session.executeRead(tx => tx.run(`
-      // Match the step
+      // Find the reasoning step
       MATCH (step:ReasoningStep:Memory {name: $stepName})
       
-      // Get referenced nodes
-      OPTIONAL MATCH (step)-[:REFERENCES]->(ref:Memory)
-      WITH step, collect(ref) as refs
+      // Get evidence and related nodes
+      OPTIONAL MATCH (step)-[:SUPPORTED_BY]->(evidence)
+      OPTIONAL MATCH (step)-[:USES_PROPOSITION]->(prop:Proposition)
       
-      // Get previous steps that lead to this one
-      OPTIONAL MATCH (prev:ReasoningStep)-[:LEADS_TO]->(step)
-      WITH step, refs, collect(prev) as prevSteps
+      // Get parent chain
+      OPTIONAL MATCH (chain:ReasoningChain)-[:HAS_STEP]->(step)
       
-      // Get next steps that this one leads to
-      OPTIONAL MATCH (step)-[:LEADS_TO]->(next:ReasoningStep)
+      // Get alternative steps if any
+      OPTIONAL MATCH (step)-[:HAS_ALTERNATIVE]->(alt:ReasoningStep)
       
-      // Return everything
-      RETURN step, refs as supportingReferences, prevSteps, collect(next) as nextSteps
+      // Collect all relevant nodes
+      WITH step, 
+           collect(DISTINCT evidence) as evidenceNodes,
+           collect(DISTINCT prop) as propositions,
+           collect(DISTINCT chain) as chains,
+           collect(DISTINCT alt) as alternatives
+      
+      // Combine all nodes
+      WITH [step] + evidenceNodes + propositions + chains + alternatives as allNodes
+      
+      // Get relationships for each node
+      UNWIND allNodes as node
+      
+      WITH DISTINCT node
+      
+      // Get outgoing relationships
+      OPTIONAL MATCH (node)-[outRel]->(connected)
+      
+      // Get incoming relationships
+      OPTIONAL MATCH (other)-[inRel]->(node)
+      
+      RETURN 
+        node as entity,
+        collect(DISTINCT outRel) as relations,
+        collect(DISTINCT inRel) as inRelations
     `, { stepName }));
     
-    if (result.records.length === 0) {
-      throw new Error(`ReasoningStep ${stepName} not found`);
-    }
+    console.error(`Retrieved reasoning step details with ${result.records.length} related nodes`);
     
-    const record = result.records[0];
-    const step = record.get('step').properties;
-    
-    // Process supporting references
-    const supportingReferences = record.get('supportingReferences')
-      .map((ref: any) => ref.properties);
-    
-    // Process previous steps
-    const previousSteps = record.get('prevSteps')
-      .map((prev: any) => prev.properties);
-    
-    // Process next steps
-    const nextSteps = record.get('nextSteps')
-      .map((next: any) => next.properties);
-    
-    return { 
-      step, 
-      supportingReferences, 
-      previousSteps, 
-      nextSteps 
-    };
+    return processSearchResults(result.records);
   } catch (error) {
-    console.error(`Error retrieving reasoning step details:`, error);
+    console.error(`Error retrieving reasoning step details: ${error}`);
     throw error;
   } finally {
     await session.close();
@@ -181,54 +145,75 @@ export async function getReasoningStepDetails(
 }
 
 /**
- * Finds reasoning chains with similar conclusions
- * @param neo4jDriver - Neo4j driver instance
- * @param conclusion - The conclusion to match
- * @param limit - Maximum number of chains to return
- * @returns Array of matching chains
+ * Finds reasoning chains with similar conclusions to a given topic
+ *
+ * @param neo4jDriver Neo4j driver instance
+ * @param topic Topic or conclusion to find similar reasoning chains for
+ * @param limit Maximum number of similar chains to return
+ * @returns Promise resolving to a KnowledgeGraph with similar reasoning chains
  */
 export async function findReasoningChainsWithSimilarConclusion(
   neo4jDriver: Neo4jDriver,
-  conclusion: string, 
+  topic: string,
   limit: number = 5
-): Promise<any[]> {
+): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
   
   try {
-    console.error(`Finding reasoning chains with similar conclusion: ${conclusion}`);
+    console.error(`Finding reasoning chains with conclusions similar to: ${topic}`);
     
-    // Use full-text search if available, or fallback to simplified string matching
     const result = await session.executeRead(tx => tx.run(`
-      // Match ReasoningChain nodes
+      // Find reasoning chains with similar conclusions
       MATCH (chain:ReasoningChain:Memory)
+      WHERE apoc.text.fuzzyMatch(chain.conclusion, $topic, 0.7)
+         OR chain.conclusion CONTAINS $topic
+         OR chain.description CONTAINS $topic
       
-      // Calculate similarity score
-      // This is a simple implementation - in production consider vector embeddings
+      // Get connections to other node types for context
+      OPTIONAL MATCH (chain)-[:RELATED_TO]->(prop:Proposition)
+      OPTIONAL MATCH (chain)-[:SUPPORTS]->(concept:Concept)
+      OPTIONAL MATCH (chain)-[:HAS_STEP]->(step:ReasoningStep)
+      
+      // Gather nodes in one collection for processing
       WITH chain, 
-           apoc.text.sorensenDiceSimilarity(toLower(chain.conclusion), toLower($conclusion)) as similarityScore
+           collect(DISTINCT prop) as propositions,
+           collect(DISTINCT concept) as concepts,
+           collect(DISTINCT step) as steps,
+           apoc.text.fuzzyMatch(chain.conclusion, $topic, 0.7) as score
       
-      // Filter by minimum threshold and sort by similarity
-      WHERE similarityScore > 0.3
-      RETURN chain, similarityScore
-      ORDER BY similarityScore DESC
+      // Order by similarity score
+      ORDER BY score DESC
       LIMIT $limit
+      
+      // Combine all nodes
+      WITH chain, propositions, concepts, steps, score
+      WITH [chain] + propositions + concepts + steps as allNodes
+      
+      // Get relationships for each node
+      UNWIND allNodes as node
+      
+      WITH DISTINCT node
+      
+      // Get outgoing relationships
+      OPTIONAL MATCH (node)-[outRel]->(connected)
+      
+      // Get incoming relationships
+      OPTIONAL MATCH (other)-[inRel]->(node)
+      
+      RETURN 
+        node as entity,
+        collect(DISTINCT outRel) as relations,
+        collect(DISTINCT inRel) as inRelations
     `, { 
-      conclusion,
-      limit
+      topic,
+      limit 
     }));
     
-    // Process and return the results
-    return result.records.map(record => {
-      const chain = record.get('chain').properties;
-      const score = record.get('similarityScore');
-      
-      return {
-        ...chain,
-        similarityScore: score
-      };
-    });
+    console.error(`Found ${result.records.length} nodes related to similar reasoning chains`);
+    
+    return processSearchResults(result.records);
   } catch (error) {
-    console.error(`Error finding similar reasoning chains:`, error);
+    console.error(`Error finding similar reasoning chains: ${error}`);
     throw error;
   } finally {
     await session.close();
@@ -236,89 +221,91 @@ export async function findReasoningChainsWithSimilarConclusion(
 }
 
 /**
- * Gets analytics about reasoning in the knowledge graph
- * @param neo4jDriver - Neo4j driver instance
- * @returns Analytics data
+ * Retrieves analytics about reasoning chains and their relationships
+ *
+ * @param neo4jDriver Neo4j driver instance
+ * @param filter Optional domain filter to limit the analysis
+ * @returns Promise resolving to a KnowledgeGraph with reasoning analytics
  */
 export async function getReasoningAnalytics(
-  neo4jDriver: Neo4jDriver
-): Promise<{
-  totalChains: number,
-  totalSteps: number,
-  methodologyDistribution: Record<string, number>,
-  averageStepsPerChain: number,
-  topChainsByStepCount: any[]
-}> {
+  neo4jDriver: Neo4jDriver,
+  filter?: { domain?: string, methodology?: string }
+): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
   
   try {
-    console.error(`Retrieving reasoning analytics`);
+    console.error(`Retrieving reasoning analytics${filter?.domain ? ` for domain: ${filter.domain}` : ''}${filter?.methodology ? ` with methodology: ${filter.methodology}` : ''}`);
     
-    // Get chain statistics
-    const statsResult = await session.executeRead(tx => tx.run(`
-      // Count total chains and steps
+    // Build filter conditions
+    let filterConditions = '';
+    const params: any = {};
+    
+    if (filter?.domain) {
+      filterConditions += 'AND chain.domain = $domain ';
+      params.domain = filter.domain;
+    }
+    
+    if (filter?.methodology) {
+      filterConditions += 'AND chain.methodology = $methodology ';
+      params.methodology = filter.methodology;
+    }
+    
+    const result = await session.executeRead(tx => tx.run(`
+      // Find all reasoning chains and their steps
       MATCH (chain:ReasoningChain:Memory)
-      OPTIONAL MATCH (chain)-[:CONTAINS_STEP]->(step:ReasoningStep)
+      WHERE true ${filterConditions}
       
-      RETURN count(DISTINCT chain) as totalChains,
-             count(step) as totalSteps
-    `));
+      // Get steps, sorted by chain and sequence
+      OPTIONAL MATCH (chain)-[r:HAS_STEP]->(step:ReasoningStep)
+      
+      // Get connected propositions
+      OPTIONAL MATCH (chain)-[:RELATED_TO]->(prop:Proposition)
+      OPTIONAL MATCH (step)-[:USES_PROPOSITION]->(stepProp:Proposition)
+      
+      // Get other significant connections
+      OPTIONAL MATCH (chain)-[:SUPPORTS|CONTRADICTS]->(entity)
+      WHERE entity:Concept OR entity:ScientificInsight OR entity:Proposition
+      
+      // Gather all nodes
+      WITH chain,
+           collect(DISTINCT step) as steps,
+           collect(DISTINCT prop) + collect(DISTINCT stepProp) as propositions,
+           collect(DISTINCT entity) as supportedConcepts,
+           count(DISTINCT step) as stepCount,
+           avg(step.confidence) as avgConfidence
+      
+      // Combine into a single collection
+      WITH chain, steps, propositions, supportedConcepts, stepCount, avgConfidence
+      WITH [chain] + steps + propositions + supportedConcepts as allNodes,
+           chain.name as chainName,
+           stepCount,
+           avgConfidence
+      
+      // Process each node
+      UNWIND allNodes as node
+      
+      WITH DISTINCT node, chainName, stepCount, avgConfidence
+      
+      // Get outgoing relationships
+      OPTIONAL MATCH (node)-[outRel]->(connected)
+      
+      // Get incoming relationships
+      OPTIONAL MATCH (other)-[inRel]->(node)
+      
+      RETURN 
+        node as entity,
+        collect(DISTINCT outRel) as relations,
+        collect(DISTINCT inRel) as inRelations,
+        chainName,
+        stepCount,
+        avgConfidence
+    `, params));
     
-    // Get methodology distribution
-    const methodologyResult = await session.executeRead(tx => tx.run(`
-      // Count chains by methodology
-      MATCH (chain:ReasoningChain:Memory)
-      RETURN chain.methodology as methodology, count(chain) as count
-      ORDER BY count DESC
-    `));
+    console.error(`Retrieved reasoning analytics with ${result.records.length} nodes`);
     
-    // Get top chains by step count
-    const topChainsResult = await session.executeRead(tx => tx.run(`
-      // Find chains with the most steps
-      MATCH (chain:ReasoningChain:Memory)
-      OPTIONAL MATCH (chain)-[:CONTAINS_STEP]->(step:ReasoningStep)
-      WITH chain, count(step) as stepCount
-      RETURN chain.name as chainName, 
-             chain.description as description,
-             chain.methodology as methodology,
-             stepCount
-      ORDER BY stepCount DESC
-      LIMIT 5
-    `));
-    
-    // Process results
-    const statsRecord = statsResult.records[0];
-    const totalChains = statsRecord.get('totalChains').toNumber();
-    const totalSteps = statsRecord.get('totalSteps').toNumber();
-    const averageStepsPerChain = totalChains > 0 ? totalSteps / totalChains : 0;
-    
-    const methodologyDistribution: Record<string, number> = {};
-    methodologyResult.records.forEach(record => {
-      const methodology = record.get('methodology');
-      const count = record.get('count').toNumber();
-      if (methodology) {
-        methodologyDistribution[methodology] = count;
-      }
-    });
-    
-    const topChainsByStepCount = topChainsResult.records.map(record => {
-      return {
-        name: record.get('chainName'),
-        description: record.get('description'),
-        methodology: record.get('methodology'),
-        stepCount: record.get('stepCount').toNumber()
-      };
-    });
-    
-    return {
-      totalChains,
-      totalSteps,
-      methodologyDistribution,
-      averageStepsPerChain,
-      topChainsByStepCount
-    };
+    return processSearchResults(result.records);
   } catch (error) {
-    console.error(`Error retrieving reasoning analytics:`, error);
+    console.error(`Error retrieving reasoning analytics: ${error}`);
     throw error;
   } finally {
     await session.close();

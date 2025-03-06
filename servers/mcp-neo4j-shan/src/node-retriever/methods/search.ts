@@ -189,122 +189,82 @@ export async function robustSearch(neo4jDriver: Neo4jDriver, searchQuery: string
   const session = neo4jDriver.session();
   
   try {
-    console.error(`Performing robust search for query: "${searchQuery}"`);
+    // Step 1: Try exact match on node name
+    console.error(`Performing exact name match for: "${searchQuery}"`);
     
-    // Check if query is empty or too short
-    if (!searchQuery || searchQuery.trim().length < 1) {
-      console.error('Search query is empty or too short');
-      return { entities: [], relations: [] };
+    const exactMatchResult = await session.executeRead(tx => tx.run(`
+      MATCH (entity:Memory)
+      WHERE entity.name = $searchQuery
+      
+      // Get outgoing relationships
+      OPTIONAL MATCH (entity)-[outRel]->(connected)
+      
+      // Get incoming relationships
+      OPTIONAL MATCH (other)-[inRel]->(entity)
+      
+      RETURN entity, collect(DISTINCT outRel) as relations, collect(DISTINCT inRel) as inRelations
+    `, { searchQuery }));
+    
+    if (exactMatchResult.records.length > 0) {
+      console.error(`Found exact match for "${searchQuery}"`);
+      return processSearchResults(exactMatchResult.records);
     }
     
-    let results = { entities: [], relations: [] };
-    const searchAttempts = [];
+    // Step 2: Try combining fuzzy search with text search
+    console.error(`No exact matches, trying fuzzy and keyword search for: "${searchQuery}"`);
     
-    // First attempt: Exact match (fastest and most precise)
-    try {
-      console.error('Trying exact match search');
-      const exactMatchResult = await session.executeRead(tx => tx.run(`
-        MATCH (entity:Memory)
-        WHERE entity.name = $query
-        
-        // Get relationships
-        WITH entity
-        OPTIONAL MATCH (entity)-[r]->(other)
-        WITH entity, collect(r) as outRels
-        OPTIONAL MATCH (other)-[inRel]->(entity)
-        
-        RETURN entity, outRels as relations, collect(inRel) as inRelations
-      `, { query: searchQuery }));
+    // Split the search query into keywords
+    const keywords = searchQuery.split(/\s+/).filter(k => k.length > 2);
+    console.error(`Keywords for search:`, keywords);
+    
+    const fuzzyResult = await session.executeRead(tx => tx.run(`
+      // Match memory nodes with fuzzy name matching or keyword containment
+      MATCH (entity:Memory)
+      WHERE apoc.text.fuzzyMatch(entity.name, $searchQuery, 0.7)
+         OR entity.name CONTAINS $searchQuery
+         OR any(keyword IN $keywords WHERE 
+              entity.name CONTAINS keyword
+              OR (entity.description IS NOT NULL AND entity.description CONTAINS keyword)
+              OR (entity:Entity AND entity.biography IS NOT NULL AND entity.biography CONTAINS keyword)
+              OR (entity:Concept AND entity.definition IS NOT NULL AND entity.definition CONTAINS keyword)
+              OR (entity:Event AND entity.outcome IS NOT NULL AND entity.outcome CONTAINS keyword)
+              OR (entity:ScientificInsight AND entity.hypothesis IS NOT NULL AND entity.hypothesis CONTAINS keyword)
+              OR (entity:Law AND entity.statement IS NOT NULL AND entity.statement CONTAINS keyword) 
+              OR (entity:Thought AND entity.thoughtContent IS NOT NULL AND entity.thoughtContent CONTAINS keyword)
+              OR (entity:ReasoningChain AND entity.conclusion IS NOT NULL AND entity.conclusion CONTAINS keyword)
+              OR (entity:ReasoningStep AND entity.content IS NOT NULL AND entity.content CONTAINS keyword)
+              OR (entity:Attribute AND entity.value IS NOT NULL AND toString(entity.value) CONTAINS keyword)
+              OR (entity:Proposition AND entity.statement IS NOT NULL AND entity.statement CONTAINS keyword)
+              OR (entity:Emotion AND entity.category IS NOT NULL AND entity.category CONTAINS keyword)
+              OR (entity:Agent AND entity.agentType IS NOT NULL AND entity.agentType CONTAINS keyword)
+            )
       
-      searchAttempts.push(`Exact match: ${exactMatchResult.records.length} results`);
-      console.error(`Exact match search found ${exactMatchResult.records.length} results`);
+      // Get outgoing relationships
+      OPTIONAL MATCH (entity)-[outRel]->(connected)
       
-      if (exactMatchResult.records.length > 0) {
-        return processSearchResults(exactMatchResult.records);
-      }
-    } catch (error) {
-      console.error(`Error in exact match search: ${error}`);
-      searchAttempts.push(`Exact match: error - ${error.message}`);
+      // Get incoming relationships 
+      OPTIONAL MATCH (other)-[inRel]->(entity)
+      
+      RETURN entity, collect(DISTINCT outRel) as relations, collect(DISTINCT inRel) as inRelations
+    `, { 
+      searchQuery,
+      keywords
+    }));
+    
+    console.error(`Fuzzy search found ${fuzzyResult.records.length} results`);
+    
+    if (fuzzyResult.records.length > 0) {
+      return processSearchResults(fuzzyResult.records);
     }
     
-    // Second attempt: Fuzzy name matching (more flexible, catches spelling variations)
-    try {
-      console.error('Trying fuzzy name matching');
-      const fuzzyResult = await session.executeRead(tx => tx.run(`
-        MATCH (entity:Memory)
-        WHERE entity:Entity OR entity:Concept OR entity:Event OR 
-              entity:ScientificInsight OR entity:Law OR entity:Thought OR 
-              entity:ReasoningChain OR entity:ReasoningStep
-        
-        // Use fuzzy matching to find similar node names
-        WITH entity, apoc.text.fuzzyMatch(toLower(entity.name), toLower($query)) as score
-        WHERE score > 0.7
-        ORDER BY score DESC
-        
-        // Get relationships
-        WITH entity
-        OPTIONAL MATCH (entity)-[r]->(other)
-        WITH entity, collect(r) as outRels
-        OPTIONAL MATCH (other)-[inRel]->(entity)
-        
-        RETURN entity, outRels as relations, collect(inRel) as inRelations
-        LIMIT 10
-      `, { query: searchQuery }));
-      
-      searchAttempts.push(`Fuzzy name: ${fuzzyResult.records.length} results`);
-      console.error(`Fuzzy name matching found ${fuzzyResult.records.length} results`);
-      
-      if (fuzzyResult.records.length > 0) {
-        return processSearchResults(fuzzyResult.records);
-      }
-    } catch (error) {
-      console.error(`Error in fuzzy name matching: ${error}`);
-      searchAttempts.push(`Fuzzy name: error - ${error.message}`);
-    }
+    // Step 3: Fallback to broader semantic search with vector embeddings if available
+    // Note: This is a placeholder for future enhancement with vector embeddings
+    console.error(`No fuzzy matches found for "${searchQuery}"`);
     
-    // Third attempt: Content search (looks for the query in node content fields)
-    try {
-      console.error('Trying content search');
-      const contentResult = await session.executeRead(tx => tx.run(`
-        MATCH (entity:Memory)
-        WHERE 
-          // Search in entity/concept/event text fields
-          (entity:Entity AND entity.description CONTAINS $query) OR
-          (entity:Concept AND (entity.definition CONTAINS $query OR entity.description CONTAINS $query)) OR
-          (entity:Event AND entity.description CONTAINS $query) OR
-          (entity:ScientificInsight AND (entity.hypothesis CONTAINS $query OR entity.description CONTAINS $query)) OR
-          (entity:Law AND entity.content CONTAINS $query) OR
-          (entity:Thought AND entity.thoughtContent CONTAINS $query) OR
-          (entity:ReasoningChain AND (entity.description CONTAINS $query OR entity.conclusion CONTAINS $query)) OR
-          (entity:ReasoningStep AND entity.content CONTAINS $query)
-        
-        // Get relationships
-        WITH entity
-        OPTIONAL MATCH (entity)-[r]->(other)
-        WITH entity, collect(r) as outRels
-        OPTIONAL MATCH (other)-[inRel]->(entity)
-        
-        RETURN entity, outRels as relations, collect(inRel) as inRelations
-        LIMIT 10
-      `, { query: searchQuery }));
-      
-      searchAttempts.push(`Content: ${contentResult.records.length} results`);
-      console.error(`Content search found ${contentResult.records.length} results`);
-      
-      if (contentResult.records.length > 0) {
-        return processSearchResults(contentResult.records);
-      }
-    } catch (error) {
-      console.error(`Error in content search: ${error}`);
-      searchAttempts.push(`Content: error - ${error.message}`);
-    }
-    
-    // If no results found through any method
-    console.error(`No results found for query "${searchQuery}" after trying multiple methods: ${searchAttempts.join(', ')}`);
     return { entities: [], relations: [] };
   } catch (error) {
-    console.error(`Error in robust search: ${error}`);
-    return { entities: [], relations: [] };
+    console.error('Error in robustSearch:', error);
+    throw error;
   } finally {
     await session.close();
   }
@@ -366,6 +326,10 @@ export async function searchNodesWithFuzzyMatching(
     entities?: string[],
     concepts?: string[],
     events?: string[],
+    attributes?: string[],
+    propositions?: string[],
+    emotions?: string[],
+    agents?: string[],
     scientificInsights?: string[],
     laws?: string[],
     thoughts?: string[],
@@ -375,89 +339,82 @@ export async function searchNodesWithFuzzyMatching(
   }
 ): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
-  const threshold = searchTerms.fuzzyThreshold || 0.7;
+  const fuzzyThreshold = searchTerms.fuzzyThreshold || 0.7;
   
   try {
-    console.error(`Performing fuzzy matching search with threshold ${threshold}`);
+    let allResults = [];
     
-    // Generate a unique map of search terms to avoid duplicates
-    const allSearchTerms = new Map<string, {
-      term: string,
-      nodeTypes: string[]
-    }>();
-    
-    // Helper function to add search terms for a node type
+    // Search each entity type separately and combine results
     const searchNodeType = async (nodeType: string, searchTerms: string[]) => {
       if (!searchTerms || searchTerms.length === 0) return [];
       
-      console.error(`Searching for ${nodeType} nodes matching: ${searchTerms.join(', ')}`);
+      const terms = searchTerms.map(term => term.trim()).filter(term => term.length > 0);
+      if (terms.length === 0) return [];
       
-      // For each search term, add it to the map with its node type
-      searchTerms.forEach(term => {
-        if (allSearchTerms.has(term)) {
-          // Add this node type to existing term
-          allSearchTerms.get(term)!.nodeTypes.push(nodeType);
-        } else {
-          // Create new entry
-          allSearchTerms.set(term, {
-            term,
-            nodeTypes: [nodeType]
-          });
-        }
-      });
+      console.error(`Searching for ${nodeType} nodes with terms:`, terms);
+      
+      // Use apoc.text.fuzzyMatch for approximate matching with configurable threshold
+      const result = await session.executeRead(tx => tx.run(`
+        MATCH (node:${nodeType}:Memory)
+        WHERE ANY(term IN $terms WHERE apoc.text.fuzzyMatch(node.name, term, $threshold))
+           OR ANY(term IN $terms WHERE 
+                node.name CONTAINS term 
+                OR (node.description IS NOT NULL AND node.description CONTAINS term)
+                ${nodeType === 'Entity' ? 'OR (node.biography IS NOT NULL AND node.biography CONTAINS term)' : ''}
+                ${nodeType === 'Concept' ? 'OR (node.definition IS NOT NULL AND node.definition CONTAINS term)' : ''}
+                ${nodeType === 'Event' ? 'OR (node.outcome IS NOT NULL AND node.outcome CONTAINS term)' : ''}
+                ${nodeType === 'ScientificInsight' ? 'OR (node.hypothesis IS NOT NULL AND node.hypothesis CONTAINS term)' : ''}
+                ${nodeType === 'Law' ? 'OR (node.statement IS NOT NULL AND node.statement CONTAINS term)' : ''}
+                ${nodeType === 'Thought' ? 'OR (node.thoughtContent IS NOT NULL AND node.thoughtContent CONTAINS term)' : ''}
+                ${nodeType === 'ReasoningChain' ? 'OR (node.conclusion IS NOT NULL AND node.conclusion CONTAINS term)' : ''}
+                ${nodeType === 'ReasoningStep' ? 'OR (node.content IS NOT NULL AND node.content CONTAINS term)' : ''}
+                ${nodeType === 'Attribute' ? 'OR (node.value IS NOT NULL AND toString(node.value) CONTAINS term)' : ''}
+                ${nodeType === 'Proposition' ? 'OR (node.statement IS NOT NULL AND node.statement CONTAINS term)' : ''}
+                ${nodeType === 'Emotion' ? 'OR (node.category IS NOT NULL AND node.category CONTAINS term)' : ''}
+                ${nodeType === 'Agent' ? 'OR (node.agentType IS NOT NULL AND node.agentType CONTAINS term)' : ''}
+             )
+        
+        // Get outgoing relationships
+        OPTIONAL MATCH (node)-[outRel]->(connected)
+        
+        // Get incoming relationships
+        OPTIONAL MATCH (other)-[inRel]->(node)
+        
+        RETURN node as entity, collect(DISTINCT outRel) as relations, collect(DISTINCT inRel) as inRelations
+      `, { 
+        terms, 
+        threshold: fuzzyThreshold
+      }));
+      
+      return result.records;
     };
     
-    // Add search terms for each node type
-    if (searchTerms.entities) await searchNodeType('Entity', searchTerms.entities);
-    if (searchTerms.concepts) await searchNodeType('Concept', searchTerms.concepts);
-    if (searchTerms.events) await searchNodeType('Event', searchTerms.events);
-    if (searchTerms.scientificInsights) await searchNodeType('ScientificInsight', searchTerms.scientificInsights);
-    if (searchTerms.laws) await searchNodeType('Law', searchTerms.laws);
-    if (searchTerms.thoughts) await searchNodeType('Thought', searchTerms.thoughts);
-    if (searchTerms.reasoningChains) await searchNodeType('ReasoningChain', searchTerms.reasoningChains);
-    if (searchTerms.reasoningSteps) await searchNodeType('ReasoningStep', searchTerms.reasoningSteps);
+    // Execute search for each node type in parallel
+    const tasks = [
+      searchNodeType('Entity', searchTerms.entities),
+      searchNodeType('Event', searchTerms.events),
+      searchNodeType('Concept', searchTerms.concepts),
+      searchNodeType('Attribute', searchTerms.attributes),
+      searchNodeType('Proposition', searchTerms.propositions),
+      searchNodeType('Emotion', searchTerms.emotions),
+      searchNodeType('Agent', searchTerms.agents),
+      searchNodeType('ScientificInsight', searchTerms.scientificInsights),
+      searchNodeType('Law', searchTerms.laws),
+      searchNodeType('Thought', searchTerms.thoughts),
+      searchNodeType('ReasoningChain', searchTerms.reasoningChains),
+      searchNodeType('ReasoningStep', searchTerms.reasoningSteps)
+    ];
     
-    // If no search terms provided, return empty result
-    if (allSearchTerms.size === 0) {
-      console.error('No search terms provided');
-      return { entities: [], relations: [] };
-    }
+    const resultsByType = await Promise.all(tasks);
     
-    // Convert map values to array for processing
-    const searchTermArray = Array.from(allSearchTerms.values());
-    console.error(`Searching for ${searchTermArray.length} unique terms across multiple node types`);
+    // Combine all results into a single array
+    allResults = resultsByType.flat();
     
-    // Execute search for all terms
-    const result = await session.executeRead(tx => tx.run(`
-      // Find nodes that match the search terms with fuzzy matching
-      UNWIND $searchTerms as searchItem
-      MATCH (node:Memory)
-      WHERE (
-        // Check if node matches any of the specified types for this term
-        ANY(nodeType IN searchItem.nodeTypes WHERE node:\${nodeType})
-        // And the node name matches the search term with fuzzy matching
-        AND apoc.text.fuzzyMatch(node.name, searchItem.term) > $threshold
-      )
-      
-      // Get relationships for matching nodes
-      WITH DISTINCT node
-      OPTIONAL MATCH (node)-[r]->(other)
-      WITH node, collect(r) as outRelations
-      OPTIONAL MATCH (other)-[inRel]->(node)
-      
-      // Return nodes and their relationships
-      RETURN node, outRelations as relations, collect(inRel) as inRelations
-    `, { 
-      searchTerms: searchTermArray,
-      threshold
-    }));
-    
-    console.error(`Found ${result.records.length} matching nodes`);
-    
-    return processSearchResults(result.records);
+    // Process results into a knowledge graph
+    return processSearchResults(allResults);
   } catch (error) {
-    console.error(`Error in fuzzy matching search: ${error}`);
-    return { entities: [], relations: [] };
+    console.error('Error in searchNodesWithFuzzyMatching:', error);
+    throw error;
   } finally {
     await session.close();
   }

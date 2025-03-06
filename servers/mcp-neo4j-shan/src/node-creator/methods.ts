@@ -36,6 +36,7 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
               node.keyContributions = $keyContributions,
               node.emotionalValence = $emotionalValence,
               node.emotionalArousal = $emotionalArousal,
+              node.subType = $subType,
               node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
           RETURN node
         `, {
@@ -47,17 +48,30 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
           biography: entity.biography || null,
           keyContributions: entity.keyContributions || [],
           emotionalValence: entity.emotionalValence || null,
-          emotionalArousal: entity.emotionalArousal || null
+          emotionalArousal: entity.emotionalArousal || null,
+          subType: entity.subType || null
         }));
         
-        if (result.records.length > 0) {
-          createdEntities.push(entity);
-          console.error(`Entity creation result: Success`);
-        } else {
-          console.error(`Entity creation result: Failed`);
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Entity',
+            observations: nodeProps.observations,
+            confidence: nodeProps.confidence,
+            source: nodeProps.source,
+            description: nodeProps.description,
+            biography: nodeProps.biography,
+            keyContributions: nodeProps.keyContributions,
+            emotionalValence: nodeProps.emotionalValence,
+            emotionalArousal: nodeProps.emotionalArousal,
+            subType: nodeProps.subType
+          });
         }
-      } 
-      else if (entity.entityType === 'Event') {
+      } else if (entity.entityType === 'Event') {
+        // Update the Event creation to include subType
         const result = await session.executeWrite(tx => tx.run(`
           MERGE (node:Memory {name: $name})
           SET node.nodeType = 'Event',
@@ -65,36 +79,39 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
               node.lastUpdated = datetime(),
               node.startDate = $startDate,
               node.endDate = $endDate,
-              node.status = $status,
               node.timestamp = $timestamp,
               node.duration = $duration,
               node.location = $location,
               node.participants = $participants,
               node.outcome = $outcome,
               node.significance = $significance,
+              node.status = $status,
               node.emotionalValence = $emotionalValence,
               node.emotionalArousal = $emotionalArousal,
               node.causalPredecessors = $causalPredecessors,
               node.causalSuccessors = $causalSuccessors,
+              node.subType = $subType,
               node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
           RETURN node
         `, {
           name: entity.name,
           startDate: entity.startDate || null,
           endDate: entity.endDate || null,
-          status: entity.status || null,
           timestamp: entity.timestamp || null,
           duration: entity.duration || null,
           location: entity.location || null,
           participants: entity.participants || [],
           outcome: entity.outcome || null,
           significance: entity.significance || null,
+          status: entity.status || null,
           emotionalValence: entity.emotionalValence || null,
           emotionalArousal: entity.emotionalArousal || null,
           causalPredecessors: entity.causalPredecessors || [],
-          causalSuccessors: entity.causalSuccessors || []
+          causalSuccessors: entity.causalSuccessors || [],
+          subType: entity.subType || null
         }));
         
+        // Process the result and add to createdEntities
         if (result.records.length > 0) {
           createdEntities.push(entity);
           console.error(`Event creation result: Success`);
@@ -247,6 +264,7 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
               node.sourceThought = $sourceThought,
               node.numberOfSteps = $numberOfSteps,
               node.alternativeConclusionsConsidered = $alternativeConclusionsConsidered,
+              node.relatedPropositions = $relatedPropositions,
               node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
           RETURN node
         `, {
@@ -259,8 +277,9 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
           domain: entity.domain || null,
           tags: entity.tags || [],
           sourceThought: entity.sourceThought || null,
-          numberOfSteps: entity.numberOfSteps || 0,
-          alternativeConclusionsConsidered: entity.alternativeConclusionsConsidered || []
+          numberOfSteps: entity.numberOfSteps || null,
+          alternativeConclusionsConsidered: entity.alternativeConclusionsConsidered || [],
+          relatedPropositions: entity.relatedPropositions || []
         }));
         
         if (result.records.length > 0) {
@@ -285,6 +304,7 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
               node.counterarguments = $counterarguments,
               node.assumptions = $assumptions,
               node.formalNotation = $formalNotation,
+              node.propositions = $propositions,
               node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
           RETURN node
         `, {
@@ -297,7 +317,8 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
           alternatives: entity.alternatives || [],
           counterarguments: entity.counterarguments || [],
           assumptions: entity.assumptions || [],
-          formalNotation: entity.formalNotation || null
+          formalNotation: entity.formalNotation || null,
+          propositions: entity.propositions || []
         }));
         
         if (result.records.length > 0) {
@@ -305,6 +326,179 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
           console.error(`ReasoningStep creation result: Success`);
         } else {
           console.error(`ReasoningStep creation result: Failed`);
+        }
+      }
+      else if (entity.entityType === 'Attribute') {
+        const result = await session.executeWrite(tx => tx.run(`
+          MERGE (node:Memory {name: $name})
+          SET node.nodeType = 'Attribute',
+              node:Attribute,
+              node.lastUpdated = datetime(),
+              node.value = $value,
+              node.unit = $unit,
+              node.valueType = $valueType,
+              node.possibleValues = $possibleValues,
+              node.description = $description,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+          RETURN node
+        `, {
+          name: entity.name,
+          value: entity.value || null,
+          unit: entity.unit || null,
+          valueType: entity.valueType || null,
+          possibleValues: entity.possibleValues || [],
+          description: entity.description || null
+        }));
+        
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Attribute',
+            observations: [],
+            value: nodeProps.value,
+            unit: nodeProps.unit,
+            valueType: nodeProps.valueType,
+            possibleValues: nodeProps.possibleValues,
+            description: nodeProps.description
+          });
+        }
+      }
+      else if (entity.entityType === 'Proposition') {
+        const result = await session.executeWrite(tx => tx.run(`
+          MERGE (node:Memory {name: $name})
+          SET node.nodeType = 'Proposition',
+              node:Proposition,
+              node.lastUpdated = datetime(),
+              node.statement = $statement,
+              node.status = $status,
+              node.confidence = $confidence,
+              node.truthValue = $truthValue,
+              node.sources = $sources,
+              node.domain = $domain,
+              node.emotionalValence = $emotionalValence,
+              node.emotionalArousal = $emotionalArousal,
+              node.evidenceStrength = $evidenceStrength,
+              node.counterEvidence = $counterEvidence,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+          RETURN node
+        `, {
+          name: entity.name,
+          statement: entity.statement || null,
+          status: entity.status || null,
+          confidence: entity.confidence || null,
+          truthValue: entity.truthValue || null,
+          sources: entity.source ? [entity.source] : [],
+          domain: entity.domain || null,
+          emotionalValence: entity.emotionalValence || null,
+          emotionalArousal: entity.emotionalArousal || null,
+          evidenceStrength: entity.evidenceStrength || null,
+          counterEvidence: entity.counterEvidence || []
+        }));
+        
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Proposition',
+            observations: [],
+            statement: nodeProps.statement,
+            status: nodeProps.status,
+            confidence: nodeProps.confidence,
+            truthValue: nodeProps.truthValue,
+            source: nodeProps.sources?.[0] || null,
+            domain: nodeProps.domain,
+            emotionalValence: nodeProps.emotionalValence,
+            emotionalArousal: nodeProps.emotionalArousal,
+            evidenceStrength: nodeProps.evidenceStrength,
+            counterEvidence: nodeProps.counterEvidence
+          });
+        }
+      }
+      else if (entity.entityType === 'Emotion') {
+        const result = await session.executeWrite(tx => tx.run(`
+          MERGE (node:Memory {name: $name})
+          SET node.nodeType = 'Emotion',
+              node:Emotion,
+              node.lastUpdated = datetime(),
+              node.intensity = $intensity,
+              node.valence = $valence,
+              node.category = $category,
+              node.subcategory = $subcategory,
+              node.description = $description,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+          RETURN node
+        `, {
+          name: entity.name,
+          intensity: entity.intensity || null,
+          valence: entity.valence || null,
+          category: entity.category || null,
+          subcategory: entity.subcategory || null,
+          description: entity.description || null
+        }));
+        
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Emotion',
+            observations: [],
+            intensity: nodeProps.intensity,
+            valence: nodeProps.valence,
+            category: nodeProps.category,
+            subcategory: nodeProps.subcategory,
+            description: nodeProps.description
+          });
+        }
+      }
+      else if (entity.entityType === 'Agent') {
+        const result = await session.executeWrite(tx => tx.run(`
+          MERGE (node:Memory {name: $name})
+          SET node.nodeType = 'Agent',
+              node:Agent,
+              node.lastUpdated = datetime(),
+              node.agentType = $agentType,
+              node.description = $description,
+              node.capabilities = $capabilities,
+              node.beliefs = $beliefs,
+              node.knowledge = $knowledge,
+              node.preferences = $preferences,
+              node.emotionalState = $emotionalState,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+          RETURN node
+        `, {
+          name: entity.name,
+          agentType: entity.agentType || null,
+          description: entity.description || null,
+          capabilities: entity.capabilities || [],
+          beliefs: entity.beliefs || [],
+          knowledge: entity.knowledge || [],
+          preferences: entity.preferences || [],
+          emotionalState: entity.emotionalState || null
+        }));
+        
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Agent',
+            observations: [],
+            agentType: nodeProps.agentType,
+            description: nodeProps.description,
+            capabilities: nodeProps.capabilities,
+            beliefs: nodeProps.beliefs,
+            knowledge: nodeProps.knowledge,
+            preferences: nodeProps.preferences,
+            emotionalState: nodeProps.emotionalState
+          });
         }
       }
       else {

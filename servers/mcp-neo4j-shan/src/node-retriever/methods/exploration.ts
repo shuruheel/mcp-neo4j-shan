@@ -1,5 +1,6 @@
 import { Driver as Neo4jDriver } from 'neo4j-driver';
-import { KnowledgeGraph, Entity, Relation } from '../../types/index.js';
+import { KnowledgeGraph, Entity, Relation, RelationshipType } from '../../types/index.js';
+import { processSearchResults } from './search.js';
 
 /**
  * Explores the context around a node with prioritization based on relationship weights
@@ -18,13 +19,103 @@ import { KnowledgeGraph, Entity, Relation } from '../../types/index.js';
  */
 export async function exploreContextWeighted(
   neo4jDriver: Neo4jDriver, 
-  nodeName: string, 
+  nodeName: string | string[], 
   maxDepth: number = 2, 
-  minWeight: number = 0.0
+  minWeight: number = 0.0,
+  options: {
+    maxNodes?: number,
+    includeTypes?: string[],
+    excludeTypes?: string[],
+    includeRelationships?: string[]
+  } = {}
 ): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
   
+  // Handle case where nodeName is an array
+  const nodeNames = Array.isArray(nodeName) ? nodeName : [nodeName];
+  
+  // Set default options
+  const maxNodes = options.maxNodes || 50;
+  
+  // Default to include all node types if not specified
+  const includeTypes = options.includeTypes || [
+    'Entity', 'Concept', 'Event', 'ScientificInsight', 
+    'Law', 'Thought', 'ReasoningChain', 'ReasoningStep',
+    'Attribute', 'Proposition', 'Emotion', 'Agent'
+  ];
+  
+  const excludeTypes = options.excludeTypes || [];
+  const includeRelationships = options.includeRelationships || [];
+  
+  // Generate type filters for Cypher query
+  const labelFilter = generateTypeFilterQuery(includeTypes, excludeTypes);
+  const relationshipFilter = generateRelationshipFilterQuery(includeRelationships);
+  
   try {
+    // If we have multiple starting nodes, use the more powerful subgraphAll approach
+    if (nodeNames.length > 1) {
+      console.error(`Exploring context for multiple nodes: ${nodeNames.join(', ')}`);
+      
+      // Optimized Cypher query using APOC's subgraphAll
+      const query = `
+        // Find all starting nodes
+        MATCH (startNodes:Memory)
+        WHERE startNodes.name IN $nodeNames
+        
+        // Use subgraphAll to find the connections between these nodes
+        CALL apoc.path.subgraphAll(startNodes, {
+          relationshipFilter: ">|<",  // All relationships in any direction
+          labelFilter: "${labelFilter}",
+          maxLevel: $maxDepth,
+          limit: $maxNodes,
+          bfs: false  // Depth-first for better exploration
+        })
+        YIELD nodes, relationships
+        
+        // Filter relationships by weight
+        WITH 
+          nodes,
+          [rel IN relationships WHERE coalesce(rel.weight, 0.5) >= $minWeight] AS weightFilteredRels
+        
+        RETURN collect(distinct nodes) as nodes, collect(distinct weightFilteredRels) as relationships
+      `;
+      
+      // Execute the optimized query for multiple starting nodes
+      const result = await session.executeRead(tx =>
+        tx.run(query, { 
+          nodeNames: nodeNames,
+          maxDepth: maxDepth,
+          minWeight: minWeight,
+          maxNodes: maxNodes
+        })
+      );
+      
+      if (result.records.length === 0) {
+        console.error(`No nodes found with names: ${nodeNames.join(', ')}`);
+        return { entities: [], relations: [] };
+      }
+      
+      // Process the results from the APOC procedure
+      const record = result.records[0];
+      
+      // The APOC procedure returns collections of nodes and relationships
+      // We need to flatten them
+      const nodesArray = record.get('nodes');
+      const relationshipsArray = record.get('relationships');
+      
+      // Flatten nested arrays if needed
+      const nodes = Array.isArray(nodesArray[0]) ? nodesArray.flat() : nodesArray;
+      const relationships = Array.isArray(relationshipsArray[0]) ? 
+        relationshipsArray.flat() : relationshipsArray;
+      
+      // Process into Entity[] and Relation[] format
+      return processExplorationResults([{ nodes, relationships }]);
+    }
+    
+    // If we only have one node, use the original implementation
+    // Use original implementation for single node exploration without type filtering
+    console.error(`Exploring context for single node: ${nodeNames[0]}`);
+    
     // Enhanced Cypher query that uses relationship weights for traversal costs
     const query = `
       // First find the starting node
@@ -32,11 +123,11 @@ export async function exploreContextWeighted(
       
       // Use variable-length path with weighted cost traversal
       CALL apoc.path.expandConfig(start, {
-        relationshipFilter: ">"  // All relationship types, outgoing direction
-        , labelFilter: ">Memory" // Only follow relationships to Memory nodes
+        relationshipFilter: "${relationshipFilter || '>'}"  // Use specific relationships or all outgoing
+        , labelFilter: "${labelFilter || '>Memory'}" // Use label filter or default to Memory nodes
         , uniqueness: "NODE_GLOBAL"  // Avoid cycles
         , bfs: false             // Depth-first for better exploration
-        , limit: 100             // Limit total results
+        , limit: $maxNodes       // Limit total results
         , maxLevel: $maxDepth    // Maximum traversal depth
         , relCostProperty: "weight"   // Use weight property as cost factor
         , defaultRelCost: 1.0         // Default cost if weight is not specified
@@ -68,15 +159,16 @@ export async function exploreContextWeighted(
     // Execute the query and get the result
     const result = await session.executeRead(tx =>
       tx.run(query, { 
-        nodeName,
+        nodeName: nodeNames[0],
         maxDepth,
-        minWeight
+        minWeight,
+        maxNodes
       })
     );
     
-    // Process the result
+    // Process the result using the original method
     if (result.records.length === 0) {
-      console.error(`No nodes found with name: ${nodeName}`);
+      console.error(`No nodes found with name: ${nodeNames[0]}`);
       return { entities: [], relations: [] };
     }
     
@@ -85,11 +177,70 @@ export async function exploreContextWeighted(
     const nodes = record.get('nodes') || [];
     const relationships = record.get('relationships') || [];
     
-    // Convert to Entity[] and Relation[] format
-    // Process nodes to Entity format
-    const entities: Entity[] = [];
-    const processedNodeIds = new Set<string>();
+    return processExplorationResults([{ nodes, relationships }]);
+  } catch (error) {
+    console.error(`Error exploring context: ${error.message}`);
+    throw error;
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * Generates a label filter query string for Cypher
+ * @param includeTypes - Types to include
+ * @param excludeTypes - Types to exclude
+ * @returns Formatted label filter string for APOC procedures
+ */
+function generateTypeFilterQuery(includeTypes: string[], excludeTypes: string[]): string {
+  let labelFilter = '';
+  
+  // Add include filters (whitelist with +)
+  if (includeTypes && includeTypes.length > 0) {
+    labelFilter += includeTypes.map(type => `+${type}`).join('|');
+  }
+  
+  // Add exclude filters (blacklist with -)
+  if (excludeTypes && excludeTypes.length > 0) {
+    if (labelFilter) labelFilter += '|';
+    labelFilter += excludeTypes.map(type => `-${type}`).join('|');
+  }
+  
+  return labelFilter || '>Memory'; // Default to Memory label if no filters
+}
+
+/**
+ * Generates a relationship filter query string for Cypher
+ * @param includeRelationships - Relationships to include
+ * @returns Formatted relationship filter string for APOC procedures
+ */
+function generateRelationshipFilterQuery(includeRelationships: string[]): string {
+  if (includeRelationships && includeRelationships.length > 0) {
+    return includeRelationships.join('|');
+  }
+  return '>'; // Default to all outgoing relationships
+}
+
+/**
+ * Processes results from exploration queries into the KnowledgeGraph format
+ * @param records - Records from Neo4j query result
+ * @returns Knowledge graph with entities and relations
+ */
+function processExplorationResults(records: any[]): KnowledgeGraph {
+  // Initialize result arrays
+  const entities: Entity[] = [];
+  const relations: Relation[] = [];
+  
+  // Track processed nodes and relationships to avoid duplicates
+  const processedNodeIds = new Set<string>();
+  const processedRelIds = new Set<string>();
+  
+  for (const record of records) {
+    // Handle both direct node objects and node arrays
+    const nodes = record.nodes || [];
+    const relationships = record.relationships || [];
     
+    // Process nodes to Entity format
     for (const node of nodes) {
       if (!node) continue; // Skip null/undefined nodes
       
@@ -133,9 +284,6 @@ export async function exploreContextWeighted(
     }
     
     // Process relationships to Relation format
-    const relations: Relation[] = [];
-    const processedRelIds = new Set<string>();
-    
     for (const rel of relationships) {
       if (!rel) continue; // Skip null/undefined relationships
       
@@ -145,8 +293,15 @@ export async function exploreContextWeighted(
       processedRelIds.add(relId);
       
       // Get source and target nodes
-      const sourceNode = nodes.find(n => n.identity.equals(rel.start));
-      const targetNode = nodes.find(n => n.identity.equals(rel.end));
+      const sourceNode = nodes.find(n => 
+        (n.identity.equals && n.identity.equals(rel.start)) || 
+        n.identity === rel.start
+      );
+      
+      const targetNode = nodes.find(n => 
+        (n.identity.equals && n.identity.equals(rel.end)) || 
+        n.identity === rel.end
+      );
       
       if (!sourceNode || !targetNode) {
         console.error(`Could not find nodes for relationship: ${rel.type}`);
@@ -168,192 +323,164 @@ export async function exploreContextWeighted(
       
       relations.push(relation);
     }
+  }
+  
+  // Log the results
+  console.error(`Found ${entities.length} entities and ${relations.length} relations`);
+  
+  return { entities, relations };
+}
+
+/**
+ * Find conceptual associations between nodes based on sharing common connections
+ */
+export async function findConceptualAssociations(
+  neo4jDriver: Neo4jDriver,
+  nodeName: string,
+  options: {
+    maxAssociations?: number,
+    minSharedConnections?: number,
+    nodeTypes?: string[]
+  } = {}
+): Promise<KnowledgeGraph> {
+  const session = neo4jDriver.session();
+  
+  // Set default options
+  const maxAssociations = options.maxAssociations || 10;
+  const minSharedConnections = options.minSharedConnections || 2;
+  const nodeTypes = options.nodeTypes || [
+    'Entity', 'Concept', 'Event', 'ScientificInsight', 
+    'Law', 'Thought', 'ReasoningChain', 'ReasoningStep',
+    'Attribute', 'Proposition', 'Emotion', 'Agent'
+  ];
+  
+  try {
+    console.error(`Finding conceptual associations for node: ${nodeName}`);
+    console.error(`Max associations: ${maxAssociations}, Min shared: ${minSharedConnections}`);
+    console.error(`Node types: ${nodeTypes.join(', ')}`);
     
-    // Log the results
-    console.error(`Found ${entities.length} entities and ${relations.length} relations for node: ${nodeName}`);
+    const typeFilter = nodeTypes.map(type => `association:${type}`).join(' OR ');
     
-    return { entities, relations };
+    const result = await session.executeRead(tx => tx.run(`
+      // Start with the source node
+      MATCH (source:Memory {name: $nodeName})
+      
+      // Find all nodes that share connections with the source node
+      MATCH (source)-[r1]-(shared)-[r2]-(association:Memory)
+      WHERE association <> source
+        AND (${typeFilter})
+      
+      // Group by association and count shared connections
+      WITH association, collect(DISTINCT shared) AS sharedNodes, count(DISTINCT shared) AS sharedCount
+      WHERE sharedCount >= $minSharedConnections
+      
+      // Get relationships for the associated nodes
+      OPTIONAL MATCH (association)-[outRel]->(connected)
+      WITH association, sharedNodes, sharedCount, collect(outRel) as outRels
+      
+      OPTIONAL MATCH (other)-[inRel]->(association)
+      
+      RETURN 
+        association as entity, 
+        outRels as relations,
+        collect(inRel) as inRelations,
+        sharedCount as associationStrength,
+        [node in sharedNodes | node.name] as sharedConcepts
+      ORDER BY associationStrength DESC
+      LIMIT $maxAssociations
+    `, {
+      nodeName,
+      minSharedConnections
+    }));
+    
+    console.error(`Found ${result.records.length} conceptual associations`);
+    
+    return processSearchResults(result.records);
   } catch (error) {
-    console.error(`Error in exploreContextWeighted: ${error}`);
-    return { entities: [], relations: [] };
+    console.error(`Error finding conceptual associations: ${error}`);
+    throw error;
   } finally {
     await session.close();
   }
 }
 
 /**
- * DEPRECATED - Use exploreContextWeighted instead.
- * 
- * This method explores the context around a node without considering relationship weights,
- * which can lead to less effective exploration as weak and strong relationships are treated equally.
- * 
- * @deprecated Since version 1.0.1. Use exploreContextWeighted instead.
- * @param neo4jDriver - Neo4j driver instance
- * @param nodeName - The name of the node to explore context around
- * @param maxDepth - Maximum traversal depth (default: 2)
- * @returns A promise resolving to a KnowledgeGraph with nodes and relationships
+ * Find the shortest cognitive path between two nodes
  */
-export async function exploreContext(
+export async function findCognitivePath(
   neo4jDriver: Neo4jDriver,
-  nodeName: string, 
-  maxDepth: number = 2
+  startNodeName: string,
+  endNodeName: string,
+  options: {
+    maxPathLength?: number,
+    includeTypes?: string[]
+  } = {}
 ): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
   
+  // Set default options
+  const maxPathLength = options.maxPathLength || 5;
+  const includeTypes = options.includeTypes || [
+    'Entity', 'Concept', 'Event', 'ScientificInsight', 
+    'Law', 'Thought', 'ReasoningChain', 'ReasoningStep',
+    'Attribute', 'Proposition', 'Emotion', 'Agent'
+  ];
+  
   try {
-    console.error(`Exploring context for node: "${nodeName}" with maxDepth: ${maxDepth}`);
+    console.error(`Finding cognitive path from "${startNodeName}" to "${endNodeName}"`);
+    console.error(`Max path length: ${maxPathLength}`);
+    console.error(`Include types: ${includeTypes.join(', ')}`);
     
-    // Use case-insensitive search from the start
-    const nodeCheck = await session.executeRead(tx => tx.run(`
-      MATCH (n:Memory)
-      WHERE toLower(n.name) = toLower($nodeName)
-      RETURN n
-    `, { nodeName }));
+    const typeFilter = includeTypes.map(type => `node:${type}`).join(' OR ');
     
-    if (nodeCheck.records.length === 0) {
-      console.error(`No node found with name "${nodeName}" (case-insensitive check)`);
-      return { entities: [], relations: [] };
-    }
-    
-    // Use the actual node name with correct casing
-    const actualNodeName = nodeCheck.records[0].get('n').properties.name;
-    console.error(`Found node: "${actualNodeName}"`);
-    
-    // SIMPLIFIED APPROACH: Same as exploreContextWeighted but without weight filtering
-    // 1. First get all nodes within the specified depth
-    // 2. Then separately get ALL relationships between ANY of these nodes
-    
-    // Step 1: Get all nodes within specified depth
-    const nodesResult = await session.executeRead(tx => tx.run(`
-      // Get the center node
-      MATCH (center:Memory {name: $nodeName})
+    const result = await session.executeRead(tx => tx.run(`
+      // Find start and end nodes
+      MATCH (start:Memory {name: $startNodeName})
+      MATCH (end:Memory {name: $endNodeName})
       
-      // Find all nodes within maxDepth
-      CALL {
-        MATCH (center)-[*1..${maxDepth}]-(related:Memory)
-        RETURN related as node
-      }
+      // Find shortest path, considering relationship weights as costs
+      // Use relationship weights to influence traversal cost (lower weight = higher cost)
+      CALL apoc.algo.dijkstra(
+        start, 
+        end, 
+        "CONNECTS|RELATES_TO|PART_OF|BELONGS_TO|PRECEDES|FOLLOWS|HAS_ATTRIBUTE|DESCRIBES|HAS_PROPOSITION|FEELS|CREATED_BY|USED_FOR", 
+        "weight", 
+        $maxPathLength
+      ) YIELD path, weight
       
-      // Return all nodes including the center node
-      RETURN collect(DISTINCT center) + collect(DISTINCT node) as allNodes
-    `, { 
-      nodeName: actualNodeName
+      // Ensure all nodes in path match the type filter
+      WHERE all(node in nodes(path) WHERE (${typeFilter}))
+      
+      // Collect all nodes and relationships in the path
+      WITH nodes(path) as pathNodes, relationships(path) as pathRels, weight as pathWeight
+      
+      UNWIND pathNodes as node
+      
+      // Get relationships for each node in the path
+      WITH DISTINCT node, pathRels, pathWeight
+      OPTIONAL MATCH (node)-[outRel]->(connected)
+      WITH node, pathRels, pathWeight, collect(outRel) as outRels
+      
+      OPTIONAL MATCH (other)-[inRel]->(node)
+      
+      RETURN 
+        node as entity, 
+        outRels as relations,
+        collect(inRel) as inRelations,
+        pathWeight as pathCost
+      ORDER BY id(node)  // Preserve path order
+    `, {
+      startNodeName,
+      endNodeName,
+      maxPathLength
     }));
     
-    if (nodesResult.records.length === 0) {
-      console.error(`No nodes found in context of "${actualNodeName}"`);
-      return { entities: [], relations: [] };
-    }
+    console.error(`Found cognitive path with ${result.records.length} nodes`);
     
-    // Process nodes from the first step
-    const nodesArray = nodesResult.records[0].get('allNodes');
-    const entities: Entity[] = [];
-    const uniqueNodeIds = new Set();
-    const nodeNames: string[] = [];
-    
-    // Build entities and collect node names for relationship query
-    if (Array.isArray(nodesArray)) {
-      nodesArray.forEach(node => {
-        if (node && node.properties && node.properties.name) {
-          const nodeId = node.elementId || node.identity.toString();
-          if (!uniqueNodeIds.has(nodeId)) {
-            // Add to entity list
-            entities.push({
-              name: node.properties.name,
-              entityType: node.properties.nodeType || 'Entity',
-              observations: node.properties.observations || []
-            });
-            
-            // Track for deduplication
-            uniqueNodeIds.add(nodeId);
-            
-            // Store name for relationship query
-            nodeNames.push(node.properties.name);
-          }
-        }
-      });
-    }
-    
-    console.error(`Found ${entities.length} nodes in context exploration`);
-    
-    // If no nodes found, return empty results
-    if (entities.length === 0) {
-      return { entities: [], relations: [] };
-    }
-    
-    // Step 2: Get ALL relationships between these nodes explicitly by name
-    // Without weight filtering for regular context exploration
-    const relsResult = await session.executeRead(tx => tx.run(`
-      // Use node names to match exact nodes
-      WITH $nodeNames as names
-      MATCH (a:Memory)
-      WHERE a.name IN names
-      MATCH (b:Memory)
-      WHERE b.name IN names AND a.name <> b.name
-      
-      // Get relationships in both directions
-      OPTIONAL MATCH (a)-[r]->(b)
-      
-      // Return detailed relationship data for all relationships
-      WITH a, b, r
-      WHERE r IS NOT NULL
-      
-      RETURN collect({
-        rel: r,
-        fromName: a.name,
-        toName: b.name,
-        relType: type(r),
-        props: properties(r)
-      }) as relationshipData
-    `, { 
-      nodeNames: nodeNames
-    }));
-    
-    // Process relationships
-    const relations: Relation[] = [];
-    const uniqueRelIds = new Set();
-    
-    if (relsResult.records.length > 0) {
-      const relationshipDataArray = relsResult.records[0].get('relationshipData');
-      
-      if (Array.isArray(relationshipDataArray)) {
-        console.error(`Found ${relationshipDataArray.length} relationships to process`);
-        
-        relationshipDataArray.forEach(relData => {
-          try {
-            if (!relData || !relData.rel) return;
-            
-            const rel = relData.rel;
-            const relId = rel.elementId || rel.identity.toString();
-            
-            // Only process relationships with valid node names
-            if (!uniqueRelIds.has(relId) && relData.fromName && relData.toName) {
-              // Create relation object with all properties
-              const relation: Relation = {
-                from: relData.fromName,
-                to: relData.toName,
-                relationType: relData.relType || 'RELATED_TO',
-                ...relData.props
-              };
-              
-              relations.push(relation);
-              uniqueRelIds.add(relId);
-              
-              console.error(`Added relation: ${relation.from} -[${relation.relationType}]-> ${relation.to}`);
-            }
-          } catch (relError) {
-            console.error(`Error processing relationship data: ${relError}`);
-          }
-        });
-      }
-    }
-    
-    // Log detailed counts for debugging
-    console.error(`Retrieved ${entities.length} entities and ${relations.length} relationships`);
-    return { entities, relations };
+    return processSearchResults(result.records);
   } catch (error) {
-    console.error(`Error exploring context: ${error}`);
-    return { entities: [], relations: [] };
+    console.error(`Error finding cognitive path: ${error}`);
+    throw error;
   } finally {
     await session.close();
   }

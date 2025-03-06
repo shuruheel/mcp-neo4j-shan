@@ -1,241 +1,256 @@
 import { Driver as Neo4jDriver } from 'neo4j-driver';
-import { KnowledgeGraph, Entity } from '../types/index.js';
-
-// Import method implementations from separate files
+import { KnowledgeGraph } from '../types/index.js';
 import { 
-  robustSearch,
-  searchNodes,
-  searchNodesWithFuzzyMatching
+  robustSearch, 
+  searchNodesWithFuzzyMatching 
 } from './methods/search.js';
-
-import {
+import { 
   exploreContextWeighted,
-  exploreContext
+  findConceptualAssociations,
+  findCognitivePath 
 } from './methods/exploration.js';
-
-import {
-  getTemporalSequence
+import { 
+  getTemporalSequence,
+  findTemporalGaps,
+  traceCausalChains 
 } from './methods/temporal.js';
-
-import {
-  getReasoningChain,
-  getReasoningStepDetails,
+import { 
+  getReasoningChain, 
+  getReasoningStepDetails, 
   findReasoningChainsWithSimilarConclusion,
-  getReasoningAnalytics
+  getReasoningAnalytics 
 } from './methods/reasoning.js';
 
 /**
- * Neo4jRetriever - Graph retrieval functionality optimized for cognitive science principles
+ * Neo4jRetriever: Main class for graph retrieval with cognitive-science based strategies
  * 
- * This class implements knowledge graph traversal and retrieval strategies based on
- * cognitive science principles. The key features include:
- * 
- * 1. Weighted Relationship Traversal - Relationships with higher weights are traversed
- *    first, prioritizing the most significant cognitive connections and mimicking how
- *    human memory retrieves information by importance
- * 
- * 2. Relationship Categorization - Supports different types of relationships:
- *    - Hierarchical (taxonomic, parent-child)
- *    - Lateral (associative, similarity-based)
- *    - Temporal (sequential, causal)
- *    - Compositional (part-whole, component relationships)
- * 
- * 3. Context-Enhanced Relationships - Includes rich contextual information and memory
- *    aids to support recall and comprehension
- * 
- * 4. Temporal Sequence Retrieval - Specialized traversal for time-based relationships
- * 
- * The implementation uses Neo4j's path traversal with custom cost functions based on 
- * relationship weights, making stronger relationships "cheaper" to traverse while making
- * weak relationships "expensive", effectively prioritizing the retrieval of the most
- * cognitively significant paths.
+ * This class implements retrieval methods that mirror human memory access patterns,
+ * including weighted relationship traversal, context-enhanced relationships,
+ * and various retrieval strategies like spreading activation and targeted search.
  */
 export class Neo4jRetriever {
-  /**
-   * Creates a new Neo4jRetriever instance
-   * @param neo4jDriver - Neo4j driver instance
-   */
-  constructor(private neo4jDriver: Neo4jDriver) { }
-
-  /**
-   * Private helper method to load graph from Neo4j
-   */
-  private async loadGraph(): Promise<KnowledgeGraph> {
-    const session = this.neo4jDriver.session();
+  private neo4jDriver: Neo4jDriver;
   
-    try {
-      // Execute a Cypher statement in a Read Transaction that matches all node types
-      const res = await session.executeRead(tx => tx.run(`
-        MATCH (entity)
-        WHERE entity:Entity OR entity:Event OR entity:Concept OR entity:ScientificInsight OR entity:Law OR entity:Thought
-        OPTIONAL MATCH (entity)-[r]->(other)
-        RETURN entity, collect(r) as relations
-      `));
-      
-      const entities: Entity[] = [];
-      const relations: any[] = [];
-      
-      for (const row of res.records) {
-        const entityNode = row.get('entity');
-        const entityRelationships = row.get('relations');
-
-        // Convert Neo4j node to Entity format
-        const entity: Entity = {
-          name: entityNode.properties.name,
-          entityType: entityNode.properties.nodeType || 'Entity',
-          observations: 'observations' in entityNode.properties ? 
-            entityNode.properties.observations : []
-        };
-
-        entities.push(entity);
-        
-        // Add relations
-        for (const rel of entityRelationships) {
-          relations.push(rel.properties);
-        }
-      }
-
-      console.error(`Loaded ${entities.length} entities and ${relations.length} relations`);
-      return { entities, relations };
-    } catch (error) {
-      console.error('Error loading graph:', error);
-      return { entities: [], relations: [] };
-    }
-    finally {
-      // Close the Session
-      await session.close();
-    }
+  constructor(neo4jDriver: Neo4jDriver) {
+    this.neo4jDriver = neo4jDriver;
+    console.error('Neo4jRetriever initialized with cognitive-science based retrieval strategies');
   }
-
+  
   /**
-   * Performs a robust search across the knowledge graph
-   * @param searchQuery - The search query
-   * @returns Knowledge graph with matching nodes and relations
+   * Loads graph data for the specified node name and its connections
+   * 
+   * @param nodeName Name of the node to load connections for
+   * @param depth Maximum traversal depth (default: 2)
+   * @param minWeight Minimum relationship weight to include (0.0-1.0)
+   * @returns Promise resolving to a KnowledgeGraph
+   */
+  async loadGraph(
+    nodeName: string, 
+    depth: number = 2, 
+    minWeight: number = 0.0
+  ): Promise<KnowledgeGraph> {
+    return exploreContextWeighted(this.neo4jDriver, nodeName, depth, minWeight);
+  }
+  
+  /**
+   * Performs a robust search using multiple strategies
+   * 
+   * @param searchQuery Query string to search for
+   * @returns Promise resolving to a KnowledgeGraph
    */
   async robustSearch(searchQuery: string): Promise<KnowledgeGraph> {
     return robustSearch(this.neo4jDriver, searchQuery);
   }
-
+  
   /**
-   * Explores the context around a node with weighted relationships
-   * @param nodeName - Name of the node to explore
-   * @param maxDepth - Maximum depth to explore
-   * @param minWeight - Minimum weight of relationships to include
-   * @returns Knowledge graph with the node and its context
+   * Searches for nodes with fuzzy matching by node type
+   * 
+   * @param searchTerms Search terms for different node types
+   * @returns Promise resolving to a KnowledgeGraph
    */
-  async exploreContextWeighted(
-    nodeName: string,
-    maxDepth: number = 2,
-    minWeight: number = 0.0
+  async searchNodesByType(
+    searchTerms: {
+      entities?: string[],
+      concepts?: string[],
+      events?: string[],
+      attributes?: string[],
+      propositions?: string[],
+      emotions?: string[],
+      agents?: string[],
+      scientificInsights?: string[],
+      laws?: string[],
+      thoughts?: string[],
+      reasoningChains?: string[],
+      reasoningSteps?: string[],
+      fuzzyThreshold?: number
+    }
   ): Promise<KnowledgeGraph> {
-    return exploreContextWeighted(this.neo4jDriver, nodeName, maxDepth, minWeight);
-  }
-
-  /**
-   * Explores the context around a node (deprecated)
-   * @param nodeName - Name of the node to explore
-   * @param maxDepth - Maximum depth to explore
-   * @returns Knowledge graph with the node and its context
-   */
-  async exploreContext(
-    nodeName: string,
-    maxDepth: number = 2
-  ): Promise<KnowledgeGraph> {
-    return exploreContext(this.neo4jDriver, nodeName, maxDepth);
-  }
-
-  /**
-   * Searches for nodes by name or properties
-   * @param query - Search query
-   * @returns Knowledge graph with matching nodes
-   */
-  async searchNodes(query: string): Promise<KnowledgeGraph> {
-    return searchNodes(this.neo4jDriver, query);
-  }
-
-  /**
-   * Searches for nodes with fuzzy matching
-   * @param searchTerms - Search terms for different node types
-   * @returns Knowledge graph with matching nodes
-   */
-  async searchNodesWithFuzzyMatching(searchTerms: {
-    entities?: string[],
-    concepts?: string[],
-    events?: string[],
-    scientificInsights?: string[],
-    laws?: string[],
-    thoughts?: string[],
-    reasoningChains?: string[],
-    reasoningSteps?: string[],
-    fuzzyThreshold?: number
-  }): Promise<KnowledgeGraph> {
     return searchNodesWithFuzzyMatching(this.neo4jDriver, searchTerms);
   }
-
+  
   /**
-   * Gets a temporal sequence of events
-   * @param startNodeName - Name of the starting node
-   * @param direction - Direction of the sequence
-   * @param maxEvents - Maximum number of events to retrieve
-   * @returns Sequence of events and their connections
+   * Explores the context around a node with weighted relationship traversal
+   * 
+   * @param nodeName Name of the node to explore context around
+   * @param options Configuration options for exploration
+   * @returns Promise resolving to a KnowledgeGraph
+   */
+  async exploreContext(
+    nodeName: string | string[],
+    options: {
+      maxNodes?: number,
+      includeTypes?: string[],
+      excludeTypes?: string[],
+      maxDepth?: number,
+      minWeight?: number,
+      includeRelationships?: string[]
+    } = {}
+  ): Promise<KnowledgeGraph> {
+    const maxDepth = options.maxDepth || 2;
+    const minWeight = options.minWeight || 0.0;
+    
+    return exploreContextWeighted(
+      this.neo4jDriver, 
+      nodeName, 
+      maxDepth, 
+      minWeight,
+      {
+        maxNodes: options.maxNodes,
+        includeTypes: options.includeTypes,
+        excludeTypes: options.excludeTypes,
+        includeRelationships: options.includeRelationships
+      }
+    );
+  }
+  
+  /**
+   * Finds conceptual associations between nodes
+   * 
+   * @param nodeName The central node to find associations for
+   * @param options Configuration options
+   * @returns Promise resolving to a KnowledgeGraph
+   */
+  async findConceptualAssociations(
+    nodeName: string,
+    options: {
+      maxAssociations?: number,
+      minSharedConnections?: number,
+      nodeTypes?: string[]
+    } = {}
+  ): Promise<KnowledgeGraph> {
+    return findConceptualAssociations(this.neo4jDriver, nodeName, options);
+  }
+  
+  /**
+   * Retrieves a temporal sequence of related events
+   * 
+   * @param startNodeName Name of the node to start from
+   * @param direction Direction to explore: 'forward', 'backward', or 'both'
+   * @param maxEvents Maximum number of events to retrieve
+   * @param nodeTypes Types of nodes to include in the sequence
+   * @returns Promise resolving to a KnowledgeGraph
    */
   async getTemporalSequence(
     startNodeName: string,
     direction: 'forward' | 'backward' | 'both' = 'both',
-    maxEvents: number = 10
-  ): Promise<{ sequence: Entity[], connections: any[] }> {
-    return getTemporalSequence(this.neo4jDriver, startNodeName, direction, maxEvents);
+    maxEvents: number = 20,
+    nodeTypes?: string[]
+  ): Promise<KnowledgeGraph> {
+    return getTemporalSequence(this.neo4jDriver, startNodeName, direction, maxEvents, nodeTypes);
   }
-
+  
   /**
-   * Gets a reasoning chain by name
-   * @param chainName - Name of the reasoning chain
-   * @returns The chain and its steps
+   * Finds gaps in temporal knowledge
+   * 
+   * @param domainFilter Optional domain to filter by
+   * @param limit Maximum number of gaps to return
+   * @returns Promise resolving to a KnowledgeGraph
    */
-  async getReasoningChain(chainName: string): Promise<{
-    chain: any,
-    steps: any[]
-  }> {
+  async findTemporalGaps(
+    domainFilter?: string,
+    limit: number = 10
+  ): Promise<KnowledgeGraph> {
+    return findTemporalGaps(this.neo4jDriver, domainFilter, limit);
+  }
+  
+  /**
+   * Traces causal chains in the knowledge graph
+   * 
+   * @param startNode Optional starting node
+   * @param maxLength Maximum length of causal chains to retrieve
+   * @param includeProbable Whether to include probable causal relationships
+   * @returns Promise resolving to a KnowledgeGraph
+   */
+  async traceCausalChains(
+    startNode?: string,
+    maxLength: number = 5,
+    includeProbable: boolean = true
+  ): Promise<KnowledgeGraph> {
+    return traceCausalChains(this.neo4jDriver, startNode, maxLength, includeProbable);
+  }
+  
+  /**
+   * Finds the shortest cognitive path between two nodes
+   * 
+   * @param startNodeName Name of the start node
+   * @param endNodeName Name of the end node
+   * @param options Configuration options
+   * @returns Promise resolving to a KnowledgeGraph
+   */
+  async findCognitivePath(
+    startNodeName: string,
+    endNodeName: string,
+    options: {
+      maxPathLength?: number,
+      includeTypes?: string[]
+    } = {}
+  ): Promise<KnowledgeGraph> {
+    return findCognitivePath(this.neo4jDriver, startNodeName, endNodeName, options);
+  }
+  
+  /**
+   * Retrieves a reasoning chain by name
+   * 
+   * @param chainName Name of the reasoning chain
+   * @returns Promise resolving to a KnowledgeGraph
+   */
+  async getReasoningChain(chainName: string): Promise<KnowledgeGraph> {
     return getReasoningChain(this.neo4jDriver, chainName);
   }
+  
   /**
    * Gets details for a reasoning step
-   * @param stepName - Name of the step
-   * @returns The step and related information
+   * 
+   * @param stepName Name of the reasoning step
+   * @returns Promise resolving to a KnowledgeGraph
    */
-  async getReasoningStepDetails(stepName: string): Promise<{
-    step: any,
-    supportingReferences: any[],
-    previousSteps: any[],
-    nextSteps: any[]
-  }> {
+  async getReasoningStepDetails(stepName: string): Promise<KnowledgeGraph> {
     return getReasoningStepDetails(this.neo4jDriver, stepName);
   }
-
+  
   /**
    * Finds reasoning chains with similar conclusions
-   * @param conclusion - The conclusion to match
-   * @param limit - Maximum number of chains to return
-   * @returns Array of matching chains
+   * 
+   * @param topic Topic or conclusion to search for
+   * @param limit Maximum number of chains to return
+   * @returns Promise resolving to a KnowledgeGraph
    */
   async findReasoningChainsWithSimilarConclusion(
-    conclusion: string,
+    topic: string,
     limit: number = 5
-  ): Promise<any[]> {
-    return findReasoningChainsWithSimilarConclusion(this.neo4jDriver, conclusion, limit);
+  ): Promise<KnowledgeGraph> {
+    return findReasoningChainsWithSimilarConclusion(this.neo4jDriver, topic, limit);
   }
-
+  
   /**
    * Gets analytics about reasoning in the knowledge graph
-   * @returns Analytics data
+   * 
+   * @param filter Optional filter to limit analysis
+   * @returns Promise resolving to a KnowledgeGraph
    */
-  async getReasoningAnalytics(): Promise<{
-    totalChains: number,
-    totalSteps: number,
-    methodologyDistribution: Record<string, number>,
-    averageStepsPerChain: number,
-    topChainsByStepCount: any[]
-  }> {
-    return getReasoningAnalytics(this.neo4jDriver);
+  async getReasoningAnalytics(
+    filter?: { domain?: string, methodology?: string }
+  ): Promise<KnowledgeGraph> {
+    return getReasoningAnalytics(this.neo4jDriver, filter);
   }
 } 
