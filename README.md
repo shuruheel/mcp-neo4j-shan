@@ -1,6 +1,6 @@
 # MCP Semantic Graph Memory
 
-This repository contains a collection of Servers that enable LLMs to build, maintain, and explore a comprehensive knowledge graph with cognitive neuroscience-inspired features.
+This repository contains a collection of Servers and Client Tools that enable LLMs to build, maintain, and explore a comprehensive knowledge graph with cognitive neuroscience-inspired features.
 
 ## Servers
 
@@ -107,18 +107,78 @@ A sophisticated knowledge graph memory system that stores interconnected informa
     - `find_reasoning_chains_with_similar_conclusion`: Finds related reasoning on similar topics (not tested)
     - `get_reasoning_analytics`: Analyzes reasoning patterns across domains and methodologies (not tested)
 
+## Clients
+
+### `knowledge-processor`
+
+A powerful Python-based tool for extracting rich semantic knowledge from large text corpora and ingesting it into the Neo4j knowledge graph according to the same schema used by the MCP Server.
+
+#### Key Features
+
+- **Large-Scale Knowledge Extraction**: Processes entire books or large text collections to build comprehensive knowledge graphs:
+  - Automatically splits documents into manageable chunks
+  - Processes chunks in parallel for faster extraction
+  - Handles checkpointing to resume interrupted processing
+  - Scales to process entire libraries of books
+
+- **AI-Powered Information Extraction**: Leverages OpenAI's GPT-4 models to extract:
+  - Entities, events, concepts and their interrelationships
+  - Sophisticated relationship types with contextual explanations
+  - Emotional and cognitive dimensions of information
+  - Complex reasoning chains and scientific insights
+  - Person-specific psychological profiles
+
+- **Entity Aggregation and Profile Generation**:
+  - Consolidates mentions of the same entity across different text sources
+  - Generates comprehensive profiles for key entities
+  - Resolves entity coreferences and disambiguates similar entities
+  - Enhances entities with rich metadata from multiple sources
+
+- **Schema-Compliant Neo4j Integration**:
+  - Maps extracted knowledge to the same Neo4j schema used by the MCP server
+  - Implements proper node typing and relationship categorization
+  - Handles all 13 specialized node types with appropriate attributes
+  - Creates typed relationships following the schema specifications
+  - Ensures compatibility with MCP server exploration tools
+
+- **Process Components**:
+  - **Document Loading & Splitting**: Processes text files from the data directory
+  - **Knowledge Extraction**: Extracts structured information from text chunks
+  - **Entity Aggregation**: Consolidates and enhances entity information
+  - **Comprehensive Profile Generation**: Creates detailed profiles for key entities
+  - **Neo4j Storage**: Persists extracted knowledge in the graph database
+
+#### Usage
+
+1. **Setup**:
+   - Place text files (books, articles, documents) in the `data` directory
+   - Configure Neo4j connection parameters in `.env` file
+   - Ensure OpenAI API key is set in the environment
+
+2. **Running the Processor**:
+   ```bash
+   python kg_main.py
+   ```
+
+3. **Processing Stages**:
+   - Stage 1: Document loading and text processing
+   - Stage 2: Knowledge extraction and entity aggregation
+   - Stage 3: Comprehensive profile generation
+   - Stage 4: Neo4j database storage
+
+4. **Diagnostic Mode**:
+   ```bash
+   python kg_main.py --diagnostic
+   ```
+
 #### Use Cases
 
-- Building persistent memory across conversations
-- Creating interconnected knowledge networks
-- Capturing complex relationships between concepts, entities, and events
-- Preserving context with emotional and cognitive dimensions
-- Enabling sophisticated knowledge exploration and retrieval
-- Documenting chains of reasoning with explicit logical steps
-- Visualizing temporal sequences and causal relationships
-- Mapping geographical and spatial relationships
-- Distinguishing between objective facts and subjective interpretations
-- Modeling person-specific psychological profiles and relationships
+- Building knowledge graphs from books, research papers, or articles
+- Creating domain-specific knowledge bases for specialized fields
+- Generating interconnected context for AI assistants
+- Enabling semantic search across large document collections
+- Discovering non-obvious connections between concepts and entities
+- Supporting reasoning and analysis with rich factual context
 
 ## Installation and Setup
 
@@ -127,8 +187,9 @@ A sophisticated knowledge graph memory system that stores interconnected informa
 - [Node.js](https://nodejs.org/) v18 or newer
 - [npm](https://www.npmjs.com/) v9 or newer
 - [Neo4j](https://neo4j.com/) database (hosted or local instance)
+- [Python](https://www.python.org/) 3.8+ (for knowledge-processor)
 
-### Building the Project
+### Building the MCP Server
 
 This project uses Nx for build management. To build all servers:
 
@@ -141,6 +202,20 @@ npx nx run-many -t build -p "*"
 
 # Build a specific server
 npx nx build mcp-neo4j-shan
+```
+
+### Setting up the Knowledge Processor
+
+```bash
+# Navigate to the knowledge processor directory
+cd clients/knowledge-processor
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Configure environment variables
+cp .env.example .env
+# Edit .env with your Neo4j and OpenAI credentials
 ```
 
 ### Running a Server
