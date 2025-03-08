@@ -12,6 +12,7 @@ TOOL USAGE WORKFLOW:
    - Entity: People, organizations, products, physical objects or any tangible item
      * Required: name, entityType="Entity"
      * Optional: description, biography, keyContributions (array), observations (array), confidence, source, emotionalValence, emotionalArousal, subType (e.g., "Person", "Organization", "Location", "Artifact", "Animal")
+     * Person subtype: When subType="Person", you can include rich psychological profiling with personalityTraits (array of objects), cognitiveStyle (object), emotionalDisposition, emotionalTriggers (array of objects), interpersonalStyle, powerDynamics (object), loyalties (array of objects), coreValues (array of objects), ethicalFramework, psychologicalDevelopment (array of objects), and more. See the detailed schema in tool documentation.
    
    - Event: Time-bound occurrences with temporal attributes
      * Required: name, entityType="Event" 
@@ -152,7 +153,18 @@ export const TOOL_PROMPTS: Record<string, string> = {
   
   - Entity (People, organizations, products, physical objects):
     * Core fields: name, entityType="Entity", description, observations, confidence, source, biography, keyContributions
-    * Extract emotional dimensions based on linguistic cues in descriptions and user sentiment
+    * When subType="Person", extract rich psychological dimensions:
+       - personalityTraits: Array of traits with evidence and confidence scores
+       - cognitiveStyle: Decision-making approach, problem-solving methods, worldview, and biases
+       - emotionalDisposition: Overall emotional tendencies (e.g., "Reserved", "Volatile")
+       - emotionalTriggers: Events/situations causing strong emotional responses
+       - interpersonalStyle: How they typically interact with others
+       - powerDynamics: How they respond to authority, manage subordinates, etc.
+       - loyalties: Commitments to people, organizations, or concepts with strength metrics
+       - coreValues: Their guiding principles with importance and consistency ratings
+       - ethicalFramework: Overall ethical approach (e.g., "Realist", "Utilitarian")
+       - psychologicalDevelopment: How their psychology evolved over time periods
+    * For Person nodes, leverage relationship types like MENTORS, ADMIRES, VALUES, EXHIBITS_TRAIT
   
   - Event (Time-bound occurrences):
     * Core fields: name, entityType="Event", description, startDate, endDate, location, participants, outcome, status, timestamp, duration, significance

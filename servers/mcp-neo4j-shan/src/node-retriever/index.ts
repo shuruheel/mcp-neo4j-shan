@@ -79,9 +79,14 @@ export class Neo4jRetriever {
       agents?: string[],
       scientificInsights?: string[],
       laws?: string[],
+      locations?: string[],
       thoughts?: string[],
       reasoningChains?: string[],
       reasoningSteps?: string[],
+      personTraits?: string[],
+      personalityTypes?: string[],
+      emotionalDispositions?: string[],
+      ethicalFrameworks?: string[],
       fuzzyThreshold?: number
     }
   ): Promise<KnowledgeGraph> {

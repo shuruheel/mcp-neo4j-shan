@@ -1,64 +1,141 @@
 # Recommended Semantic Graph Schema for Neo4j Memory
 
-We propose an ontology schema for a Neo4j-based semantic memory that will serve a generative model’s reasoning and cognitive functions. Below we outline the main node types, relationship types, and key attributes, along with how they map to the requirements (reasoning chains, cognitive dimensions, emotional tagging):
+We propose an ontology schema for a Neo4j-based semantic memory that will serve a generative model's reasoning and cognitive functions. Below we outline the main node types, relationship types, and key attributes, along with how they map to the requirements (reasoning chains, cognitive dimensions, emotional tagging):
 
 Node Types (Labels):
 	•	Entity: The broad class for individual things or agents. Every concrete object or agent (person, organization, object, place) would have this label, possibly with a subtype label. For example, we might further label a person node with Person (subclass of Entity), a city node with Location, etc. Entities hold enduring information (properties, category memberships).
-	•	Subtypes/Subclasses: Person, Organization, Location, Artifact, Animal, Concept (for abstract entities like ideas or topics), etc. These can be implemented as either additional labels or as nodes in an “isA” hierarchy. (Using Neo4j, one might give a node multiple labels, e.g., :Entity:Person to indicate it’s a Person. And also have a Class node “Person” if needed to attach ontology info.)
-	•	Example: A node for “Albert Einstein” labeled Entity, Person with properties like name:"Albert Einstein", birthDate: "1879-03-14" and a link isA -> Person (if Person is modeled as node) and maybe hasOccupation -> Physicist.
+	•	Subtypes/Subclasses: Person, Organization, Location, Artifact, Animal, Concept (for abstract entities like ideas or topics), etc. These can be implemented as either additional labels or as nodes in an "isA" hierarchy. (Using Neo4j, one might give a node multiple labels, e.g., :Entity:Person to indicate it's a Person. And also have a Class node "Person" if needed to attach ontology info.)
+	•	Example: A node for "Albert Einstein" labeled Entity, Person with properties like name:"Albert Einstein", birthDate: "1879-03-14" and a link isA -> Person (if Person is modeled as node) and maybe hasOccupation -> Physicist.
+
+### Person Node Type Schema
+The Person node type can be expanded with rich psychological, emotional, and social attributes to enable more nuanced analysis and reasoning:
+
+```
+Person Node Type:
+	•	Basic Attributes:
+		○	name: String - Full name of the person
+		○	aliases: Array of Strings - Alternative names or nicknames
+		○	biography: String - Brief biographical summary
+
+	•	Psychological Profile:
+		○	personalityTraits: Array of objects containing:
+			▪	trait: String - e.g., "Analytical", "Pragmatic", "Authoritarian"
+			▪	evidence: Array of Strings - Textual evidence supporting this trait
+			▪	confidence: Number (0.0-1.0) - Model's confidence in this attribution
+		○	cognitiveStyle: Object containing:
+			▪	decisionMaking: String - How the person makes decisions (e.g., "Methodical", "Intuitive")
+			▪	problemSolving: String - Approach to problem-solving
+			▪	worldview: String - Person's fundamental perspective on international relations/politics
+			▪	biases: Array of Strings - Observed cognitive biases in their thinking
+
+	•	Emotional Profile:
+		○	emotionalDisposition: String - Overall emotional tendency (e.g., "Reserved", "Volatile")
+		○	emotionalTriggers: Array of objects containing:
+			▪	trigger: String - Events/situations causing strong emotional responses
+			▪	reaction: String - Typical emotional response
+			▪	evidence: Array of Strings - Textual evidence
+
+	•	Relational Dynamics:
+		○	interpersonalStyle: String - How they typically interact with others
+		○	powerDynamics: Object containing:
+			▪	authorityResponse: String - How they respond to authority
+			▪	subordinateManagement: String - How they manage subordinates
+			▪	negotiationTactics: Array of Strings - Observed negotiation approaches
+		○	loyalties: Array of objects containing:
+			▪	target: String - Person, institution, or concept
+			▪	strength: Number (0.0-1.0) - Intensity of loyalty
+			▪	evidence: Array of Strings - Supporting textual evidence
+
+	•	Value System:
+		○	coreValues: Array of objects containing:
+			▪	value: String - e.g., "National security", "Global stability"
+			▪	importance: Number (0.0-1.0) - Relative importance
+			▪	consistency: Number (0.0-1.0) - How consistently upheld
+		○	ethicalFramework: String - Ethical approach (e.g., "Realist", "Utilitarian")
+
+	•	Temporal Attributes:
+		○	psychologicalDevelopment: Array of objects containing:
+			▪	period: String - Time period
+			▪	changes: String - Notable psychological shifts
+			▪	catalysts: Array of Strings - Events triggering changes
+
+	•	Meta Attributes:
+		○	narrativeTreatment: Object containing:
+			▪	authorBias: Number (-1.0 to 1.0) - Detected authorial bias
+			▪	portrayalConsistency: Number (0.0-1.0) - Consistency across sources
+			▪	controversialAspects: Array of Strings - Disputed psychological features
+		○	modelConfidence: Number (0.0-1.0) - Overall confidence in profile
+		○	evidenceStrength: Number (0.0-1.0) - Strength of supporting evidence
+```
+
+This expanded Person schema allows for complex psychological modeling and can be integrated with the other node types through appropriate relationships. For example:
+
+- A Person node can link to specific Emotion nodes via the feels relationship, with evidence and context stored in the relationship properties.
+- The Person's coreValues can be linked to Concept nodes representing those values.
+- Psychological development can link to Event nodes that triggered changes.
+- Loyalties can link to other Person, Organization, or Concept nodes.
+
+### Implementation Notes for Person Nodes:
+1. **Storage Approach**: Some of these attributes (especially nested structures) might be stored as serialized JSON in Neo4j property fields where full queryability is not needed, or modeled as separate connected nodes where querying relationships is important.
+
+2. **Cognitive Links**: Consider creating explicit relationship types like hasPersonalityTrait, hasCognitiveBias, or valuesPriority to connect a Person to Concept nodes representing traits, biases, or values when these need to be queried across people (e.g., "Find all people with 'Analytical' trait").
+
+3. **Evidence Handling**: For evidence fields, consider whether to store them as simple text arrays or create separate Evidence nodes that can link to source documents and have their own confidence metrics.
+
+4. **Time-Based Attributes**: For aspects that change over time (like psychological development), you might use temporal properties in Neo4j or create explicit TimePoint or TimePeriod nodes to represent when certain attributes were valid.
 	•	Event: Represents something that happens or occurred – an action, occurrence, episode. Event nodes capture episodic memory. They should be linked to participants (entities), a time, place, and possibly results.
 	•	Subtypes: Action (if an agent initiated it), StateChange, Observation, Conversation, etc. We can introduce subtypes if needed to handle different reasoning (e.g., an Action event might have a agent role vs. a Weather event might not).
-	•	Example: An event node for “Einstein publishes theory of relativity (1905)” with properties name:"Publication of Special Relativity", year:1905 and relationships: hasParticipant -> [Einstein], hasOutcome -> [RelativityTheory] (RelativityTheory might be a Concept node here), and hasPlace -> [Annalen der Physik journal] if we treat the journal as a location or context.
+	•	Example: An event node for "Einstein publishes theory of relativity (1905)" with properties name:"Publication of Special Relativity", year:1905 and relationships: hasParticipant -> [Einstein], hasOutcome -> [RelativityTheory] (RelativityTheory might be a Concept node here), and hasPlace -> [Annalen der Physik journal] if we treat the journal as a location or context.
 	•	Attribute/Quality: Instead of separate nodes for every quality, we often use relationships or properties. However, some attributes might be usefully nodes, especially if they are conceptual or need linking. For example, Color could be a concept node with value instances (red, blue), or Unit for measurement units. For simplicity, we may not create a node for every numeric value or string property (these can remain as properties in Neo4j), but an Attribute node type can represent qualities that we want to classify or relate.
 	•	Example: A node Tall of type Attribute that might be linked to Person nodes via hasAttribute if we explicitly mark tall people (alternatively, just a property height on Person). This is optional and depends on whether such qualities need to be reasoned over explicitly.
-	•	Concept/Category: An abstract idea or category that might not be a physical entity. In some ontologies these are treated as classes (TBox), but we can also have them as nodes to which entities link via isA. For example, Scientist as a Concept node, Physics as a Concept (domain of knowledge). This allows the AI to reason about categories (“All scientists are educated people”) and group things.
+	•	Concept/Category: An abstract idea or category that might not be a physical entity. In some ontologies these are treated as classes (TBox), but we can also have them as nodes to which entities link via isA. For example, Scientist as a Concept node, Physics as a Concept (domain of knowledge). This allows the AI to reason about categories ("All scientists are educated people") and group things.
 	•	Example: Node Scientist with label Concept (or Class) and link subClassOf -> Profession. Individual Person nodes like Einstein link isA -> Scientist. Concept nodes can also link to each other (Scientist relatedTo -> Science (Concept) perhaps).
 	•	Proposition/Statement: A node that represents a fact, claim, rule, or piece of knowledge (often linking other nodes). This is essentially a reified relationship or a mini-graph representing a statement. We recommend having this for pieces of information that we want to attach meta-data to (like evidence, truth value, emotion). Not every triple needs a Proposition node, but important ones or non-obvious ones do. We might label these as Fact or Statement or Rule depending on their role.
 	•	Subtypes: Fact (an asserted piece of knowledge, considered true), Hypothesis (a proposition that is believed tentatively or being examined), Law (a proposition representing a law or universally quantified rule). These could be distinguished either by a type property or separate labels.
-	•	Example: A node representing the statement “CO2 levels influence global temperature” of type Hypothesis (or Proposition with status=hypothesis). It might have supports -> [Evidence1] relationships pointing to other Proposition nodes that are evidence (like data reports), and maybe an attribute confidence:0.7. If confirmed, we might change its label to Law or status to confirmed. Another example: a Fact node for “Einstein won the 1921 Nobel Prize” linking subject -> Einstein, predicate -> wonPrize, object -> NobelPrize, with a source reference. In practice, an alternative is to store such facts as direct edges (Einstein -[wonPrize]-> NobelPrize, with properties year:1921, source:xxx). We can mix both approaches as needed.
+	•	Example: A node representing the statement "CO2 levels influence global temperature" of type Hypothesis (or Proposition with status=hypothesis). It might have supports -> [Evidence1] relationships pointing to other Proposition nodes that are evidence (like data reports), and maybe an attribute confidence:0.7. If confirmed, we might change its label to Law or status to confirmed. Another example: a Fact node for "Einstein won the 1921 Nobel Prize" linking subject -> Einstein, predicate -> wonPrize, object -> NobelPrize, with a source reference. In practice, an alternative is to store such facts as direct edges (Einstein -[wonPrize]-> NobelPrize, with properties year:1921, source:xxx). We can mix both approaches as needed.
 	•	Emotion: A node type for emotions (if using node-based model). Instances might be Joy, Sadness, Anger, Fear, Surprise, Disgust, etc. These can either stand alone and be linked to events or used as values. Emotions could also be hierarchical (e.g., Joy has subtypes like Pride, Relief, etc., if we wanted a finer ontology of emotion). Initially, a flat set is fine.
-	•	Example: Node Joy label Emotion. An event “Won Championship” would have a relationship evokedEmotion -> Joy. Alternatively, the event node could just have a property emotion="Joy"; but using a node allows connecting that emotion to other things (maybe to a concept of PositiveEmotion, or to characters who often feel that emotion).
-	•	Agent (Cognitive Entity): If we plan to include the AI itself or other actors with beliefs, it could be useful to have an Agent node type (which might overlap with Person if the AI is treated as an agent too). This can be used for tracking perspectives (for example, “Alice believes X” could be represented by linking Alice (Agent) to proposition X via believes relationship). In a single AI’s memory, we might not need multiple agents unless modeling different people’s belief sets. But if the generative model is to simulate different viewpoints or store knowledge about what different people know, this becomes relevant. We can keep the concept in mind.
+	•	Example: Node Joy label Emotion. An event "Won Championship" would have a relationship evokedEmotion -> Joy. Alternatively, the event node could just have a property emotion="Joy"; but using a node allows connecting that emotion to other things (maybe to a concept of PositiveEmotion, or to characters who often feel that emotion).
+	•	Agent (Cognitive Entity): If we plan to include the AI itself or other actors with beliefs, it could be useful to have an Agent node type (which might overlap with Person if the AI is treated as an agent too). This can be used for tracking perspectives (for example, "Alice believes X" could be represented by linking Alice (Agent) to proposition X via believes relationship). In a single AI's memory, we might not need multiple agents unless modeling different people's belief sets. But if the generative model is to simulate different viewpoints or store knowledge about what different people know, this becomes relevant. We can keep the concept in mind.
 
 Relationship Types: (Neo4j relationships, typically directed, though often pairs imply inverse relations)
 	•	isA / instanceOf: Links an individual Entity to a Concept/Class. E.g., [Einstein] -isA-> [Person] or [Einstein] -isA-> [Scientist]. This enables class-based inference.
 	•	subClassOf: Links a Concept to a higher Concept. E.g., [Scientist] -subClassOf-> [Person] or [City] -subClassOf-> [Location]. This builds the taxonomy. These relations are transitive and the reasoning system can utilize that (Neo4j can use APOC or custom traversals to handle transitivity).
 	•	hasPart / partOf: Part-whole for composite entities or events. E.g., [Car] -hasPart-> [Engine], [Engine] -partOf-> [Car] (two directions if needed), or [Olympics] -hasPart-> [100mRaceEvent]. In time, [Project] -hasPhase-> [Phase1 (Event)] etc.
 	•	locatedIn / hasLocation: Spatial containment or association. E.g., [Person] -locatedIn-> [City] for residence, [Monument] -locatedIn-> [Country]. Also for events: [Event] -hasLocation-> [Place]. This relation enables geographic reasoning and context linking.
-	•	hasTime / timeOf / occursOn: Temporal tag. Could link an Event to a Time node (like a Date or Year node), or as an attribute. Possibly create Year/Date nodes to easily query “events in 2020” by traversing occursInYear relation.
-	•	participant / hasParticipant / actor / agent: Relate entities to events by their role. For example [Einstein] -participatedIn-> [SolvayConference 1927]. If roles matter: we can refine with relations like hasAgent (active doer), hasPatient (the thing acted on), hasExperiencer, etc., but that might be too granular unless needed for specific reasoning (this starts looking like semantic role labeling in NLP). A simpler model: an Event node connects to all involved entities with a generic hasParticipant and possibly an attribute on the relationship indicating role (“speaker”, “audience”, “winner”, etc.).
-	•	causes / causedBy: Represents causal links between events (or even between states or propositions). E.g., [OilSpill] -causes-> [PollutionDesaster]. Also can link actions to effects, or conditions to outcomes. This is crucial for chain reasoning (“why did this happen?” or “what might happen next?”).
+	•	hasTime / timeOf / occursOn: Temporal tag. Could link an Event to a Time node (like a Date or Year node), or as an attribute. Possibly create Year/Date nodes to easily query "events in 2020" by traversing occursInYear relation.
+	•	participant / hasParticipant / actor / agent: Relate entities to events by their role. For example [Einstein] -participatedIn-> [SolvayConference 1927]. If roles matter: we can refine with relations like hasAgent (active doer), hasPatient (the thing acted on), hasExperiencer, etc., but that might be too granular unless needed for specific reasoning (this starts looking like semantic role labeling in NLP). A simpler model: an Event node connects to all involved entities with a generic hasParticipant and possibly an attribute on the relationship indicating role ("speaker", "audience", "winner", etc.).
+	•	causes / causedBy: Represents causal links between events (or even between states or propositions). E.g., [OilSpill] -causes-> [PollutionDesaster]. Also can link actions to effects, or conditions to outcomes. This is crucial for chain reasoning ("why did this happen?" or "what might happen next?").
 	•	influences: A softer version of causes (not strictly deterministic). Could connect things like concepts or situations that influence each other.
 	•	next / sequence / predecessor: To order events or steps in a process. E.g., [Event1] -before-> [Event2]. Alternatively, store a timeline by linking each event to a next event in some context.
-	•	knows / friendOf / memberOf: Relations capturing social and set membership. E.g., Person –knows– Person for social graph links. Person –memberOf– Organization. These are useful for reasoning about social context or retrieving network-based info (“who can introduce me to X?”).
-	•	hasProperty / propertyOf: A generic link to attribute nodes. For example, [Sky] -hasProperty-> [Blue] (where Blue is a Color attribute node). We might not need this if color is just a property on Sky, but if we want to reason “what else is blue?”, having Blue as a node with incoming hasProperty from various things can answer that.
-	•	relatedTo / associatedWith: A catch-all relation for when a connection is known but doesn’t fit a defined type. It’s okay to have a generic linkage for miscellaneous associations (the model or a human can later inspect and perhaps specialize it).
-	•	expressesEmotion / feels / evokesEmotion: Connect an entity or event to an emotion node. E.g., [BattleEvent] -evokesEmotion-> [Fear]. Or [John] -feels-> [Sadness] about some context (if John is an agent with emotional state recorded). We could also qualify it: [John] -feels-> [Sadness] could carry a property about: <EventX>, but it might be cleaner to use a reified node like Feeling that connects John, emotion, and cause. That might be overkill; for many applications, linking event to emotion and perhaps event to person and person to emotion is enough to derive “John felt Sadness at EventX”.
-	•	believes / supports / contradicts: These relations link agents to propositions or relate propositions to each other for argumentation. E.g., [Agent] -believes-> [Hypothesis], [FactNode] -supports-> [HypothesisNode], [FactNode] -contradicts-> [HypothesisNode]. This is useful for reasoning about truth – an AI can see that a hypothesis has many supports and no contradictions and elevate its confidence. If the generative model needs to maintain multiple belief sets (say its own beliefs vs someone else’s statements), these relations help separate those contexts.
-	•	derivedFrom / cites / source: Link a knowledge node to its source (as discussed, provenance). E.g., [Fact] -source-> [Document]. Or a literal URL or text snippet node. Even just storing the source name in an attribute could be enough, but a relation allows one source node to point to many facts and answer “where did this information come from?”.
+	•	knows / friendOf / memberOf: Relations capturing social and set membership. E.g., Person –knows– Person for social graph links. Person –memberOf– Organization. These are useful for reasoning about social context or retrieving network-based info ("who can introduce me to X?").
+	•	hasProperty / propertyOf: A generic link to attribute nodes. For example, [Sky] -hasProperty-> [Blue] (where Blue is a Color attribute node). We might not need this if color is just a property on Sky, but if we want to reason "what else is blue?" having Blue as a node with incoming hasProperty from various things can answer that.
+	•	relatedTo / associatedWith: A catch-all relation for when a connection is known but doesn't fit a defined type. It's okay to have a generic linkage for miscellaneous associations (the model or a human can later inspect and perhaps specialize it).
+	•	expressesEmotion / feels / evokesEmotion: Connect an entity or event to an emotion node. E.g., [BattleEvent] -evokesEmotion-> [Fear]. Or [John] -feels-> [Sadness] about some context (if John is an agent with emotional state recorded). We could also qualify it: [John] -feels-> [Sadness] could carry a property about: <EventX>, but it might be cleaner to use a reified node like Feeling that connects John, emotion, and cause. That might be overkill; for many applications, linking event to emotion and perhaps event to person and person to emotion is enough to derive "John felt Sadness at EventX".
+	•	believes / supports / contradicts: These relations link agents to propositions or relate propositions to each other for argumentation. E.g., [Agent] -believes-> [Hypothesis], [FactNode] -supports-> [HypothesisNode], [FactNode] -contradicts-> [HypothesisNode]. This is useful for reasoning about truth – an AI can see that a hypothesis has many supports and no contradictions and elevate its confidence. If the generative model needs to maintain multiple belief sets (say its own beliefs vs someone else's statements), these relations help separate those contexts.
+	•	derivedFrom / cites / source: Link a knowledge node to its source (as discussed, provenance). E.g., [Fact] -source-> [Document]. Or a literal URL or text snippet node. Even just storing the source name in an attribute could be enough, but a relation allows one source node to point to many facts and answer "where did this information come from?"
 
 Key Attributes: (to store on nodes/relationships)
-	•	name / label: human-readable name of the node (e.g., “Albert Einstein”). Often already inherent as Neo4j’s internal unique id or a ‘name’ property.
+	•	name / label: human-readable name of the node (e.g., "Albert Einstein"). Often already inherent as Neo4j's internal unique id or a 'name' property.
 	•	description: a longer text definition or note. The generative model can use this to get background in natural language if needed (like a mini-Wikipedia summary attached to the node).
 	•	timestamp (for events): date/time info (could be separate node or ISO date property).
 	•	geo-coordinates (for locations): latitude, longitude as properties on Location nodes, if spatial reasoning is needed. This enables queries like finding nearby events or distance calculations.
 	•	value (for measurable concepts): e.g., a node representing a quantity could have numeric value and unit. Or an attribute like population on a City node.
-	•	status (for propositions): e.g., values like “confirmed, hypothetical, refuted, normative (law),” etc. This helps the system decide how to treat a proposition. For instance, status: "law" means it should be assumed true in all relevant reasoning, whereas status: "hypothesis" means reason with it separately or look for proof.
+	•	status (for propositions): e.g., values like "confirmed, hypothetical, refuted, normative (law),", etc. This helps the system decide how to treat a proposition. For instance, status: "law" means it should be assumed true in all relevant reasoning, whereas status: "hypothesis" means reason with it separately or look for proof.
 	•	confidence or weight: a numerical score for how strongly the system believes a node or edge (useful for learned facts). Could be on Fact nodes or on the edges like supports/contradicts.
 	•	emotionIntensity: if an emotion is attached, a number from say 1-10 or -1 to +1 for how strong or positive/negative it is. This allows nuance (e.g., moderate happiness vs extreme joy).
-	•	sourceRef: a reference or citation string (could be URL, document ID, or just a note like “Smith et al. 2020 study”).
+	•	sourceRef: a reference or citation string (could be URL, document ID, or just a note like "Smith et al. 2020 study").
 
 In Neo4j, one would implement the above roughly as: create node labels for the major types (Entity, Event, Concept, Emotion, Proposition) and possibly sub-labels for common ones (Person, Location, etc. as needed). Use relationships for the ontology links (isA, subClassOf, etc.) and for factual links (predicate relationships like worksAt, locatedIn, etc.). Some prefer to not use reified nodes for propositions and simply attach properties on relationships for things like confidence or source – that is a design choice to weigh. For memory with emotional tagging, having a node for complex statements might be easier to attach multiple annotations (like multiple sources or multiple emotions from different people). For simpler factual triples, directly connecting nodes is more straightforward and efficient.
 
 Example Schema in Action:
-Imagine we want to store knowledge from a story: “Alice (a researcher) went to Paris in 2022 and felt happy. She discovered a new theory of physics. The theory is unproven but if true, it could revolutionize energy.” In our graph, we would:
+Imagine we want to store knowledge from a story: "Alice (a researcher) went to Paris in 2022 and felt happy. She discovered a new theory of physics. The theory is unproven but if true, it could revolutionize energy." In our graph, we would:
 	•	Create an Entity node for Alice (labels: Entity, Person) with attributes (occupation: researcher).
 	•	Create a Location node for Paris (labels: Entity, Location).
-	•	Create an Event node for Alice’s trip (labels: Event) with property year:2022, and relate Alice to it with hasParticipant, and Paris with hasLocation. Also relate the event to an Emotion node Joy with evokesEmotion. Possibly attach feltBy -> Alice to indicate Alice experienced that joy.
-	•	Create a Concept node for “New Physics Theory” (or perhaps it’s an Entity of type Concept/Idea). Actually, since it’s said “discovered a new theory”, that theory could be an Entity node of type Proposition (since a theory can be seen as a proposition or a collection of propositions). We mark it as Hypothesis (status).
-	•	Link Alice’s event to discovering the theory: hasOutcome -> [TheoryNode]. On the Theory node, set status = “hypothesis”. Perhaps link Theory node field -> Physics (Concept).
-	•	Add a Proposition/Fact node for “If [Theory] is true, then [Energy Revolution will happen]” – this could be a rule or implication. But we might just note it as a comment or separate node like [EnergyRevolution] concept and relate Theory potentialImpact -> EnergyRevolution.
-	•	Now queries like “What did Alice do in 2022?” could traverse from Alice to events in 2022. “How did Alice feel during the Paris trip?” follows event->emotion. “What did she discover?” goes event->outcome->theory. “What is the status of that theory?” checks theory.status = hypothesis, maybe also finds if any evidence nodes support it (none yet).
-	•	Later if an evidence paper appears confirming the theory, we add a Fact node “EvidencePaper supports Theory” and set Theory status to maybe “theory” or increase confidence.
+	•	Create an Event node for Alice's trip (labels: Event) with property year:2022, and relate Alice to it with hasParticipant, and Paris with hasLocation. Also relate the event to an Emotion node Joy with evokesEmotion. Possibly attach feltBy -> Alice to indicate Alice experienced that joy.
+	•	Create a Concept node for "New Physics Theory" (or perhaps it's an Entity of type Concept/Idea). Actually, since it's said "discovered a new theory", that theory could be an Entity node of type Proposition (since a theory can be seen as a proposition or a collection of propositions). We mark it as Hypothesis (status).
+	•	Link Alice's event to discovering the theory: hasOutcome -> [TheoryNode]. On the Theory node, set status = "hypothesis". Perhaps link Theory node field -> Physics (Concept).
+	•	Add a Proposition/Fact node for "If [Theory] is true, then [Energy Revolution will happen]" – this could be a rule or implication. But we might just note it as a comment or separate node like [EnergyRevolution] concept and relate Theory potentialImpact -> EnergyRevolution.
+	•	Now queries like "What did Alice do in 2022?" could traverse from Alice to events in 2022. "How did Alice feel during the Paris trip?" follows event->emotion. "What did she discover?" goes event->outcome->theory. "What is the status of that theory?" checks theory.status = hypothesis, maybe also finds if any evidence nodes support it (none yet).
+	•	Later if an evidence paper appears confirming the theory, we add a Fact node "EvidencePaper supports Theory" and set Theory status to maybe "theory" or increase confidence.
 
 This example shows the interplay of entities, events, and propositions with emotional context.

@@ -7,7 +7,8 @@ import {
   searchNodes as searchNodesImpl,
   createThought as createThoughtImpl,
   createReasoningChain as createReasoningChainImpl,
-  createReasoningStep as createReasoningStepImpl
+  createReasoningStep as createReasoningStepImpl,
+  createLocation as createLocationImpl
 } from './methods.js';
 
 /**
@@ -138,5 +139,32 @@ export class Neo4jCreator implements CustomKnowledgeGraphMemory {
     previousSteps?: string[];
   }): Promise<Entity> {
     return createReasoningStepImpl(this.neo4jDriver, stepData);
+  }
+
+  /**
+   * Create a location node in the Neo4j database
+   * @param location - Location data
+   * @param location.name - Name of the location
+   * @param location.locationType - Type of location (City, Country, Region, Building, Virtual, etc.)
+   * @param location.coordinates - Geographical coordinates {latitude, longitude}
+   * @param location.description - Textual description of the location
+   * @param location.locationSignificance - Historical, cultural, or personal importance
+   * @param location.containedWithin - Creates a CONTAINED_IN relationship to another Location
+   * @param location.eventsOccurred - Creates OCCURRED_AT relationships from Events to this Location
+   * @returns Promise resolving to the created entity
+   */
+  async createLocation(location: {
+    name: string;
+    locationType?: string;
+    coordinates?: {
+      latitude: number;
+      longitude: number;
+    };
+    description?: string;
+    containedWithin?: string;
+    locationSignificance?: string;
+    eventsOccurred?: string[];
+  }): Promise<Entity> {
+    return createLocationImpl(this.neo4jDriver, location);
   }
 } 

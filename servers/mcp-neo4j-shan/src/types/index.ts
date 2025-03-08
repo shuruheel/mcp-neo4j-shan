@@ -32,6 +32,74 @@ export interface EnhancedEntity extends BaseNode {
   emotionalArousal?: number;  // 0.0-3.0 scale of emotional intensity
   // Optional entity subtype
   subType?: string; // "Person", "Organization", "Location", "Artifact", "Animal", "Concept"
+  // Person details - either stored as a full Person object or as serialized JSON
+  personDetails?: Person | string; // Detailed person information if this entity is a person
+}
+
+// Person (expanded schema from the Person node type)
+export interface Person {
+  // Basic Attributes
+  name: string;
+  aliases?: string[];  // Alternative names or nicknames
+  biography?: string;  // Brief biographical summary
+
+  // Psychological Profile
+  personalityTraits?: {
+    trait: string;  // e.g., "Analytical", "Pragmatic", "Authoritarian"
+    evidence: string[];  // Textual evidence supporting this trait
+    confidence: number;  // 0.0-1.0 - Model's confidence in this attribution
+  }[];
+  cognitiveStyle?: {
+    decisionMaking?: string;  // How the person makes decisions (e.g., "Methodical", "Intuitive")
+    problemSolving?: string;  // Approach to problem-solving
+    worldview?: string;  // Person's fundamental perspective
+    biases?: string[];  // Observed cognitive biases in their thinking
+  };
+
+  // Emotional Profile
+  emotionalDisposition?: string;  // Overall emotional tendency (e.g., "Reserved", "Volatile")
+  emotionalTriggers?: {
+    trigger: string;  // Events/situations causing strong emotional responses
+    reaction: string;  // Typical emotional response
+    evidence: string[];  // Textual evidence
+  }[];
+
+  // Relational Dynamics
+  interpersonalStyle?: string;  // How they typically interact with others
+  powerDynamics?: {
+    authorityResponse?: string;  // How they respond to authority
+    subordinateManagement?: string;  // How they manage subordinates
+    negotiationTactics?: string[];  // Observed negotiation approaches
+  };
+  loyalties?: {
+    target: string;  // Person, institution, or concept
+    strength: number;  // 0.0-1.0 - Intensity of loyalty
+    evidence: string[];  // Supporting textual evidence
+  }[];
+
+  // Value System
+  coreValues?: {
+    value: string;  // e.g., "National security", "Global stability"
+    importance: number;  // 0.0-1.0 - Relative importance
+    consistency: number;  // 0.0-1.0 - How consistently upheld
+  }[];
+  ethicalFramework?: string;  // Ethical approach (e.g., "Realist", "Utilitarian")
+
+  // Temporal Attributes
+  psychologicalDevelopment?: {
+    period: string;  // Time period
+    changes: string;  // Notable psychological shifts
+    catalysts: string[];  // Events triggering changes
+  }[];
+
+  // Meta Attributes
+  narrativeTreatment?: {
+    authorBias: number;  // -1.0 to 1.0 - Detected authorial bias
+    portrayalConsistency: number;  // 0.0-1.0 - Consistency across sources
+    controversialAspects: string[];  // Disputed psychological features
+  };
+  modelConfidence?: number;  // 0.0-1.0 - Overall confidence in profile
+  evidenceStrength?: number;  // 0.0-1.0 - Strength of supporting evidence
 }
 
 // Event (corresponds to Event in the recommended schema)
@@ -178,6 +246,18 @@ export interface Law extends BaseNode {
   formalRepresentation?: string;  // Mathematical or logical formulation when applicable
 }
 
+// Location (new in the recommended schema)
+export interface Location extends BaseNode {
+  nodeType: 'Location';
+  locationType?: string;  // "City", "Country", "Region", "Building", "Virtual", etc.
+  coordinates?: {
+    latitude: number;
+    longitude: number;
+  };
+  description?: string;  // Textual description of the location
+  locationSignificance?: string;  // Historical, cultural, or personal importance
+}
+
 // ReasoningChain (retained and integrated with Proposition)
 export interface ReasoningChain extends BaseNode {
   nodeType: 'ReasoningChain';
@@ -211,7 +291,7 @@ export interface ReasoningStep extends BaseNode {
   propositions?: string[]; // Propositions used in this reasoning step
 }
 
-export type KnowledgeNode = EnhancedEntity | Event | Concept | Attribute | Proposition | Emotion | Agent | ScientificInsight | Law | Thought | ReasoningChain | ReasoningStep;
+export type KnowledgeNode = EnhancedEntity | Event | Concept | Attribute | Proposition | Emotion | Agent | ScientificInsight | Law | Location | Thought | ReasoningChain | ReasoningStep;
 
 export type EntityNode = Node<Integer, KnowledgeNode>
 
@@ -246,6 +326,9 @@ export enum RelationshipType {
   // Spatial relationships
   LOCATED_IN = 'locatedIn',
   HAS_LOCATION = 'hasLocation',
+  CONTAINED_IN = 'containedIn',
+  CONTAINS = 'contains',
+  OCCURRED_AT = 'occurredAt',
   
   // Temporal relationships
   HAS_TIME = 'hasTime',
@@ -298,7 +381,26 @@ export enum RelationshipType {
   // Source relationships
   DERIVED_FROM = 'derivedFrom',
   CITES = 'cites',
-  SOURCE = 'source'
+  SOURCE = 'source',
+
+  // Person-specific relationships
+  MENTORS = 'mentors',
+  MENTORED_BY = 'mentoredBy',
+  ADMIRES = 'admires',
+  ADMIRED_BY = 'admiredBy',
+  OPPOSES = 'opposes',
+  OPPOSED_BY = 'opposedBy',
+  EXHIBITS_TRAIT = 'exhibitsTrait',
+  HAS_PERSONALITY = 'hasPersonality',
+  VALUES = 'values',
+  ADHERES_TO = 'adheresTo',
+  REJECTS = 'rejects',
+  SHAPED_BY = 'shapedBy',
+  TRANSFORMED = 'transformed',
+  STRUGGLES_WITH = 'strugglesWith',
+  LOYAL_TO = 'loyalTo',
+  HAS_COGNITIVE_STYLE = 'hasCognitiveStyle',
+  HAS_ETHICAL_FRAMEWORK = 'hasEthicalFramework'
 }
 
 export type EntityRelationship = Relationship<Integer, BaseRelation>
@@ -326,6 +428,55 @@ export interface Entity extends BaseEntity {
   source?: string;
   confidence?: number;
   subType?: string;
+  
+  // Person specific fields (from expanded Person schema)
+  aliases?: string[];
+  personalityTraits?: {
+    trait: string;
+    evidence: string[];
+    confidence: number;
+  }[];
+  cognitiveStyle?: {
+    decisionMaking?: string;
+    problemSolving?: string;
+    worldview?: string;
+    biases?: string[];
+  };
+  emotionalDisposition?: string;
+  emotionalTriggers?: {
+    trigger: string;
+    reaction: string;
+    evidence: string[];
+  }[];
+  interpersonalStyle?: string;
+  powerDynamics?: {
+    authorityResponse?: string;
+    subordinateManagement?: string;
+    negotiationTactics?: string[];
+  };
+  loyalties?: {
+    target: string;
+    strength: number;
+    evidence: string[];
+  }[];
+  coreValues?: {
+    value: string;
+    importance: number;
+    consistency: number;
+  }[];
+  ethicalFramework?: string;
+  psychologicalDevelopment?: {
+    period: string;
+    changes: string;
+    catalysts: string[];
+  }[];
+  narrativeTreatment?: {
+    authorBias: number;
+    portrayalConsistency: number;
+    controversialAspects: string[];
+  };
+  modelConfidence?: number;
+  personEvidenceStrength?: number; // Renamed to avoid conflict with proposition's evidenceStrength
   
   // Additional properties from Event
   startDate?: string;
@@ -408,6 +559,18 @@ export interface Entity extends BaseEntity {
   counterexamples?: string[];
   formalRepresentation?: string;
   
+  // Additional properties from Location
+  locationType?: string;
+  coordinates?: {
+    latitude: number;
+    longitude: number;
+  };
+  locationSignificance?: string;
+  /** @deprecated Use CONTAINED_IN relationship instead. Only used for relationship creation. */
+  containedWithin?: string;
+  /** @deprecated Use OCCURRED_AT relationship instead. Only used for relationship creation. */
+  eventsOccurred?: string[];
+  
   // Additional properties from ReasoningChain
   conclusion?: string;
   confidenceScore?: number;
@@ -426,6 +589,8 @@ export interface Entity extends BaseEntity {
   assumptions?: string[];
   formalNotation?: string;
   propositions?: string[];
+  chainName?: string;  // Reference to the reasoning chain this step belongs to
+  stepNumber?: number; // Order/position of this step within the chain
 }
 
 export interface Relation extends BaseRelation {
@@ -434,6 +599,8 @@ export interface Relation extends BaseRelation {
   weight?: number;
   sources?: string[];
   relationshipType?: RelationshipType;
+  contextStrength?: number;
+  memoryAids?: string[];
 }
 
 export interface CustomKnowledgeGraphMemory {

@@ -298,6 +298,69 @@ function processExplorationResults(records: any[]): KnowledgeGraph {
         (entity as any).description = node.properties.description;
         (entity as any).biography = node.properties.biography;
         (entity as any).keyContributions = node.properties.keyContributions;
+        (entity as any).subType = node.properties.subType;
+        
+        // Handle Person-specific details if subType is 'Person'
+        if (node.properties.subType === 'Person' && node.properties.personDetails) {
+          try {
+            // Parse the personDetails JSON if it exists
+            let personDetails;
+            if (typeof node.properties.personDetails === 'string') {
+              try {
+                personDetails = JSON.parse(node.properties.personDetails);
+              } catch (parseError) {
+                console.error(`Error parsing personDetails JSON for ${node.properties.name}:`, parseError);
+                personDetails = null;
+              }
+            } else {
+              personDetails = node.properties.personDetails;
+            }
+            
+            // Add all person details properties to the entity only if personDetails is valid
+            if (personDetails && typeof personDetails === 'object') {
+              // Safely add properties with validation
+              const safeArrayAssign = (target: any, prop: string, value: any) => {
+                if (Array.isArray(value)) {
+                  target[prop] = value;
+                } else if (value === null || value === undefined) {
+                  target[prop] = [];
+                } else {
+                  console.warn(`Expected array for ${prop} but got ${typeof value} for entity ${node.properties.name}`);
+                  target[prop] = [];
+                }
+              };
+              
+              const safeObjectAssign = (target: any, prop: string, value: any) => {
+                if (value && typeof value === 'object' && !Array.isArray(value)) {
+                  target[prop] = value;
+                } else if (value === null || value === undefined) {
+                  target[prop] = {};
+                } else {
+                  console.warn(`Expected object for ${prop} but got ${typeof value} for entity ${node.properties.name}`);
+                  target[prop] = {};
+                }
+              };
+              
+              // Assign with validation
+              (entity as any).aliases = personDetails.aliases || [];
+              safeArrayAssign(entity as any, 'personalityTraits', personDetails.personalityTraits);
+              safeObjectAssign(entity as any, 'cognitiveStyle', personDetails.cognitiveStyle);
+              (entity as any).emotionalDisposition = personDetails.emotionalDisposition || null;
+              safeArrayAssign(entity as any, 'emotionalTriggers', personDetails.emotionalTriggers);
+              (entity as any).interpersonalStyle = personDetails.interpersonalStyle || null;
+              safeObjectAssign(entity as any, 'powerDynamics', personDetails.powerDynamics);
+              safeArrayAssign(entity as any, 'loyalties', personDetails.loyalties);
+              safeArrayAssign(entity as any, 'coreValues', personDetails.coreValues);
+              (entity as any).ethicalFramework = personDetails.ethicalFramework || null;
+              safeArrayAssign(entity as any, 'psychologicalDevelopment', personDetails.psychologicalDevelopment);
+              safeObjectAssign(entity as any, 'narrativeTreatment', personDetails.narrativeTreatment);
+              (entity as any).modelConfidence = personDetails.modelConfidence || null;
+              (entity as any).personEvidenceStrength = personDetails.evidenceStrength || null;
+            }
+          } catch (e) {
+            console.error(`Error processing personDetails for ${node.properties.name}:`, e);
+          }
+        }
       } 
       else if (node.properties.nodeType === 'Event') {
         (entity as any).startDate = node.properties.startDate;
