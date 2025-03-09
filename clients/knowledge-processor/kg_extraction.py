@@ -1310,14 +1310,14 @@ async def extract_knowledge(text_chunk):
     # Update the prompt to include guidance on relationship formatting
     relationship_guidance = """
     For relationships, please format them following Neo4j best practices:
-    - SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {property1: value1, property2: value2}
+    - SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {{property1: value1, property2: value2}}
     
     Use specific, descriptive relationship types (verbs in UPPERCASE_WITH_UNDERSCORES).
     Choose relationship direction based on the most natural query direction.
     Examples:
-    - John Smith(Person) -> [WORKS_FOR] Acme Inc(Organization) {since: "2020", position: "Senior Developer"}
-    - Climate Change(Concept) -> [IMPACTS] Polar Ice Caps(Location) {severity: "high", timeframe: "ongoing"}
-    - Einstein(Person) -> [DEVELOPED] Theory of Relativity(Concept) {year: "1915"}
+    - John Smith(Person) -> [WORKS_FOR] Acme Inc(Organization) {{since: "2020", position: "Senior Developer"}}
+    - Climate Change(Concept) -> [IMPACTS] Polar Ice Caps(Location) {{severity: "high", timeframe: "ongoing"}}
+    - Einstein(Person) -> [DEVELOPED] Theory of Relativity(Concept) {{year: "1915"}}
     """
     
     # Add guidance for structured person details
@@ -1328,23 +1328,23 @@ async def extract_knowledge(text_chunk):
     For Person Details, be sure to include:
     1. All sections: Personality Traits, Cognitive Style, Emotional Profile, Relational Dynamics, 
        Value System, Psychological Development, and Meta Attributes.
-    2. Format arrays as valid JSON arrays with objects: [{"key": "value"}, {"key": "value"}]
-    3. Format objects as valid JSON objects: {"key1": "value1", "key2": {"nestedKey": "nestedValue"}}
+    2. Format arrays as valid JSON arrays with objects: [{{"key": "value"}}, {{"key": "value"}}]
+    3. Format objects as valid JSON objects: {{"key1": "value1", "key2": {{"nestedKey": "nestedValue"}}}}
     4. Ensure all strings are properly quoted and all objects/arrays properly closed.
     
     Example of well-structured Person Details format:
     Person Details for John Doe:
     - Biography: Accomplished scientist and philanthropist.
     - Personality Traits: [
-        {"trait": "Analytical", "evidence": ["decision-making pattern", "problem-solving approach"], "confidence": 0.9},
-        {"trait": "Compassionate", "evidence": ["philanthropic activities"], "confidence": 0.8}
+        {{"trait": "Analytical", "evidence": ["decision-making pattern", "problem-solving approach"], "confidence": 0.9}},
+        {{"trait": "Compassionate", "evidence": ["philanthropic activities"], "confidence": 0.8}}
       ]
-    - Cognitive Style: {
+    - Cognitive Style: {{
         "decisionMaking": "Data-driven", 
         "problemSolving": "Systematic",
         "worldview": "Scientific realism",
         "biases": ["confirmation bias"]
-      }
+      }}
     """
     
     # Append both guidance sections to the extraction prompt

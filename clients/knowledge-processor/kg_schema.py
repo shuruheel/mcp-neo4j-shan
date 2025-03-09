@@ -184,7 +184,7 @@ EXTRACTION GUIDELINES:
    - Format as detailed in the Person Schema guidelines
 
 15. RELATIONSHIPS: Extract relationships between entities
-   - Format as: SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {property1: value1, property2: value2}
+   - Format as: SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {{property1: value1, property2: value2}}
    - Include required relationship properties: context, confidenceScore
    - Optional properties: sources, weight, relationshipCategory, contextType, contextStrength
 
