@@ -106,8 +106,26 @@ async def main():
         # After aggregating data
         entity_count = len(aggregator.entities)
         person_count = len(aggregator.persons)
+        location_count = len(aggregator.locations)
+        concept_count = len(aggregator.concepts)
+        event_count = len(aggregator.events)
+        attribute_count = len(aggregator.attributes)
+        proposition_count = len(aggregator.propositions)
+        emotion_count = len(aggregator.emotions)
+        agent_count = len(aggregator.agents)
+        thought_count = len(aggregator.thoughts)
+        scientific_insight_count = len(aggregator.scientific_insights)
+        law_count = len(aggregator.laws)
+        reasoning_chain_count = len(aggregator.reasoning_chains)
+        reasoning_step_count = len(aggregator.reasoning_steps)
         relationship_count = len(aggregator.relationships)
-        logging.info(f"Found {entity_count} entities, {person_count} persons, and {relationship_count} relationships to store")
+        
+        logging.info(f"Found {entity_count} entities, {person_count} persons, and {location_count} locations")
+        logging.info(f"Found {concept_count} concepts, {event_count} events, and {attribute_count} attributes")
+        logging.info(f"Found {proposition_count} propositions, {emotion_count} emotions, and {agent_count} agents")
+        logging.info(f"Found {thought_count} thoughts, {scientific_insight_count} scientific insights, and {law_count} laws")
+        logging.info(f"Found {reasoning_chain_count} reasoning chains and {reasoning_step_count} reasoning steps")
+        logging.info(f"Found {relationship_count} relationships to store")
         
         # Before starting Stage 3
         if entity_count == 0 and person_count == 0:
