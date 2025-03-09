@@ -33,16 +33,28 @@ class EntityAggregator:
             
         # Process entities
         for entity in data.get('entities', []):
-            entity_parts = entity.split('[Type:', 1)
-            if len(entity_parts) == 2:
-                entity_name = standardize_entity(entity_parts[0].strip())
-                entity_type = entity_parts[1].strip().rstrip(']')
-                
-                # Store entity information
-                if entity_name not in self.entities:
-                    self.entities[entity_name] = {'type': entity_type, 'mentions': 1}
+            if isinstance(entity, str):
+                # Handle string format
+                entity_parts = entity.split('[Type:', 1)
+                if len(entity_parts) == 2:
+                    entity_name = standardize_entity(entity_parts[0].strip())
+                    entity_type = entity_parts[1].strip().rstrip(']')
+                    
+                    # Store entity information
+                    if entity_name not in self.entities:
+                        self.entities[entity_name] = {'type': entity_type, 'mentions': 1}
+                    else:
+                        self.entities[entity_name]['mentions'] = self.entities[entity_name].get('mentions', 0) + 1
+            elif isinstance(entity, dict) and 'name' in entity:
+                # Handle dictionary format
+                entity_name = standardize_entity(entity['name'])
+                for key, value in entity.items():
+                    if key != 'name':
+                        self.entities[entity_name][key] = value
+                if 'mentions' not in self.entities[entity_name]:
+                    self.entities[entity_name]['mentions'] = 1
                 else:
-                    self.entities[entity_name]['mentions'] = self.entities[entity_name].get('mentions', 0) + 1
+                    self.entities[entity_name]['mentions'] += 1
         
         # Process events
         for event in data.get('events', []):
@@ -62,13 +74,22 @@ class EntityAggregator:
                 
         # Process concepts
         for concept in data.get('concepts', []):
-            concept_parts = concept.split(':', 1)
-            if len(concept_parts) == 2:
-                concept_name = standardize_entity(concept_parts[1].strip())
-                if concept_name not in self.concepts:
-                    self.concepts[concept_name] = {'mentions': 1}
-                else:
-                    self.concepts[concept_name]['mentions'] = self.concepts[concept_name].get('mentions', 0) + 1
+            if isinstance(concept, str):
+                # Handle string format
+                concept_parts = concept.split(':', 1)
+                if len(concept_parts) == 2:
+                    concept_name = standardize_entity(concept_parts[1].strip())
+                    if concept_name not in self.concepts:
+                        self.concepts[concept_name] = {'mentions': 1}
+                    else:
+                        self.concepts[concept_name]['mentions'] = self.concepts[concept_name].get('mentions', 0) + 1
+            elif isinstance(concept, dict) and 'name' in concept:
+                # Handle dictionary format
+                concept_name = standardize_entity(concept['name'])
+                for key, value in concept.items():
+                    if key != 'name':
+                        self.concepts[concept_name][key] = value
+                self.concepts[concept_name]['mentions'] = self.concepts[concept_name].get('mentions', 0) + 1
         
         # Process propositions
         for proposition in data.get('propositions', []):
