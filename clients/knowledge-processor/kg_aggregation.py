@@ -218,9 +218,78 @@ class EntityAggregator:
             # Increment mentions counter
             self.locations[loc_std]['mentions'] = self.locations[loc_std].get('mentions', 0) + 1
         
-        # Track relationships
+        # Process relationships with improved structure
         for rel in data.get('relationships', []):
-            self.relationships.append(rel)
+            if isinstance(rel, dict):
+                # For structured relationships from the new format
+                self.relationships.append(rel)
+            elif isinstance(rel, str):
+                # Try to parse unstructured relationship strings
+                try:
+                    # Look for patterns like "Entity1 -> [RELATIONSHIP] Entity2"
+                    if " -> " in rel and "[" in rel and "]" in rel:
+                        parts = rel.split(" -> ", 1)
+                        source = parts[0].strip()
+                        target_parts = parts[1].split("]", 1)
+                        
+                        if len(target_parts) > 1:
+                            rel_type = target_parts[0].split("[", 1)[1].strip()
+                            target = target_parts[1].strip()
+                            
+                            # Extract source type if available
+                            source_name = source
+                            source_type = "Entity"
+                            if "(" in source and ")" in source:
+                                source_name = source.split("(", 1)[0].strip()
+                                source_type = source.split("(", 1)[1].rstrip(")").strip()
+                            
+                            # Extract target type if available
+                            target_name = target
+                            target_type = "Entity"
+                            if "(" in target and ")" in target:
+                                target_name = target.split("(", 1)[0].strip()
+                                target_type = target.split("(", 1)[1].rstrip(")").strip()
+                            
+                            # Extract properties if available
+                            properties = {}
+                            if "{" in rel and "}" in rel:
+                                props_str = rel.split("{", 1)[1].split("}", 1)[0]
+                                for prop in props_str.split(","):
+                                    if ":" in prop:
+                                        key, value = prop.split(":", 1)
+                                        properties[key.strip()] = value.strip()
+                            
+                            # Create structured relationship
+                            structured_rel = {
+                                "source": {"name": standardize_entity(source_name), "type": source_type},
+                                "target": {"name": standardize_entity(target_name), "type": target_type},
+                                "type": rel_type,
+                                "description": rel
+                            }
+                            
+                            if properties:
+                                structured_rel["properties"] = properties
+                            
+                            self.relationships.append(structured_rel)
+                        else:
+                            # Couldn't parse properly, store as needing processing
+                            self.relationships.append({
+                                "description": rel,
+                                "needsProcessing": True
+                            })
+                    else:
+                        # Couldn't parse properly, store as needing processing
+                        self.relationships.append({
+                            "description": rel,
+                            "needsProcessing": True
+                        })
+                except Exception as e:
+                    logging.warning(f"Error parsing relationship string: {str(e)}")
+                    # Store as needing processing
+                    self.relationships.append({
+                        "description": rel,
+                        "needsProcessing": True
+                    })
     
     async def generate_comprehensive_profiles(self, model):
         """Generate comprehensive profiles for entities with sufficient data"""
@@ -238,7 +307,8 @@ class EntityAggregator:
             'scientificInsights': [],
             'laws': [],
             'reasoningChains': [],
-            'reasoningSteps': []
+            'reasoningSteps': [],
+            'relationships': self.relationships  # Add relationships to profiles
         }
         
         # Process persons with multiple mentions

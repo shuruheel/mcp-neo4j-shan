@@ -661,54 +661,126 @@ def add_reasoning_step_to_neo4j(tx, step_data):
     summary = result.consume()
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
 
-def add_relationship_to_neo4j(tx, subject, predicate, object_, props=None):
-    """Add relationship with properties from schema"""
-    props = props or {}
+def add_relationship_to_neo4j(tx, relationship_data):
+    """Add a structured relationship to Neo4j following best practices"""
+    # Skip if relationship data is incomplete
+    if not isinstance(relationship_data, dict) or 'needsProcessing' in relationship_data:
+        logging.warning("Skipping relationship that needs processing")
+        return False
     
-    # Validate predicate against RELATIONSHIP_TYPES
-    if predicate not in RELATIONSHIP_TYPES:
-        logging.warning(f"Unknown relationship type: {predicate}")
-        predicate = "RELATED_TO"  # Default fallback
+    # Extract source, target, and relationship type
+    source_data = relationship_data.get('source', {})
+    target_data = relationship_data.get('target', {})
+    rel_type = relationship_data.get('type', 'RELATED_TO')
     
-    # Define default properties if not provided
-    if "confidenceScore" not in props:
-        props["confidenceScore"] = 0.7
+    # Skip if missing critical data
+    if not source_data or not target_data:
+        logging.warning(f"Incomplete relationship data: {relationship_data}")
+        return False
+    
+    source_name = source_data.get('name', '')
+    source_type = source_data.get('type', 'Entity')
+    target_name = target_data.get('name', '')
+    target_type = target_data.get('type', 'Entity')
+    
+    # Skip if missing names
+    if not source_name or not target_name:
+        logging.warning(f"Missing source or target name in relationship: {relationship_data}")
+        return False
+    
+    # Validate relationship type against schema
+    if rel_type not in RELATIONSHIP_TYPES:
+        logging.warning(f"Unknown relationship type: {rel_type}, defaulting to RELATED_TO")
+        rel_type = "RELATED_TO"
+    
+    # Extract properties
+    properties = relationship_data.get('properties', {})
+    
+    # Add default confidence if not present
+    if 'confidenceScore' not in properties:
+        properties['confidenceScore'] = 0.7
     
     # Determine relationship category
-    if predicate in ["IS_A", "INSTANCE_OF", "SUB_CLASS_OF", "SUPER_CLASS_OF"]:
+    if rel_type in ["IS_A", "INSTANCE_OF", "SUB_CLASS_OF", "SUPER_CLASS_OF"]:
         rel_category = "hierarchical"
-    elif predicate in ["BEFORE", "AFTER", "DURING"]:
+    elif rel_type in ["BEFORE", "AFTER", "DURING"]:
         rel_category = "temporal"
-    elif predicate in ["HAS_PART", "PART_OF"]:
+    elif rel_type in ["HAS_PART", "PART_OF"]:
         rel_category = "compositional"
-    elif predicate in ["CAUSES", "CAUSED_BY", "INFLUENCES", "INFLUENCED_BY"]:
+    elif rel_type in ["CAUSES", "CAUSED_BY", "INFLUENCES", "INFLUENCED_BY"]:
         rel_category = "causal"
-    elif predicate in ["HAS_PROPERTY", "PROPERTY_OF"]:
+    elif rel_type in ["HAS_PROPERTY", "PROPERTY_OF"]:
         rel_category = "attributive"
     else:
         rel_category = "lateral"
     
-    props["relationshipCategory"] = rel_category
+    properties['relationshipCategory'] = rel_category
     
-    # Base query with dynamic property setting
+    # Create source and target nodes if they don't exist
+    create_source_query = f"""
+    MERGE (s:{source_type} {{name: $source_name}})
+    """
+    
+    create_target_query = f"""
+    MERGE (t:{target_type} {{name: $target_name}})
+    """
+    
+    tx.run(create_source_query, source_name=source_name)
+    tx.run(create_target_query, target_name=target_name)
+    
+    # Build property string for relationship
     property_clauses = []
-    for key, value in props.items():
+    for key, value in properties.items():
         property_clauses.append(f"r.{key} = ${key}")
     
-    property_string = ", ".join(property_clauses)
+    property_string = ", ".join(property_clauses) if property_clauses else "r.created = timestamp()"
     
-    query = f"""
-    MATCH (s {{name: $subject}})
-    MATCH (o {{name: $object}})
-    MERGE (s)-[r:{predicate}]->(o)
+    # Create relationship with properties
+    relationship_query = f"""
+    MATCH (s:{source_type} {{name: $source_name}})
+    MATCH (t:{target_type} {{name: $target_name}})
+    MERGE (s)-[r:{rel_type}]->(t)
     SET {property_string}
     RETURN r
     """
     
-    # Convert property dict keys to parameters
-    params = props.copy()
-    params["subject"] = subject
-    params["object"] = object_
+    # Add source and target to properties for query
+    params = properties.copy()
+    params['source_name'] = source_name
+    params['target_name'] = target_name
     
-    # Execute with properties
-    tx.run(query, **params) 
+    # Execute query
+    result = tx.run(relationship_query, **params)
+    summary = result.consume()
+    
+    return summary.counters.relationships_created > 0 or summary.counters.properties_set > 0
+
+def process_relationships(session, relationships):
+    """Process a list of relationships and add them to Neo4j"""
+    success_count = 0
+    
+    for relationship in relationships:
+        try:
+            with session.begin_transaction() as tx:
+                if add_relationship_to_neo4j(tx, relationship):
+                    success_count += 1
+        except Exception as e:
+            logging.error(f"Error adding relationship to Neo4j: {str(e)}")
+    
+    logging.info(f"Added {success_count} relationships to Neo4j")
+    return success_count
+
+# Update the existing add_relationship_to_neo4j function to use the new one
+def add_relationship_to_neo4j_legacy(tx, subject, predicate, object_, props=None):
+    """Legacy function for backward compatibility"""
+    props = props or {}
+    
+    # Convert to new format
+    relationship_data = {
+        'source': {'name': subject, 'type': 'Entity'},
+        'target': {'name': object_, 'type': 'Entity'},
+        'type': predicate,
+        'properties': props
+    }
+    
+    return add_relationship_to_neo4j(tx, relationship_data) 

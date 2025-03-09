@@ -382,7 +382,61 @@ def parse_gpt4_response(response):
                 
                 result["reasoningChains"].append(chain_data)
             elif current_section == "relationships":
-                result["relationships"].append(content)
+                # Parse relationship data with proper structure for Neo4j
+                relationship_data = {"description": content}
+                
+                # Extract source, target, and relationship type
+                if " -> " in content:
+                    source_part, target_part = content.split(" -> ", 1)
+                    
+                    # Extract source entity
+                    source_entity = source_part.strip()
+                    if "(" in source_entity and ")" in source_entity:
+                        source_name = source_entity.split("(", 1)[0].strip()
+                        source_type = source_entity.split("(", 1)[1].rstrip(")").strip()
+                        relationship_data["source"] = {"name": source_name, "type": source_type}
+                    else:
+                        relationship_data["source"] = {"name": source_entity, "type": "Entity"}
+                    
+                    # Extract target and relationship type
+                    if " [" in target_part and "]" in target_part:
+                        rel_parts = target_part.split(" [", 1)
+                        rel_type = rel_parts[1].split("]", 1)[0].strip()
+                        target_entity = rel_parts[1].split("]", 1)[1].strip()
+                        
+                        relationship_data["type"] = rel_type
+                        
+                        # Extract target entity details
+                        if "(" in target_entity and ")" in target_entity:
+                            target_name = target_entity.split("(", 1)[0].strip()
+                            target_type = target_entity.split("(", 1)[1].rstrip(")").strip()
+                            relationship_data["target"] = {"name": target_name, "type": target_type}
+                        else:
+                            relationship_data["target"] = {"name": target_entity, "type": "Entity"}
+                    else:
+                        # Handle case where relationship type isn't explicitly marked
+                        relationship_data["target"] = {"name": target_part.strip(), "type": "Entity"}
+                        relationship_data["type"] = "RELATED_TO"  # Default relationship type
+                    
+                    # Add properties if they exist
+                    if "{" in content and "}" in content:
+                        props_str = content.split("{", 1)[1].split("}", 1)[0]
+                        props = {}
+                        for prop in props_str.split(","):
+                            if ":" in prop:
+                                key, value = prop.split(":", 1)
+                                props[key.strip()] = value.strip()
+                        relationship_data["properties"] = props
+                    
+                    result["relationships"].append(relationship_data)
+                else:
+                    # Handle unstructured relationship descriptions
+                    logging.warning(f"Relationship not in expected format: {content}")
+                    # Still store it but mark it as needing processing
+                    result["relationships"].append({
+                        "description": content,
+                        "needsProcessing": True
+                    })
         
         # Process person and location details
         elif current_section == "person_details" and current_person:
@@ -409,10 +463,25 @@ def parse_gpt4_response(response):
 
 async def extract_knowledge(text_chunk):
     """Extract knowledge entities from text using GPT-4 with retries"""
-    prompt = ChatPromptTemplate.from_template(EXTRACTION_PROMPT_TEMPLATE)
+    # Update the prompt to include guidance on relationship formatting
+    relationship_guidance = """
+    For relationships, please format them following Neo4j best practices:
+    - SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {{property1: value1, property2: value2}}
+    
+    Use specific, descriptive relationship types (verbs in UPPERCASE_WITH_UNDERSCORES).
+    Choose relationship direction based on the most natural query direction.
+    Examples:
+    - John Smith(Person) -> [WORKS_FOR] Acme Inc(Organization) {{since: "2020", position: "Senior Developer"}}
+    - Climate Change(Concept) -> [IMPACTS] Polar Ice Caps(Location) {{severity: "high", timeframe: "ongoing"}}
+    - Einstein(Person) -> [DEVELOPED] Theory of Relativity(Concept) {{year: "1915"}}
+    """
+    
+    # Append relationship guidance to the extraction prompt
+    enhanced_prompt_template = EXTRACTION_PROMPT_TEMPLATE + relationship_guidance
+    prompt = ChatPromptTemplate.from_template(enhanced_prompt_template)
     
     # Initialize GPT-4 model with retries
-    gpt4_model = ChatOpenAI(model_name="gpt-4o", temperature=0)
+    gpt4_model = ChatOpenAI(model_name="gpt-4.5-preview-2025-02-27", temperature=0)
     
     max_retries = 3
     retry_count = 0
