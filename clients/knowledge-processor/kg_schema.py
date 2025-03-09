@@ -117,54 +117,54 @@ ENTITIES: Extract important named entities
 PERSON DETAILS: For important persons, extract comprehensive psychological profiles
 - Format as JSON using this template:
 ```json
-{
+{{
   "name": "Person Name",
   "biography": "Brief biographical summary",
   "aliases": ["alternative name", "nickname"],
   "personalityTraits": [
-    {"trait": "Analytical", "evidence": ["evidence1", "evidence2"], "confidence": 0.9},
-    {"trait": "Compassionate", "evidence": ["evidence3"], "confidence": 0.8}
+    {{"trait": "Analytical", "evidence": ["evidence1", "evidence2"], "confidence": 0.9}},
+    {{"trait": "Compassionate", "evidence": ["evidence3"], "confidence": 0.8}}
   ],
-  "cognitiveStyle": {
+  "cognitiveStyle": {{
     "decisionMaking": "Data-driven",
     "problemSolving": "Systematic",
     "worldview": "Scientific realism",
     "biases": ["confirmation bias", "recency bias"]
-  },
-  "emotionalProfile": {
+  }},
+  "emotionalProfile": {{
     "emotionalDisposition": "Reserved",
     "emotionalTriggers": [
-      {"trigger": "Personal criticism", "reaction": "Withdrawal", "evidence": ["example situation"]}
+      {{"trigger": "Personal criticism", "reaction": "Withdrawal", "evidence": ["example situation"]}}
     ]
-  },
-  "relationalDynamics": {
+  }},
+  "relationalDynamics": {{
     "interpersonalStyle": "Collaborative",
-    "powerDynamics": {
+    "powerDynamics": {{
       "authorityResponse": "Respectful but questioning",
       "subordinateManagement": "Mentoring approach",
       "negotiationTactics": ["Data-backed argumentation", "Compromise-oriented"]
-    },
+    }},
     "loyalties": [
-      {"target": "Scientific integrity", "strength": 0.9, "evidence": ["refused to falsify data"]}
+      {{"target": "Scientific integrity", "strength": 0.9, "evidence": ["refused to falsify data"]}}
     ]
-  },
-  "valueSystem": {
+  }},
+  "valueSystem": {{
     "coreValues": [
-      {"value": "Truth", "importance": 0.9, "consistency": 0.8}
+      {{"value": "Truth", "importance": 0.9, "consistency": 0.8}}
     ],
     "ethicalFramework": "Utilitarian with deontological constraints"
-  },
+  }},
   "psychologicalDevelopment": [
-    {"period": "Early career", "changes": "Shifted from theoretical to applied focus", "catalysts": ["event1", "event2"]}
+    {{"period": "Early career", "changes": "Shifted from theoretical to applied focus", "catalysts": ["event1", "event2"]}}
   ],
-  "metaAttributes": {
+  "metaAttributes": {{
     "authorBias": 0.1,
     "portrayalConsistency": 0.8,
     "controversialAspects": ["disputed claim"]
-  },
+  }},
   "modelConfidence": 0.85,
   "evidenceStrength": 0.75
-}
+}}
 ```
 - Fill in as many sections as possible based on available information
 - Leave sections empty or with null values if no information is available
@@ -173,7 +173,7 @@ PERSON DETAILS: For important persons, extract comprehensive psychological profi
 EVENTS: Extract significant events as structured JSON
 - Format as:
 ```json
-{
+{{
   "name": "Event Name",
   "nodeType": "Event",
   "startDate": "YYYY-MM-DD",
@@ -188,13 +188,13 @@ EVENTS: Extract significant events as structured JSON
   "causalPredecessors": ["Event that led to this"],
   "causalSuccessors": ["Event caused by this"],
   "subType": "Action/StateChange/Observation/Conversation"
-}
+}}
 ```
 
 CONCEPTS: Extract important abstract concepts, theories, or ideas
 - Format as:
 ```json
-{
+{{
   "name": "Concept Name",
   "nodeType": "Concept",
   "definition": "Concise definition (1-2 sentences)",
@@ -203,36 +203,36 @@ CONCEPTS: Extract important abstract concepts, theories, or ideas
   "relatedConcepts": ["Related concept1", "Related concept2"],
   "domain": "Field this belongs to",
   "significance": "Importance or impact"
-}
+}}
 ```
 
 RELATIONSHIPS: Extract relationships between entities, concepts, and events
 - Each on a new line
 - Use ONE of these formats (pick whichever is clearer for each relationship):
   1. [SOURCE_ENTITY] --RELATIONSHIP_TYPE--> [TARGET_ENTITY] (Context: contextual information)
-  2. SOURCE_ENTITY(TYPE) -> [RELATIONSHIP_TYPE] TARGET_ENTITY(TYPE) {property1: value1, property2: value2}
+  2. SOURCE_ENTITY(TYPE) -> [RELATIONSHIP_TYPE] TARGET_ENTITY(TYPE) {{property1: value1, property2: value2}}
 - For the second format, ensure you don't include the second arrow (just one ->)
 - Use relationship types from this list where possible: IS_A, INSTANCE_OF, PART_OF, HAS_PART, LOCATED_IN, BEFORE, AFTER, 
   DURING, CAUSES, CAUSED_BY, INFLUENCES, RELATED_TO, ASSOCIATED_WITH, BELIEVES, SUPPORTS, CONTRADICTS
-- Add confidence scores where possible: {confidenceScore: 0.9}
+- Add confidence scores where possible: {{confidenceScore: 0.9}}
 
 ATTRIBUTES: Extract qualities or properties of entities
 - Format as:
 ```json
-{
+{{
   "name": "Attribute Name",
   "nodeType": "Attribute",
   "value": "attribute value",
   "valueType": "numeric/categorical/boolean/text",
   "unit": "unit of measurement if applicable",
   "possibleValues": ["value1", "value2"] 
-}
+}}
 ```
 
 PROPOSITIONS: Extract objectively verifiable assertions
 - Format as:
 ```json
-{
+{{
   "name": "Short Label",
   "nodeType": "Proposition",
   "statement": "The objectively verifiable assertion",
@@ -241,26 +241,26 @@ PROPOSITIONS: Extract objectively verifiable assertions
   "truthValue": true,
   "sources": ["Source1", "Source2"],
   "domain": "Knowledge domain"
-}
+}}
 ```
 
 EMOTIONS: Extract emotional states
 - Format as:
 ```json
-{
+{{
   "name": "Emotion Name",
   "nodeType": "Emotion",
   "intensity": 0.7,
   "valence": 0.5,
   "category": "Joy/Sadness/Anger/etc.",
   "subcategory": "More specific emotion category"
-}
+}}
 ```
 
 AGENTS: Extract cognitive entities capable of action or belief
 - Format as:
 ```json
-{
+{{
   "name": "Agent Name",
   "nodeType": "Agent",
   "agentType": "human/ai/organization/other",
@@ -268,13 +268,13 @@ AGENTS: Extract cognitive entities capable of action or belief
   "beliefs": ["belief1", "belief2"],
   "knowledge": ["knowledge1", "knowledge2"],
   "preferences": ["preference1", "preference2"]
-}
+}}
 ```
 
 THOUGHTS: Extract subjective analyses or interpretations
 - Format as:
 ```json
-{
+{{
   "name": "Thought Label",
   "nodeType": "Thought",
   "thoughtContent": "The subjective analysis or interpretation",
@@ -282,13 +282,13 @@ THOUGHTS: Extract subjective analyses or interpretations
   "confidence": 0.7,
   "source": "Who originated this thought",
   "createdBy": "Author of the thought"
-}
+}}
 ```
 
 SCIENTIFIC INSIGHTS: Extract research findings or experimental results
 - Format as:
 ```json
-{
+{{
   "name": "Insight Name",
   "nodeType": "ScientificInsight",
   "hypothesis": "The scientific hypothesis",
@@ -296,39 +296,39 @@ SCIENTIFIC INSIGHTS: Extract research findings or experimental results
   "methodology": "Research approach",
   "confidence": 0.85,
   "field": "Scientific discipline"
-}
+}}
 ```
 
 LAWS: Extract established principles or rules
 - Format as:
 ```json
-{
+{{
   "name": "Law Name",
   "nodeType": "Law",
   "statement": "The law's statement",
   "conditions": ["condition1", "condition2"],
   "exceptions": ["exception1", "exception2"],
   "domain": "Field where law applies"
-}
+}}
 ```
 
 LOCATIONS: Extract physical or virtual places
 - Format as:
 ```json
-{
+{{
   "name": "Location Name",
   "nodeType": "Location",
   "locationType": "City/Country/Building/Virtual/etc.",
-  "coordinates": {"latitude": 0.0, "longitude": 0.0},
+  "coordinates": {{"latitude": 0.0, "longitude": 0.0}},
   "description": "Description of location",
   "significance": "Historical or cultural importance"
-}
+}}
 ```
 
 REASONING CHAINS: Extract structured logical reasoning
 - Format as:
 ```json
-{
+{{
   "name": "Reasoning Chain Name",
   "nodeType": "ReasoningChain",
   "description": "What this reasoning accomplishes",
@@ -337,13 +337,13 @@ REASONING CHAINS: Extract structured logical reasoning
   "creator": "Who created this reasoning",
   "methodology": "deductive/inductive/abductive/analogical/mixed",
   "steps": ["step1", "step2", "step3"]
-}
+}}
 ```
 
 REASONING STEPS: Extract individual steps within reasoning chains
 - Format as:
 ```json
-{
+{{
   "name": "Step Name",
   "nodeType": "ReasoningStep",
   "content": "The actual reasoning content",
@@ -351,7 +351,7 @@ REASONING STEPS: Extract individual steps within reasoning chains
   "confidence": 0.8,
   "chainName": "Parent reasoning chain name",
   "order": 1
-}
+}}
 ```
 
 Note for AI-specific Agent attributes:

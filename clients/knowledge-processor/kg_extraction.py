@@ -1327,10 +1327,10 @@ async def extract_knowledge(text_chunk):
     - [Albert Einstein] --DEVELOPED--> [Theory of Relativity] (Context: published in 1915)
     - [Climate Change] --IMPACTS--> [Polar Ice Caps] (Context: causing accelerated melting)
     
-    FORMAT 2: SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {property1: value1, property2: value2}
+    FORMAT 2: SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {{property1: value1, property2: value2}}
     Examples:
-    - John Smith(Person) -> [WORKS_FOR] Acme Inc(Organization) {since: "2020", position: "Senior Developer", confidenceScore: 0.9}
-    - Climate Change(Concept) -> [IMPACTS] Polar Ice Caps(Location) {severity: "high", timeframe: "ongoing", confidenceScore: 0.95}
+    - John Smith(Person) -> [WORKS_FOR] Acme Inc(Organization) {{since: "2020", position: "Senior Developer", confidenceScore: 0.9}}
+    - Climate Change(Concept) -> [IMPACTS] Polar Ice Caps(Location) {{severity: "high", timeframe: "ongoing", confidenceScore: 0.95}}
     
     Use specific relationship types (verbs in UPPERCASE_WITH_UNDERSCORES).
     Choose relationship direction based on the most natural flow of information.
@@ -1345,61 +1345,61 @@ async def extract_knowledge(text_chunk):
     For Person Details, implement the COMPLETE schema, structured exactly as follows:
     
     ```json
-    {
+    {{
       "name": "Person Name",
       "biography": "Brief biographical summary",
       "aliases": ["alternative name", "nickname"],
       "personalityTraits": [
-        {"trait": "Analytical", "evidence": ["evidence1", "evidence2"], "confidence": 0.9},
-        {"trait": "Compassionate", "evidence": ["evidence3"], "confidence": 0.8}
+        {{"trait": "Analytical", "evidence": ["evidence1", "evidence2"], "confidence": 0.9}},
+        {{"trait": "Compassionate", "evidence": ["evidence3"], "confidence": 0.8}}
       ],
-      "cognitiveStyle": {
+      "cognitiveStyle": {{
         "decisionMaking": "Data-driven",
         "problemSolving": "Systematic",
         "worldview": "Scientific realism",
         "biases": ["confirmation bias", "recency bias"]
-      },
-      "emotionalProfile": {
+      }},
+      "emotionalProfile": {{
         "emotionalDisposition": "Reserved",
         "emotionalTriggers": [
-          {"trigger": "Personal criticism", "reaction": "Withdrawal", "evidence": ["example situation"]}
+          {{"trigger": "Personal criticism", "reaction": "Withdrawal", "evidence": ["example situation"]}}
         ]
-      },
-      "relationalDynamics": {
+      }},
+      "relationalDynamics": {{
         "interpersonalStyle": "Collaborative",
-        "powerDynamics": {
+        "powerDynamics": {{
           "authorityResponse": "Respectful but questioning",
           "subordinateManagement": "Mentoring approach",
           "negotiationTactics": ["Data-backed argumentation", "Compromise-oriented"]
-        },
+        }},
         "loyalties": [
-          {"target": "Scientific integrity", "strength": 0.9, "evidence": ["refused to falsify data"]}
+          {{"target": "Scientific integrity", "strength": 0.9, "evidence": ["refused to falsify data"]}}
         ]
-      },
-      "valueSystem": {
+      }},
+      "valueSystem": {{
         "coreValues": [
-          {"value": "Truth", "importance": 0.9, "consistency": 0.8}
+          {{"value": "Truth", "importance": 0.9, "consistency": 0.8}}
         ],
         "ethicalFramework": "Utilitarian with deontological constraints"
-      },
+      }},
       "psychologicalDevelopment": [
-        {"period": "Early career", "changes": "Shifted from theoretical to applied focus", "catalysts": ["event1", "event2"]}
+        {{"period": "Early career", "changes": "Shifted from theoretical to applied focus", "catalysts": ["event1", "event2"]}}
       ],
-      "metaAttributes": {
+      "metaAttributes": {{
         "authorBias": 0.1,
         "portrayalConsistency": 0.8,
         "controversialAspects": ["disputed claim"]
-      },
+      }},
       "modelConfidence": 0.85,
       "evidenceStrength": 0.75
-    }
+    }}
     ```
     
     Key requirements:
     1. For each person you extract, create a complete section labeled "Person Details for [Name]:"
     2. Follow the EXACT field names shown in the template (case-sensitive)
     3. Fill as many fields as possible based on available information in the text
-    4. Leave fields as empty arrays [] or empty objects {} if no information is available
+    4. Leave fields as empty arrays [] or empty objects {{}} if no information is available
     5. Ensure all JSON is properly quoted and structured for error-free parsing
     """
     
