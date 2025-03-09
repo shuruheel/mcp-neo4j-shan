@@ -102,127 +102,261 @@ SCHEMA_TEMPLATE = {
 
 # Define GPT prompt templates
 EXTRACTION_PROMPT_TEMPLATE = """
-Analyze the following text and extract structured information according to the knowledge graph schema below:
+You are a knowledge extraction system.
 
-TEXT:
-{text}
+Extract and organize information from the given text into these categories, using structured JSON format where specified:
 
-EXTRACTION GUIDELINES:
+ENTITIES: Extract important named entities
+- Each on a new line
+- Include type/category in parentheses: Winston Churchill (Person)
+- Include key descriptors: Winston Churchill (Person) - Prime Minister of UK during WWII
+- Do NOT create separate entries for observations or attributes
+- Do NOT start entries with "Observations:" or "KeyContributions:"
+- Include all descriptive information after the hyphen
 
-1. ENTITIES: Extract all named entities (people, organizations, locations, artifacts)
-   - Format as: Entity Name [Type: Person/Organization/Location/Artifact]
-   - Include only significant entities
+PERSON DETAILS: For important persons, extract comprehensive psychological profiles
+- Format as JSON using this template:
+```json
+{
+  "name": "Person Name",
+  "biography": "Brief biographical summary",
+  "aliases": ["alternative name", "nickname"],
+  "personalityTraits": [
+    {"trait": "Analytical", "evidence": ["evidence1", "evidence2"], "confidence": 0.9},
+    {"trait": "Compassionate", "evidence": ["evidence3"], "confidence": 0.8}
+  ],
+  "cognitiveStyle": {
+    "decisionMaking": "Data-driven",
+    "problemSolving": "Systematic",
+    "worldview": "Scientific realism",
+    "biases": ["confirmation bias", "recency bias"]
+  },
+  "emotionalProfile": {
+    "emotionalDisposition": "Reserved",
+    "emotionalTriggers": [
+      {"trigger": "Personal criticism", "reaction": "Withdrawal", "evidence": ["example situation"]}
+    ]
+  },
+  "relationalDynamics": {
+    "interpersonalStyle": "Collaborative",
+    "powerDynamics": {
+      "authorityResponse": "Respectful but questioning",
+      "subordinateManagement": "Mentoring approach",
+      "negotiationTactics": ["Data-backed argumentation", "Compromise-oriented"]
+    },
+    "loyalties": [
+      {"target": "Scientific integrity", "strength": 0.9, "evidence": ["refused to falsify data"]}
+    ]
+  },
+  "valueSystem": {
+    "coreValues": [
+      {"value": "Truth", "importance": 0.9, "consistency": 0.8}
+    ],
+    "ethicalFramework": "Utilitarian with deontological constraints"
+  },
+  "psychologicalDevelopment": [
+    {"period": "Early career", "changes": "Shifted from theoretical to applied focus", "catalysts": ["event1", "event2"]}
+  ],
+  "metaAttributes": {
+    "authorBias": 0.1,
+    "portrayalConsistency": 0.8,
+    "controversialAspects": ["disputed claim"]
+  },
+  "modelConfidence": 0.85,
+  "evidenceStrength": 0.75
+}
+```
+- Fill in as many sections as possible based on available information
+- Leave sections empty or with null values if no information is available
+- For each person you extract, create a complete section labeled "Person Details for [Name]:"
 
-2. EVENTS: Extract important events
-   - Include: name, startDate, endDate, participants, location, outcome
-   - Format as: Event: [Event Name]
-   - Details should include dates, participants, locations, outcomes
+EVENTS: Extract significant events as structured JSON
+- Format as:
+```json
+{
+  "name": "Event Name",
+  "nodeType": "Event",
+  "startDate": "YYYY-MM-DD",
+  "endDate": "YYYY-MM-DD", 
+  "status": "Ongoing/Concluded/Planned",
+  "timestamp": "ISO datetime if specific point",
+  "duration": "length of event",
+  "location": "Where it occurred",
+  "participants": ["Person1", "Organization1"],
+  "outcome": "Result of the event",
+  "significance": "Why this matters",
+  "causalPredecessors": ["Event that led to this"],
+  "causalSuccessors": ["Event caused by this"],
+  "subType": "Action/StateChange/Observation/Conversation"
+}
+```
 
-3. CONCEPTS: Extract abstract ideas and categories
-   - Include: name, definition, domain, examples
-   - Format as: Concept: [Concept Name]
+CONCEPTS: Extract important abstract concepts, theories, or ideas
+- Format as:
+```json
+{
+  "name": "Concept Name",
+  "nodeType": "Concept",
+  "definition": "Concise definition (1-2 sentences)",
+  "description": "Expanded explanation",
+  "examples": ["Example1", "Example2"],
+  "relatedConcepts": ["Related concept1", "Related concept2"],
+  "domain": "Field this belongs to",
+  "significance": "Importance or impact"
+}
+```
 
-4. PROPOSITIONS: Extract objectively verifiable assertions
-   - Include: statement, confidence, domain, truthValue
-   - Format as: Proposition: [Brief Label] - [Statement text]
-   - Rate confidence as High/Medium/Low
+RELATIONSHIPS: Extract relationships between entities, concepts, and events
+- Each on a new line
+- Use ONE of these formats (pick whichever is clearer for each relationship):
+  1. [SOURCE_ENTITY] --RELATIONSHIP_TYPE--> [TARGET_ENTITY] (Context: contextual information)
+  2. SOURCE_ENTITY(TYPE) -> [RELATIONSHIP_TYPE] TARGET_ENTITY(TYPE) {property1: value1, property2: value2}
+- For the second format, ensure you don't include the second arrow (just one ->)
+- Use relationship types from this list where possible: IS_A, INSTANCE_OF, PART_OF, HAS_PART, LOCATED_IN, BEFORE, AFTER, 
+  DURING, CAUSES, CAUSED_BY, INFLUENCES, RELATED_TO, ASSOCIATED_WITH, BELIEVES, SUPPORTS, CONTRADICTS
+- Add confidence scores where possible: {confidenceScore: 0.9}
 
-5. ATTRIBUTES: Extract qualities or properties of entities
-   - Include: name, value, valueType (numeric/categorical/boolean/text)
-   - Format as: Attribute: [Name] - Value: [Value], Type: [ValueType]
+ATTRIBUTES: Extract qualities or properties of entities
+- Format as:
+```json
+{
+  "name": "Attribute Name",
+  "nodeType": "Attribute",
+  "value": "attribute value",
+  "valueType": "numeric/categorical/boolean/text",
+  "unit": "unit of measurement if applicable",
+  "possibleValues": ["value1", "value2"] 
+}
+```
 
-6. EMOTIONS: Extract emotional states mentioned
-   - Include: name, intensity (0-1), valence (-1 to 1), category
-   - Format as: Emotion: [Name] - Category: [Category], Intensity: [Level]
+PROPOSITIONS: Extract objectively verifiable assertions
+- Format as:
+```json
+{
+  "name": "Short Label",
+  "nodeType": "Proposition",
+  "statement": "The objectively verifiable assertion",
+  "status": "fact/hypothesis/law/rule/claim",
+  "confidence": 0.8,
+  "truthValue": true,
+  "sources": ["Source1", "Source2"],
+  "domain": "Knowledge domain"
+}
+```
 
-7. AGENTS: Extract cognitive entities capable of action or belief
-   - Include: name, agentType (human/ai/organization), capabilities
-   - Format as: Agent: [Name] - Type: [AgentType]
+EMOTIONS: Extract emotional states
+- Format as:
+```json
+{
+  "name": "Emotion Name",
+  "nodeType": "Emotion",
+  "intensity": 0.7,
+  "valence": 0.5,
+  "category": "Joy/Sadness/Anger/etc.",
+  "subcategory": "More specific emotion category"
+}
+```
 
-8. THOUGHTS: Extract subjective analyses or interpretations
-   - Include: name, thoughtContent, confidence, source
-   - Format as: Thought: [Brief Label] - [Content text]
+AGENTS: Extract cognitive entities capable of action or belief
+- Format as:
+```json
+{
+  "name": "Agent Name",
+  "nodeType": "Agent",
+  "agentType": "human/ai/organization/other",
+  "capabilities": ["capability1", "capability2"],
+  "beliefs": ["belief1", "belief2"],
+  "knowledge": ["knowledge1", "knowledge2"],
+  "preferences": ["preference1", "preference2"]
+}
+```
 
-9. SCIENTIFIC INSIGHTS: Extract research findings or experimental results
-   - Include: name, hypothesis, evidence, field
-   - Format as: Scientific Insight: [Brief Label] - [Hypothesis]
+THOUGHTS: Extract subjective analyses or interpretations
+- Format as:
+```json
+{
+  "name": "Thought Label",
+  "nodeType": "Thought",
+  "thoughtContent": "The subjective analysis or interpretation",
+  "references": ["Entity1", "Concept1"],
+  "confidence": 0.7,
+  "source": "Who originated this thought",
+  "createdBy": "Author of the thought"
+}
+```
 
-10. LAWS: Extract established principles or rules
-    - Include: name, statement, conditions, exceptions, domain
-    - Format as: Law: [Name] - [Statement]
+SCIENTIFIC INSIGHTS: Extract research findings or experimental results
+- Format as:
+```json
+{
+  "name": "Insight Name",
+  "nodeType": "ScientificInsight",
+  "hypothesis": "The scientific hypothesis",
+  "evidence": ["Evidence1", "Evidence2"],
+  "methodology": "Research approach",
+  "confidence": 0.85,
+  "field": "Scientific discipline"
+}
+```
 
-11. REASONING CHAINS: Extract structured logical reasoning
-    - Include: name, description, conclusion, methodology
-    - Format as: Reasoning Chain: [Name] - [Conclusion]
+LAWS: Extract established principles or rules
+- Format as:
+```json
+{
+  "name": "Law Name",
+  "nodeType": "Law",
+  "statement": "The law's statement",
+  "conditions": ["condition1", "condition2"],
+  "exceptions": ["exception1", "exception2"],
+  "domain": "Field where law applies"
+}
+```
 
-12. RELATIONSHIPS: Extract relationships between entities
-    - Format as: [Entity1] --RELATIONSHIP_TYPE--> [Entity2]
-    - Use relationship types from this list only:
-      IS_A, INSTANCE_OF, HAS_PART, PART_OF, LOCATED_IN, CONTAINS, OCCURRED_AT,
-      BEFORE, AFTER, DURING, CAUSES, INFLUENCES, KNOWS, MEMBER_OF, RELATED_TO
+LOCATIONS: Extract physical or virtual places
+- Format as:
+```json
+{
+  "name": "Location Name",
+  "nodeType": "Location",
+  "locationType": "City/Country/Building/Virtual/etc.",
+  "coordinates": {"latitude": 0.0, "longitude": 0.0},
+  "description": "Description of location",
+  "significance": "Historical or cultural importance"
+}
+```
 
-13. PERSON DETAILS: For important people, extract psychological information:
-    - Personality traits with evidence
-    - Cognitive style and decision-making approach
-    - Emotional disposition
-    - Interpersonal style and relationships
-    - Core values and ethical framework
+REASONING CHAINS: Extract structured logical reasoning
+- Format as:
+```json
+{
+  "name": "Reasoning Chain Name",
+  "nodeType": "ReasoningChain",
+  "description": "What this reasoning accomplishes",
+  "conclusion": "Final conclusion reached",
+  "confidenceScore": 0.8,
+  "creator": "Who created this reasoning",
+  "methodology": "deductive/inductive/abductive/analogical/mixed",
+  "steps": ["step1", "step2", "step3"]
+}
+```
 
-14. LOCATION DETAILS: For important locations, extract:
-    - Type of location
-    - Significance
-    - Contained within (if applicable)
+REASONING STEPS: Extract individual steps within reasoning chains
+- Format as:
+```json
+{
+  "name": "Step Name",
+  "nodeType": "ReasoningStep",
+  "content": "The actual reasoning content",
+  "stepType": "premise/inference/evidence/counterargument/rebuttal/conclusion",
+  "confidence": 0.8,
+  "chainName": "Parent reasoning chain name",
+  "order": 1
+}
+```
 
-RESPONSE FORMAT:
-Entities:
-- Entity1 [Type: Person/Organization/Location/Artifact]
-- Entity2 [Type: Person/Organization/Location/Artifact]
+Note for AI-specific Agent attributes:
+When extracting AI agents, include these specialized attributes when available:
+modelName, provider, apiEndpoint, trainingData, operationalConstraints, performanceMetrics, version, operationalStatus, ownership
 
-Events:
-- Event: [Event Name] (Date: YYYY-MM-DD, Location: [Location])
-  Participants: [Participant1], [Participant2]
-  Outcome: [Brief outcome description]
-
-Concepts:
-- Concept: [Concept Name] - [Brief definition]
-  Domain: [Domain]
-  Examples: [Example1], [Example2]
-
-Propositions:
-- Proposition: [Label] - [Statement text] (Confidence: High/Medium/Low, Domain: [Domain])
-
-Attributes:
-- Attribute: [Name] - Value: [Value], Type: [ValueType]
-
-Emotions:
-- Emotion: [Name] - Category: [Category], Intensity: [Level], Valence: [Value]
-
-Agents:
-- Agent: [Name] - Type: [AgentType], Capabilities: [Capability1], [Capability2]
-
-Thoughts:
-- Thought: [Label] - [Content] (Source: [Source], Confidence: High/Medium/Low)
-
-Scientific Insights:
-- Scientific Insight: [Label] - [Hypothesis] (Field: [Field], Evidence: [Evidence])
-
-Laws:
-- Law: [Name] - [Statement] (Domain: [Domain], Conditions: [Condition1], [Condition2])
-
-Reasoning Chains:
-- Reasoning Chain: [Name] - [Conclusion] (Methodology: [Methodology])
-
-Relationships:
-- [Entity1] --RELATIONSHIP_TYPE--> [Entity2] (Context: brief explanation)
-
-Person Details for [Person Name]:
-- Personality: [Key personality traits]
-- Cognitive Style: [Thinking and decision-making patterns]
-- Values: [Core values and ethical principles]
-- Relationships: [Key relationship patterns]
-
-Location Details for [Location Name]:
-- Type: [Location type]
-- Significance: [Historical or contextual importance]
-- Contained in: [Larger location]
+IMPORTANT: JSON format must be strictly valid. All string values must be properly quoted, all arrays and objects properly structured.
 """ 

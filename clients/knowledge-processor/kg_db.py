@@ -2,6 +2,7 @@
 
 import os
 import logging
+import json
 from neo4j import GraphDatabase
 from kg_schema import RELATIONSHIP_TYPES, RELATIONSHIP_CATEGORIES
 from kg_utils import standardize_entity
@@ -160,24 +161,61 @@ def add_to_neo4j(tx, data):
 
 def add_entity_to_neo4j(tx, entity_data):
     """Add a basic entity to Neo4j"""
+    # Skip if there's no name or if it's just an attribute
+    if not entity_data.get("name"):
+        logging.warning(f"Skipping entity with no name: {entity_data}")
+        return False
+        
+    # Skip if the name appears to be an attribute
+    name = entity_data.get("name", "")
+    if name.lower().startswith("observations:") or name.lower().startswith("keycontributions:"):
+        logging.warning(f"Skipping entity that appears to be an attribute: {name}")
+        return False
+        
+    # Convert observations to comma-separated string if it's a list
+    observations = entity_data.get("observations", [])
+    if isinstance(observations, list):
+        observations_str = "; ".join(observations)
+    else:
+        observations_str = str(observations)
+        
+    # Same for key contributions
+    key_contributions = entity_data.get("keyContributions", [])
+    if isinstance(key_contributions, list):
+        key_contributions_str = "; ".join(key_contributions)
+    else:
+        key_contributions_str = str(key_contributions)
+    
     query = """
     MERGE (e:Entity {name: $name})
     SET e.nodeType = $nodeType,
         e.subType = $subType,
         e.description = $description,
-        e.confidence = $confidence
+        e.confidence = $confidence,
+        e.source = $source,
+        e.biography = $biography,
+        e.keyContributions = $keyContributions,
+        e.observations = $observations,
+        e.emotionalValence = $emotionalValence,
+        e.emotionalArousal = $emotionalArousal
     RETURN e
     """
     
     result = tx.run(query,
-           name=entity_data.get("name", ""),
+           name=name,
            nodeType=entity_data.get("nodeType", "Entity"),
            subType=entity_data.get("subType", ""),
            description=entity_data.get("description", ""),
-           confidence=entity_data.get("confidence", 0.7))
+           confidence=entity_data.get("confidence", 0.0),
+           source=entity_data.get("source", ""),
+           biography=entity_data.get("biography", ""),
+           keyContributions=key_contributions_str,
+           observations=observations_str,
+           emotionalValence=entity_data.get("emotionalValence", 0.0),
+           emotionalArousal=entity_data.get("emotionalArousal", 0.0))
     
-    # Actually process the result to force execution
     summary = result.consume()
+    logging.info(f"Entity created/updated: {name} with observations: {observations_str[:100]}...")
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
 
 def process_person_entity(tx, person_data):
@@ -191,25 +229,70 @@ def process_person_entity(tx, person_data):
     }
     add_entity_to_neo4j(tx, entity_data)
     
-    # Then add person-specific attributes as properties
+    # Create a standardized personDetails structure
+    person_details = {
+        "name": person_data.get("name", ""),
+        "biography": person_data.get("biography", ""),
+        "aliases": person_data.get("aliases", []),
+        "personalityTraits": person_data.get("personalityTraits", []),
+        "cognitiveStyle": person_data.get("cognitiveStyle", {}),
+        "emotionalProfile": {
+            "emotionalDisposition": person_data.get("emotionalDisposition", ""),
+            "emotionalTriggers": person_data.get("emotionalTriggers", [])
+        },
+        "relationalDynamics": {
+            "interpersonalStyle": person_data.get("interpersonalStyle", ""),
+            "powerDynamics": person_data.get("powerDynamics", {}),
+            "loyalties": person_data.get("loyalties", [])
+        },
+        "valueSystem": {
+            "coreValues": person_data.get("coreValues", []),
+            "ethicalFramework": person_data.get("ethicalFramework", "")
+        },
+        "psychologicalDevelopment": person_data.get("psychologicalDevelopment", []),
+        "metaAttributes": person_data.get("metaAttributes", {}),
+        "modelConfidence": person_data.get("modelConfidence", 0.0),
+        "evidenceStrength": person_data.get("evidenceStrength", 0.0)
+    }
+
+    # Convert the entire person details object to JSON for storage
+    person_details_json = json.dumps(person_details)
+    
+    # Update the person entity with the details
     query = """
     MATCH (p:Entity {name: $name})
     SET p.biography = $biography,
-        p.personalityTraits = $personalityTraits,
-        p.cognitiveStyle = $cognitiveStyle,
-        p.emotionalDisposition = $emotionalDisposition,
-        p.interpersonalStyle = $interpersonalStyle,
-        p.coreValues = $coreValues
+        p.personDetails = $personDetails
     """
     
     tx.run(query,
            name=person_data.get("name", ""),
            biography=person_data.get("biography", ""),
-           personalityTraits=person_data.get("Personality", ""),
-           cognitiveStyle=person_data.get("Cognitive Style", ""),
-           emotionalDisposition=person_data.get("Emotional", ""),
-           interpersonalStyle=person_data.get("Relationships", ""),
-           coreValues=person_data.get("Values", ""))
+           personDetails=person_details_json)
+    
+    # Create individual personality trait nodes and connect them
+    if "personalityTraits" in person_data and isinstance(person_data["personalityTraits"], list):
+        for trait_data in person_data["personalityTraits"]:
+            if isinstance(trait_data, dict) and "trait" in trait_data:
+                trait_name = trait_data["trait"]
+                # Create a trait node if it doesn't exist
+                trait_query = """
+                MERGE (t:Trait {name: $traitName})
+                ON CREATE SET t.nodeType = 'Attribute'
+                """
+                tx.run(trait_query, traitName=trait_name)
+                
+                # Connect the person to the trait with confidence if available
+                confidence = trait_data.get("confidence", 0.8)
+                rel_query = """
+                MATCH (p:Entity {name: $personName})
+                MATCH (t:Trait {name: $traitName})
+                MERGE (p)-[r:EXHIBITS_TRAIT]->(t)
+                SET r.confidence = $confidence
+                """
+                tx.run(rel_query, personName=person_data.get("name", ""), traitName=trait_name, confidence=confidence)
+    
+    return True
 
 def add_location_to_neo4j(tx, location_data):
     """Add a location entity to Neo4j"""
@@ -251,7 +334,9 @@ def add_location_to_neo4j(tx, location_data):
         MATCH (l:Location {name: $location})
         MATCH (c:Location {name: $container})
         MERGE (l)-[:CONTAINED_IN]->(c)
-        """, location=location_data["name"], container=container_name)
+        """, location=location_data.get("name", ""), container=container_name)
+    
+    return True
 
 def add_event_to_neo4j(tx, event_data):
     """Add an event entity to Neo4j"""
@@ -659,6 +744,18 @@ def add_reasoning_step_to_neo4j(tx, step_data):
            propositions=step_data.get("propositions", []))
     
     summary = result.consume()
+    
+    # Connect step to its parent reasoning chain if chain information is available
+    chain_name = step_data.get("chain", "")
+    if chain_name:
+        # Create relationship between reasoning chain and step
+        tx.run("""
+        MATCH (c:ReasoningChain {name: $chainName})
+        MATCH (s:ReasoningStep {name: $stepName})
+        MERGE (c)-[:HAS_PART {order: $order}]->(s)
+        """, chainName=chain_name, stepName=step_data.get("name", ""), 
+              order=step_data.get("order", 0))
+    
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
 
 def add_relationship_to_neo4j(tx, relationship_data):
@@ -690,8 +787,8 @@ def add_relationship_to_neo4j(tx, relationship_data):
     
     # Validate relationship type against schema
     if rel_type not in RELATIONSHIP_TYPES:
-        logging.warning(f"Unknown relationship type: {rel_type}, defaulting to RELATED_TO")
-        rel_type = "RELATED_TO"
+        logging.warning(f"Non-standard relationship type: {rel_type}, will create it anyway")
+        # Don't default to RELATED_TO, use the type as provided
     
     # Extract properties
     properties = relationship_data.get('properties', {})

@@ -106,8 +106,26 @@ async def main():
         # After aggregating data
         entity_count = len(aggregator.entities)
         person_count = len(aggregator.persons)
+        location_count = len(aggregator.locations)
+        concept_count = len(aggregator.concepts)
+        event_count = len(aggregator.events)
+        attribute_count = len(aggregator.attributes)
+        proposition_count = len(aggregator.propositions)
+        emotion_count = len(aggregator.emotions)
+        agent_count = len(aggregator.agents)
+        thought_count = len(aggregator.thoughts)
+        scientific_insight_count = len(aggregator.scientific_insights)
+        law_count = len(aggregator.laws)
+        reasoning_chain_count = len(aggregator.reasoning_chains)
+        reasoning_step_count = len(aggregator.reasoning_steps)
         relationship_count = len(aggregator.relationships)
-        logging.info(f"Found {entity_count} entities, {person_count} persons, and {relationship_count} relationships to store")
+        
+        logging.info(f"Found {entity_count} entities, {person_count} persons, and {location_count} locations")
+        logging.info(f"Found {concept_count} concepts, {event_count} events, and {attribute_count} attributes")
+        logging.info(f"Found {proposition_count} propositions, {emotion_count} emotions, and {agent_count} agents")
+        logging.info(f"Found {thought_count} thoughts, {scientific_insight_count} scientific insights, and {law_count} laws")
+        logging.info(f"Found {reasoning_chain_count} reasoning chains and {reasoning_step_count} reasoning steps")
+        logging.info(f"Found {relationship_count} relationships to store")
         
         # Before starting Stage 3
         if entity_count == 0 and person_count == 0:
@@ -129,34 +147,80 @@ async def main():
             logging.info("Storing extracted entities and relationships")
             stored_entities = set()
             
-            # Process entities first
-            for data in tqdm(extracted_data, desc="Storing base entities"):
-                # Store entities
+            # Process entities first to establish nodes
+            for data in tqdm(extracted_data, desc="Storing entities"):
                 for entity in data.get('entities', []):
-                    entity_parts = entity.split('[Type:', 1)
-                    if len(entity_parts) == 2:
-                        entity_name = standardize_entity(entity_parts[0].strip())
-                        entity_type = entity_parts[1].strip().rstrip(']')
-                        
-                        # Skip if already processed
-                        if entity_name in stored_entities:
-                            continue
-                        
-                        # Basic entity data
-                        entity_data = {
-                            "name": entity_name,
-                            "nodeType": "Entity",
-                            "subType": entity_type
-                        }
-                        
-                        # Store entity
-                        try:
+                    try:
+                        if isinstance(entity, str):
+                            # Basic entity parsing (older format)
+                            # Format: Winston Churchill (Person) - Prime Minister of UK
+                            if " - " in entity:
+                                entity_parts = entity.split(" - ", 1)
+                                entity_with_type = entity_parts[0].strip()
+                                description = entity_parts[1].strip() if len(entity_parts) > 1 else ""
+                                
+                                # Extract name and type if format matches
+                                if "(" in entity_with_type and ")" in entity_with_type:
+                                    name_parts = entity_with_type.split("(", 1)
+                                    entity_name = standardize_entity(name_parts[0].strip())
+                                    entity_type = name_parts[1].rstrip(")").strip()
+                                else:
+                                    # Just use the whole thing as name if can't parse
+                                    entity_name = standardize_entity(entity_with_type)
+                                    entity_type = "General"
+                            else:
+                                # Fall back to treating the whole string as name if no description
+                                entity_name = standardize_entity(entity)
+                                entity_type = "General"
+                                description = ""
+                            
+                            # Skip if name appears to be an attribute
+                            if entity_name.lower().startswith("observations:") or entity_name.lower().startswith("keycontributions:"):
+                                logging.warning(f"Skipping entity that appears to be an attribute: {entity_name}")
+                                continue
+                                
+                            # Skip if already processed
+                            if entity_name in stored_entities:
+                                continue
+                            
+                            # Basic entity data
+                            entity_data = {
+                                "name": entity_name,
+                                "nodeType": "Entity",
+                                "subType": entity_type,
+                                "observations": [description] if description else []
+                            }
+                            
+                            # Store entity
                             result = session.execute_write(lambda tx: add_to_neo4j(tx, {"entity": entity_data}))
                             if result:
                                 stored_entities.add(entity_name)
                                 logging.info(f"Stored entity: {entity_name}")
-                        except Exception as e:
-                            logging.error(f"Error storing entity {entity_name}: {str(e)}")
+                        elif isinstance(entity, dict) and 'name' in entity:
+                            # Handle dictionary format
+                            entity_name = standardize_entity(entity['name'])
+                            
+                            # Skip if name appears to be an attribute
+                            if entity_name.lower().startswith("observations:") or entity_name.lower().startswith("keycontributions:"):
+                                logging.warning(f"Skipping entity that appears to be an attribute: {entity_name}")
+                                continue
+                            
+                            # Skip if already processed - but merge observations if they exist
+                            if entity_name in stored_entities:
+                                # Check if we have observations to add to existing entity
+                                if 'observations' in entity and entity['observations']:
+                                    # Merge with existing entity - not implemented yet but could be added
+                                    pass
+                                continue
+                                
+                            # Store full entity data
+                            result = session.execute_write(lambda tx: add_to_neo4j(tx, {"entity": entity}))
+                            if result:
+                                stored_entities.add(entity_name)
+                                logging.info(f"Stored entity: {entity_name}")
+                    except Exception as e:
+                        entity_name = entity.get('name', 'unknown') if isinstance(entity, dict) else 'unknown'
+                        logging.error(f"Error storing entity {entity_name}: {str(e)}")
             
             # Process events
             for data in tqdm(extracted_data, desc="Storing events"):
@@ -172,41 +236,147 @@ async def main():
             for data in tqdm(extracted_data, desc="Storing concepts"):
                 for concept in data.get('concepts', []):
                     try:
-                        concept_parts = concept.split(':', 1)
-                        if len(concept_parts) == 2:
-                            concept_name = standardize_entity(concept_parts[1].strip().split(' - ')[0])
-                            concept_data = {
-                                "name": concept_name,
-                                "definition": concept.split(' - ', 1)[1] if ' - ' in concept else ""
-                            }
-                            session.execute_write(lambda tx: add_to_neo4j(tx, {"concept": concept_data}))
+                        if isinstance(concept, str):
+                            # Handle string format
+                            concept_parts = concept.split(':', 1)
+                            if len(concept_parts) == 2:
+                                concept_name = standardize_entity(concept_parts[1].strip().split(' - ')[0])
+                                concept_data = {
+                                    "name": concept_name,
+                                    "definition": concept.split(' - ', 1)[1] if ' - ' in concept else ""
+                                }
+                                session.execute_write(lambda tx: add_to_neo4j(tx, {"concept": concept_data}))
+                        elif isinstance(concept, dict) and 'name' in concept:
+                            # Handle dictionary format
+                            concept_name = standardize_entity(concept['name'])
+                            # Store full concept data
+                            session.execute_write(lambda tx: add_to_neo4j(tx, {"concept": concept}))
                     except Exception as e:
-                        logging.error(f"Error storing concept: {str(e)}")
+                        concept_name = concept.get('name', 'unknown') if isinstance(concept, dict) else 'unknown'
+                        logging.error(f"Error storing concept {concept_name}: {str(e)}")
             
+            # Log relationship count and sample before storing
+            relationship_count = sum(len(data.get('relationships', [])) for data in extracted_data)
+            logging.info(f"Found {relationship_count} relationships to store")
+            
+            # Log samples of the first few relationships for debugging
+            if relationship_count > 0:
+                for data in extracted_data[:2]:  # Just check first two data items
+                    for rel in data.get('relationships', [])[:3]:  # Log up to 3 relationships
+                        logging.info(f"Sample relationship: {rel}")
+            else:
+                logging.warning("No relationships found in extracted data. Check the extraction prompt and output.")
+
+            # Track relationship processing success
+            successful_relationships = 0
+
             # Store relationships after all entities exist
             for data in tqdm(extracted_data, desc="Storing relationships"):
                 for rel in data.get('relationships', []):
                     try:
-                        # Parse relationship format: [Entity1] --RELATIONSHIP_TYPE--> [Entity2]
-                        rel_match = re.match(r'\[(.+?)\]\s*--(.+?)-->\s*\[(.+?)\]', rel)
-                        if rel_match:
-                            source = standardize_entity(rel_match.group(1))
-                            rel_type = rel_match.group(2).strip()
-                            target = standardize_entity(rel_match.group(3))
+                        if isinstance(rel, str):
+                            # Parse relationship format: [Entity1] --RELATIONSHIP_TYPE--> [Entity2]
+                            rel_match = re.match(r'\[(.+?)\]\s*--(.+?)-->\s*\[(.+?)\]', rel)
+                            if rel_match:
+                                source = standardize_entity(rel_match.group(1))
+                                rel_type = rel_match.group(2).strip()
+                                target = standardize_entity(rel_match.group(3))
+                                
+                                # Extract context if available
+                                context = ""
+                                context_match = re.search(r'\(Context: (.+?)\)', rel)
+                                if context_match:
+                                    context = context_match.group(1).strip()
+                                
+                                # Create relationship data structure
+                                rel_data = {
+                                    'source': {'name': source, 'type': 'Entity'},
+                                    'target': {'name': target, 'type': 'Entity'},
+                                    'type': rel_type,
+                                    'properties': {"context": context, "confidenceScore": 0.8}
+                                }
+                                
+                                # Add relationship
+                                session.execute_write(
+                                    lambda tx: add_relationship_to_neo4j(tx, rel_data)
+                                )
+                                successful_relationships += 1
+                                logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
                             
-                            # Extract context if available
-                            context = ""
-                            context_match = re.search(r'\(Context: (.+?)\)', rel)
-                            if context_match:
-                                context = context_match.group(1).strip()
+                            # Try alternate format: SourceEntity(Type) -> [RELATIONSHIP_TYPE] TargetEntity(Type)
+                            else:
+                                rel_match = re.match(r'(.+?)\(\s*(.+?)\s*\)\s*->\s*\[(.+?)\]\s*(.+?)\(\s*(.+?)\s*\)', rel)
+                                if rel_match:
+                                    source_name = standardize_entity(rel_match.group(1).strip())
+                                    source_type = rel_match.group(2).strip()
+                                    rel_type = rel_match.group(3).strip()
+                                    target_name = standardize_entity(rel_match.group(4).strip())
+                                    target_type = rel_match.group(5).strip()
+                                    
+                                    # Extract properties if available
+                                    properties = {"confidenceScore": 0.8}
+                                    if "{" in rel and "}" in rel:
+                                        props_text = re.search(r'\{(.+?)\}', rel)
+                                        if props_text:
+                                            props_str = props_text.group(1)
+                                            try:
+                                                # First try parsing as JSON
+                                                properties = json.loads("{" + props_str + "}")
+                                            except json.JSONDecodeError:
+                                                # Fall back to simple key-value parsing
+                                                for prop in props_str.split(","):
+                                                    if ":" in prop:
+                                                        key, value = prop.split(":", 1)
+                                                        properties[key.strip()] = value.strip().strip('"\'')
+                                    
+                                    # Create relationship data structure
+                                    rel_data = {
+                                        'source': {'name': source_name, 'type': source_type},
+                                        'target': {'name': target_name, 'type': target_type},
+                                        'type': rel_type,
+                                        'properties': properties
+                                    }
+                                    
+                                    # Add relationship
+                                    session.execute_write(
+                                        lambda tx: add_relationship_to_neo4j(tx, rel_data)
+                                    )
+                                    successful_relationships += 1
+                                    logging.info(f"Added relationship: {source_name} --{rel_type}--> {target_name}")
+                                    
+                        elif isinstance(rel, dict) and 'source' in rel and 'target' in rel and 'type' in rel:
+                            # Handle dictionary format relationship
+                            source = rel['source']['name'] if isinstance(rel['source'], dict) else rel['source']
+                            target = rel['target']['name'] if isinstance(rel['target'], dict) else rel['target']
+                            rel_type = rel['type']
+                            
+                            # Extract properties if available
+                            rel_props = rel.get('properties', {})
+                            if 'confidenceScore' not in rel_props:
+                                rel_props['confidenceScore'] = 0.8
+                            
+                            # Create relationship data structure
+                            rel_data = {
+                                'source': {'name': source, 'type': rel.get('source', {}).get('type', 'Entity') if isinstance(rel.get('source'), dict) else 'Entity'},
+                                'target': {'name': target, 'type': rel.get('target', {}).get('type', 'Entity') if isinstance(rel.get('target'), dict) else 'Entity'},
+                                'type': rel_type,
+                                'properties': rel_props
+                            }
                             
                             # Add relationship
-                            rel_props = {"context": context, "confidenceScore": 0.8}
                             session.execute_write(
-                                lambda tx: add_relationship_to_neo4j(tx, source, rel_type, target, rel_props)
+                                lambda tx: add_relationship_to_neo4j(tx, rel_data)
                             )
+                            successful_relationships += 1
+                            logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
                     except Exception as e:
-                        logging.error(f"Error storing relationship {rel}: {str(e)}")
+                        rel_description = rel.get('description', 'unknown') if isinstance(rel, dict) else rel
+                        logging.error(f"Error storing relationship {rel_description}: {str(e)}")
+            
+            # Log relationship processing summary
+            logging.info(f"Successfully stored {successful_relationships} relationships out of {relationship_count} found")
+            if successful_relationships == 0 and relationship_count > 0:
+                logging.warning("No relationships were successfully stored. Check formats and database constraints.")
             
             # Store comprehensive person profiles
             if comprehensive_profiles.get('persons'):

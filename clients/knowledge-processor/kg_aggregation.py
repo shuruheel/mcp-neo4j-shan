@@ -33,16 +33,28 @@ class EntityAggregator:
             
         # Process entities
         for entity in data.get('entities', []):
-            entity_parts = entity.split('[Type:', 1)
-            if len(entity_parts) == 2:
-                entity_name = standardize_entity(entity_parts[0].strip())
-                entity_type = entity_parts[1].strip().rstrip(']')
-                
-                # Store entity information
-                if entity_name not in self.entities:
-                    self.entities[entity_name] = {'type': entity_type, 'mentions': 1}
+            if isinstance(entity, str):
+                # Handle string format
+                entity_parts = entity.split('[Type:', 1)
+                if len(entity_parts) == 2:
+                    entity_name = standardize_entity(entity_parts[0].strip())
+                    entity_type = entity_parts[1].strip().rstrip(']')
+                    
+                    # Store entity information
+                    if entity_name not in self.entities:
+                        self.entities[entity_name] = {'type': entity_type, 'mentions': 1}
+                    else:
+                        self.entities[entity_name]['mentions'] = self.entities[entity_name].get('mentions', 0) + 1
+            elif isinstance(entity, dict) and 'name' in entity:
+                # Handle dictionary format
+                entity_name = standardize_entity(entity['name'])
+                for key, value in entity.items():
+                    if key != 'name':
+                        self.entities[entity_name][key] = value
+                if 'mentions' not in self.entities[entity_name]:
+                    self.entities[entity_name]['mentions'] = 1
                 else:
-                    self.entities[entity_name]['mentions'] = self.entities[entity_name].get('mentions', 0) + 1
+                    self.entities[entity_name]['mentions'] += 1
         
         # Process events
         for event in data.get('events', []):
@@ -62,13 +74,22 @@ class EntityAggregator:
                 
         # Process concepts
         for concept in data.get('concepts', []):
-            concept_parts = concept.split(':', 1)
-            if len(concept_parts) == 2:
-                concept_name = standardize_entity(concept_parts[1].strip())
-                if concept_name not in self.concepts:
-                    self.concepts[concept_name] = {'mentions': 1}
-                else:
-                    self.concepts[concept_name]['mentions'] = self.concepts[concept_name].get('mentions', 0) + 1
+            if isinstance(concept, str):
+                # Handle string format
+                concept_parts = concept.split(':', 1)
+                if len(concept_parts) == 2:
+                    concept_name = standardize_entity(concept_parts[1].strip())
+                    if concept_name not in self.concepts:
+                        self.concepts[concept_name] = {'mentions': 1}
+                    else:
+                        self.concepts[concept_name]['mentions'] = self.concepts[concept_name].get('mentions', 0) + 1
+            elif isinstance(concept, dict) and 'name' in concept:
+                # Handle dictionary format
+                concept_name = standardize_entity(concept['name'])
+                for key, value in concept.items():
+                    if key != 'name':
+                        self.concepts[concept_name][key] = value
+                self.concepts[concept_name]['mentions'] = self.concepts[concept_name].get('mentions', 0) + 1
         
         # Process propositions
         for proposition in data.get('propositions', []):
@@ -181,6 +202,10 @@ class EntityAggregator:
                     if key != 'name':
                         self.reasoning_chains[chain_name][key] = value
                 self.reasoning_chains[chain_name]['mentions'] = self.reasoning_chains[chain_name].get('mentions', 0) + 1
+                
+                # Initialize steps collection for this chain if it doesn't exist
+                if 'steps' not in self.reasoning_chains[chain_name]:
+                    self.reasoning_chains[chain_name]['steps'] = []
         
         # Process reasoning steps
         for step in data.get('reasoningSteps', []):
@@ -195,14 +220,142 @@ class EntityAggregator:
                     if key != 'name':
                         self.reasoning_steps[step_name][key] = value
                 self.reasoning_steps[step_name]['mentions'] = self.reasoning_steps[step_name].get('mentions', 0) + 1
+                
+                # If step has a chain association, add it to the chain's steps collection
+                if 'chainName' in step:
+                    chain_name = standardize_entity(step['chainName'])
+                    # Ensure chain exists
+                    if chain_name not in self.reasoning_chains:
+                        self.reasoning_chains[chain_name] = {'mentions': 1}
+                    
+                    # Add step reference to chain
+                    if 'steps' not in self.reasoning_chains[chain_name]:
+                        self.reasoning_chains[chain_name]['steps'] = []
+                    
+                    # Add step to chain if not already present
+                    if step_name not in self.reasoning_chains[chain_name]['steps']:
+                        self.reasoning_chains[chain_name]['steps'].append(step_name)
         
         # Process person details
         for person_name, details in data.get('personDetails', {}).items():
-            # Merge details into existing person data
+            # Standardize person name
             person_std = standardize_entity(person_name)
+            
+            # Ensure person exists in the persons dictionary
+            if person_std not in self.persons:
+                self.persons[person_std] = {'mentions': 1}
+            
+            # Create structured fields if they don't exist
+            for field in ["personalityTraits", "cognitiveStyle", "emotionalProfile", 
+                         "relationalDynamics", "valueSystem", "psychologicalDevelopment", 
+                         "metaAttributes", "aliases"]:
+                if field not in self.persons[person_std]:
+                    if field in ["personalityTraits", "psychologicalDevelopment", "aliases"]:
+                        self.persons[person_std][field] = []
+                    else:
+                        self.persons[person_std][field] = {}
+            
+            # Handle each field appropriately based on type
             for key, value in details.items():
-                if key not in self.persons[person_std]:
+                # Skip name as it's already the key
+                if key == "name":
+                    continue
+                    
+                # Handle simple scalar fields
+                if key in ["biography", "modelConfidence", "evidenceStrength", 
+                          "emotionalDisposition", "interpersonalStyle", "ethicalFramework"]:
                     self.persons[person_std][key] = value
+                
+                # Handle array fields
+                elif key in ["aliases", "personalityTraits", "psychologicalDevelopment"]:
+                    if not isinstance(value, list):
+                        continue
+                        
+                    # Get existing items
+                    existing = self.persons[person_std].get(key, [])
+                    if not isinstance(existing, list):
+                        existing = []
+                    
+                    # Identify existing items by primary key
+                    if key == "personalityTraits":
+                        existing_names = [item.get('trait') for item in existing if isinstance(item, dict) and 'trait' in item]
+                        for item in value:
+                            if isinstance(item, dict) and 'trait' in item and item['trait'] not in existing_names:
+                                existing.append(item)
+                                existing_names.append(item['trait'])
+                    elif key == "psychologicalDevelopment":
+                        existing_periods = [item.get('period') for item in existing if isinstance(item, dict) and 'period' in item]
+                        for item in value:
+                            if isinstance(item, dict) and 'period' in item and item['period'] not in existing_periods:
+                                existing.append(item)
+                                existing_periods.append(item['period'])
+                    elif key == "aliases":
+                        for alias in value:
+                            if alias not in existing:
+                                existing.append(alias)
+                    
+                    # Update the field
+                    self.persons[person_std][key] = existing
+                
+                # Handle nested objects
+                elif key in ["cognitiveStyle", "emotionalProfile", "relationalDynamics", "valueSystem", "metaAttributes"]:
+                    if not isinstance(value, dict):
+                        continue
+                        
+                    # Get existing object
+                    existing = self.persons[person_std].get(key, {})
+                    if not isinstance(existing, dict):
+                        existing = {}
+                    
+                    # Handle special nested cases
+                    if key == "emotionalProfile" and "emotionalTriggers" in value:
+                        # Handle emotionalTriggers array within emotionalProfile
+                        if "emotionalTriggers" not in existing:
+                            existing["emotionalTriggers"] = []
+                            
+                        existing_triggers = [t.get('trigger') for t in existing.get("emotionalTriggers", []) 
+                                          if isinstance(t, dict) and 'trigger' in t]
+                                          
+                        for trigger in value.get("emotionalTriggers", []):
+                            if isinstance(trigger, dict) and 'trigger' in trigger and trigger['trigger'] not in existing_triggers:
+                                existing["emotionalTriggers"].append(trigger)
+                                existing_triggers.append(trigger['trigger'])
+                    
+                    if key == "relationalDynamics":
+                        # Handle loyalties array within relationalDynamics
+                        if "loyalties" in value:
+                            if "loyalties" not in existing:
+                                existing["loyalties"] = []
+                                
+                            existing_targets = [l.get('target') for l in existing.get("loyalties", []) 
+                                             if isinstance(l, dict) and 'target' in l]
+                                             
+                            for loyalty in value.get("loyalties", []):
+                                if isinstance(loyalty, dict) and 'target' in loyalty and loyalty['target'] not in existing_targets:
+                                    existing["loyalties"].append(loyalty)
+                                    existing_targets.append(loyalty['target'])
+                    
+                    if key == "valueSystem":
+                        # Handle coreValues array within valueSystem
+                        if "coreValues" in value:
+                            if "coreValues" not in existing:
+                                existing["coreValues"] = []
+                                
+                            existing_values = [v.get('value') for v in existing.get("coreValues", []) 
+                                            if isinstance(v, dict) and 'value' in v]
+                                            
+                            for core_value in value.get("coreValues", []):
+                                if isinstance(core_value, dict) and 'value' in core_value and core_value['value'] not in existing_values:
+                                    existing["coreValues"].append(core_value)
+                                    existing_values.append(core_value['value'])
+                    
+                    # Merge scalar properties
+                    for prop_key, prop_value in value.items():
+                        if not isinstance(prop_value, (list, dict)) and prop_key not in existing:
+                            existing[prop_key] = prop_value
+                    
+                    # Update the field
+                    self.persons[person_std][key] = existing
             
             # Increment mentions counter
             self.persons[person_std]['mentions'] = self.persons[person_std].get('mentions', 0) + 1
@@ -381,6 +534,50 @@ class EntityAggregator:
         for name, chain in self.reasoning_chains.items():
             if chain.get('mentions', 0) > 1:  # Only process chains with multiple mentions
                 chain['name'] = name
+                
+                # Include steps information if available
+                if 'steps' in chain and chain['steps']:
+                    # Collect step details
+                    step_details = []
+                    for step_name in chain['steps']:
+                        if step_name in self.reasoning_steps:
+                            step_info = self.reasoning_steps[step_name].copy()
+                            step_info['name'] = step_name
+                            
+                            # Ensure step has a link back to its chain
+                            step_info['chain'] = name
+                            
+                            # Ensure step has required attributes according to schema
+                            if 'content' not in step_info:
+                                step_info['content'] = f"Step in {name}"
+                            if 'stepType' not in step_info:
+                                step_info['stepType'] = "inference"
+                            if 'confidence' not in step_info:
+                                step_info['confidence'] = 0.7
+                                
+                            step_details.append(step_info)
+                    
+                    # Sort steps if they have order information
+                    step_details.sort(key=lambda x: x.get('order', 0))
+                    
+                    # Add steps to chain profile
+                    chain['stepDetails'] = step_details
+                    
+                    # Update numberOfSteps attribute
+                    chain['numberOfSteps'] = len(step_details)
+                
+                # Ensure chain has all required attributes according to schema
+                if 'description' not in chain or not chain['description']:
+                    chain['description'] = f"Reasoning process about {name}"
+                if 'conclusion' not in chain or not chain['conclusion']:
+                    chain['conclusion'] = "Unknown conclusion"  
+                if 'confidenceScore' not in chain:
+                    chain['confidenceScore'] = 0.7
+                if 'creator' not in chain:
+                    chain['creator'] = "AI System"
+                if 'methodology' not in chain:
+                    chain['methodology'] = "mixed"
+                    
                 profiles['reasoningChains'].append(chain)
         
         # Process important reasoning steps
