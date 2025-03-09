@@ -161,6 +161,31 @@ def add_to_neo4j(tx, data):
 
 def add_entity_to_neo4j(tx, entity_data):
     """Add a basic entity to Neo4j"""
+    # Skip if there's no name or if it's just an attribute
+    if not entity_data.get("name"):
+        logging.warning(f"Skipping entity with no name: {entity_data}")
+        return False
+        
+    # Skip if the name appears to be an attribute
+    name = entity_data.get("name", "")
+    if name.lower().startswith("observations:") or name.lower().startswith("keycontributions:"):
+        logging.warning(f"Skipping entity that appears to be an attribute: {name}")
+        return False
+        
+    # Convert observations to comma-separated string if it's a list
+    observations = entity_data.get("observations", [])
+    if isinstance(observations, list):
+        observations_str = "; ".join(observations)
+    else:
+        observations_str = str(observations)
+        
+    # Same for key contributions
+    key_contributions = entity_data.get("keyContributions", [])
+    if isinstance(key_contributions, list):
+        key_contributions_str = "; ".join(key_contributions)
+    else:
+        key_contributions_str = str(key_contributions)
+    
     query = """
     MERGE (e:Entity {name: $name})
     SET e.nodeType = $nodeType,
@@ -170,38 +195,27 @@ def add_entity_to_neo4j(tx, entity_data):
         e.source = $source,
         e.biography = $biography,
         e.keyContributions = $keyContributions,
+        e.observations = $observations,
         e.emotionalValence = $emotionalValence,
         e.emotionalArousal = $emotionalArousal
     RETURN e
     """
     
-    # Convert observations to array if it's a string
-    observations = entity_data.get("observations", [])
-    if isinstance(observations, str):
-        observations = [observations]
-    
     result = tx.run(query,
-           name=entity_data.get("name", ""),
+           name=name,
            nodeType=entity_data.get("nodeType", "Entity"),
            subType=entity_data.get("subType", ""),
            description=entity_data.get("description", ""),
            confidence=entity_data.get("confidence", 0.0),
            source=entity_data.get("source", ""),
            biography=entity_data.get("biography", ""),
-           keyContributions=entity_data.get("keyContributions", []),
+           keyContributions=key_contributions_str,
+           observations=observations_str,
            emotionalValence=entity_data.get("emotionalValence", 0.0),
            emotionalArousal=entity_data.get("emotionalArousal", 0.0))
-           
-    # Add observations as separate relationship for better querying
-    if observations:
-        for observation in observations:
-            tx.run("""
-            MATCH (e:Entity {name: $name})
-            MERGE (o:Observation {content: $content})
-            MERGE (e)-[r:HAS_OBSERVATION]->(o)
-            """, name=entity_data.get("name", ""), content=observation)
     
     summary = result.consume()
+    logging.info(f"Entity created/updated: {name} with observations: {observations_str[:100]}...")
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
 
 def process_person_entity(tx, person_data):
@@ -211,47 +225,54 @@ def process_person_entity(tx, person_data):
         "name": person_data.get("name", ""),
         "nodeType": "Entity",
         "subType": "Person",
-        "description": person_data.get("Biography", "")
+        "description": person_data.get("biography", "")
     }
     add_entity_to_neo4j(tx, entity_data)
     
-    # Prepare person data in the correct format for Neo4j
-    # Convert complex structures to JSON strings for storage
-    personalityTraitsJson = json.dumps(person_data.get("Personality Traits", []))
-    cognitiveStyleJson = json.dumps(person_data.get("Cognitive Style", {}))
-    emotionalProfileJson = json.dumps(person_data.get("Emotional Profile", {}))
-    relationalDynamicsJson = json.dumps(person_data.get("Relational Dynamics", {}))
-    valueSystemJson = json.dumps(person_data.get("Value System", {}))
-    psychologicalDevelopmentJson = json.dumps(person_data.get("Psychological Development", []))
-    metaAttributesJson = json.dumps(person_data.get("Meta Attributes", {}))
+    # Create a standardized personDetails structure
+    person_details = {
+        "name": person_data.get("name", ""),
+        "biography": person_data.get("biography", ""),
+        "aliases": person_data.get("aliases", []),
+        "personalityTraits": person_data.get("personalityTraits", []),
+        "cognitiveStyle": person_data.get("cognitiveStyle", {}),
+        "emotionalProfile": {
+            "emotionalDisposition": person_data.get("emotionalDisposition", ""),
+            "emotionalTriggers": person_data.get("emotionalTriggers", [])
+        },
+        "relationalDynamics": {
+            "interpersonalStyle": person_data.get("interpersonalStyle", ""),
+            "powerDynamics": person_data.get("powerDynamics", {}),
+            "loyalties": person_data.get("loyalties", [])
+        },
+        "valueSystem": {
+            "coreValues": person_data.get("coreValues", []),
+            "ethicalFramework": person_data.get("ethicalFramework", "")
+        },
+        "psychologicalDevelopment": person_data.get("psychologicalDevelopment", []),
+        "metaAttributes": person_data.get("metaAttributes", {}),
+        "modelConfidence": person_data.get("modelConfidence", 0.0),
+        "evidenceStrength": person_data.get("evidenceStrength", 0.0)
+    }
+
+    # Convert the entire person details object to JSON for storage
+    person_details_json = json.dumps(person_details)
     
-    # Then add person-specific attributes as properties
+    # Update the person entity with the details
     query = """
     MATCH (p:Entity {name: $name})
     SET p.biography = $biography,
-        p.personalityTraits = $personalityTraits,
-        p.cognitiveStyle = $cognitiveStyle,
-        p.emotionalProfile = $emotionalProfile,
-        p.relationalDynamics = $relationalDynamics,
-        p.valueSystem = $valueSystem,
-        p.psychologicalDevelopment = $psychologicalDevelopment,
-        p.metaAttributes = $metaAttributes
+        p.personDetails = $personDetails
     """
     
     tx.run(query,
            name=person_data.get("name", ""),
-           biography=person_data.get("Biography", ""),
-           personalityTraits=personalityTraitsJson,
-           cognitiveStyle=cognitiveStyleJson,
-           emotionalProfile=emotionalProfileJson,
-           relationalDynamics=relationalDynamicsJson,
-           valueSystem=valueSystemJson,
-           psychologicalDevelopment=psychologicalDevelopmentJson,
-           metaAttributes=metaAttributesJson)
+           biography=person_data.get("biography", ""),
+           personDetails=person_details_json)
     
     # Create individual personality trait nodes and connect them
-    if "Personality Traits" in person_data and isinstance(person_data["Personality Traits"], list):
-        for trait_data in person_data["Personality Traits"]:
+    if "personalityTraits" in person_data and isinstance(person_data["personalityTraits"], list):
+        for trait_data in person_data["personalityTraits"]:
             if isinstance(trait_data, dict) and "trait" in trait_data:
                 trait_name = trait_data["trait"]
                 # Create a trait node if it doesn't exist
@@ -261,67 +282,17 @@ def process_person_entity(tx, person_data):
                 """
                 tx.run(trait_query, traitName=trait_name)
                 
-                # Connect the person to the trait
+                # Connect the person to the trait with confidence if available
+                confidence = trait_data.get("confidence", 0.8)
                 rel_query = """
                 MATCH (p:Entity {name: $personName})
                 MATCH (t:Trait {name: $traitName})
                 MERGE (p)-[r:EXHIBITS_TRAIT]->(t)
                 SET r.confidence = $confidence
                 """
-                confidence = trait_data.get("confidence", 0.5)
-                tx.run(rel_query, personName=person_data.get("name", ""), 
-                      traitName=trait_name, confidence=confidence)
+                tx.run(rel_query, personName=person_data.get("name", ""), traitName=trait_name, confidence=confidence)
     
-    # If there are core values, create Value nodes and connect them
-    if "Value System" in person_data and isinstance(person_data["Value System"], dict):
-        core_values = person_data["Value System"].get("coreValues", [])
-        if isinstance(core_values, list):
-            for value_data in core_values:
-                if isinstance(value_data, dict) and "value" in value_data:
-                    value_name = value_data["value"]
-                    # Create a value node if it doesn't exist
-                    value_query = """
-                    MERGE (v:Value {name: $valueName})
-                    ON CREATE SET v.nodeType = 'Concept'
-                    """
-                    tx.run(value_query, valueName=value_name)
-                    
-                    # Connect the person to the value
-                    rel_query = """
-                    MATCH (p:Entity {name: $personName})
-                    MATCH (v:Value {name: $valueName})
-                    MERGE (p)-[r:VALUES]->(v)
-                    SET r.importance = $importance,
-                        r.consistency = $consistency
-                    """
-                    importance = value_data.get("importance", 0.5)
-                    consistency = value_data.get("consistency", 0.5)
-                    tx.run(rel_query, personName=person_data.get("name", ""), 
-                          valueName=value_name, importance=importance, consistency=consistency)
-    
-    # If there are loyalties, create nodes for loyalty targets and connect them
-    if "Relational Dynamics" in person_data and isinstance(person_data["Relational Dynamics"], dict):
-        loyalties = person_data["Relational Dynamics"].get("loyalties", [])
-        if isinstance(loyalties, list):
-            for loyalty_data in loyalties:
-                if isinstance(loyalty_data, dict) and "target" in loyalty_data:
-                    target_name = loyalty_data["target"]
-                    # Create a generic entity for the loyalty target
-                    target_query = """
-                    MERGE (t:Entity {name: $targetName})
-                    """
-                    tx.run(target_query, targetName=target_name)
-                    
-                    # Connect the person to the loyalty target
-                    rel_query = """
-                    MATCH (p:Entity {name: $personName})
-                    MATCH (t:Entity {name: $targetName})
-                    MERGE (p)-[r:LOYAL_TO]->(t)
-                    SET r.strength = $strength
-                    """
-                    strength = loyalty_data.get("strength", 0.5)
-                    tx.run(rel_query, personName=person_data.get("name", ""), 
-                          targetName=target_name, strength=strength)
+    return True
 
 def add_location_to_neo4j(tx, location_data):
     """Add a location entity to Neo4j"""
@@ -816,8 +787,8 @@ def add_relationship_to_neo4j(tx, relationship_data):
     
     # Validate relationship type against schema
     if rel_type not in RELATIONSHIP_TYPES:
-        logging.warning(f"Unknown relationship type: {rel_type}, defaulting to RELATED_TO")
-        rel_type = "RELATED_TO"
+        logging.warning(f"Non-standard relationship type: {rel_type}, will create it anyway")
+        # Don't default to RELATED_TO, use the type as provided
     
     # Extract properties
     properties = relationship_data.get('properties', {})

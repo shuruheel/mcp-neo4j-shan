@@ -225,19 +225,51 @@ def parse_gpt4_response(response):
             if current_section == "entities":
                 # Parse entity data with comprehensive attributes
                 entity_data = {
-                    "name": content,
                     "nodeType": "Entity",
                     "observations": [],
                     "confidence": 0.0,
                 }
                 
-                # Extract entity name and type
-                if "[Type:" in content:
-                    entity_parts = content.split("[Type:", 1)
-                    entity_name = entity_parts[0].strip()
-                    entity_type = entity_parts[1].strip().rstrip("]")
-                    entity_data["name"] = entity_name
-                    entity_data["subType"] = entity_type
+                # Extract entity name, type and description
+                entity_parts = content.split(" - ", 1)
+                entity_with_type = entity_parts[0].strip()
+                
+                # Extract name and type
+                if "(" in entity_with_type and ")" in entity_with_type:
+                    name_parts = entity_with_type.split("(", 1)
+                    entity_data["name"] = name_parts[0].strip()
+                    entity_data["subType"] = name_parts[1].rstrip(")").strip()
+                else:
+                    entity_data["name"] = entity_with_type
+                
+                # Extract description if available
+                if len(entity_parts) > 1 and entity_parts[1].strip():
+                    description = entity_parts[1].strip()
+                    # Check if this is an observation rather than a separate entity
+                    if not ":" in description:
+                        entity_data["observations"].append(description)
+                    else:
+                        # This might be a property description
+                        prop_parts = description.split(":", 1)
+                        if len(prop_parts) == 2 and prop_parts[0].strip() in [
+                            "Observations", "Key Contributions", "Biography", "Description"
+                        ]:
+                            prop_name = prop_parts[0].strip()
+                            prop_value = prop_parts[1].strip()
+                            
+                            if prop_name == "Observations":
+                                entity_data["observations"].append(prop_value)
+                            elif prop_name == "Key Contributions":
+                                if "keyContributions" not in entity_data:
+                                    entity_data["keyContributions"] = []
+                                entity_data["keyContributions"].append(prop_value)
+                            elif prop_name == "Biography":
+                                entity_data["biography"] = prop_value
+                            elif prop_name == "Description":
+                                entity_data["description"] = prop_value
+                        else:
+                            # Just treat as an observation if we don't recognize the format
+                            entity_data["observations"].append(description)
                 
                 # Look ahead for additional entity details in subsequent lines
                 j = i + 1
@@ -1036,115 +1068,94 @@ def parse_gpt4_response(response):
                 
                 result["reasoningSteps"].append(step_data)
             elif current_section == "relationships":
-                # Parse relationship data with comprehensive properties
-                relationship_data = {
-                    "description": content,
-                    "contextType": "associative",  # Default type
-                    "memoryAids": []
-                }
+                # Parse relationship data with proper structure for Neo4j
+                relationship_data = {"description": content}
                 
-                # Extract source, target, and relationship type
-                if " -> " in content:
-                    source_part, target_part = content.split(" -> ", 1)
-                    
-                    # Extract source entity
-                    source_entity = source_part.strip()
-                    if "(" in source_entity and ")" in source_entity:
-                        source_name = source_entity.split("(", 1)[0].strip()
-                        source_type = source_entity.split("(", 1)[1].rstrip(")").strip()
-                        relationship_data["source"] = {"name": source_name, "type": source_type}
-                    else:
-                        relationship_data["source"] = {"name": source_entity, "type": "Entity"}
-                    
-                    # Extract target and relationship type
-                    if " [" in target_part and "]" in target_part:
-                        rel_parts = target_part.split(" [", 1)
-                        rel_type = rel_parts[1].split("]", 1)[0].strip()
-                        target_entity = rel_parts[1].split("]", 1)[1].strip()
+                # Try different relationship formats
+                # Format 1: [Entity1] --RELATIONSHIP_TYPE--> [Entity2]
+                rel_match = re.match(r'\[(.+?)\]\s*--(.+?)-->\s*\[(.+?)\]', content)
+                
+                # Format 2: SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType)
+                if not rel_match:
+                    rel_match = re.match(r'(.+?)\(\s*(.+?)\s*\)\s*->\s*\[(.+?)\]\s*(.+?)\(\s*(.+?)\s*\)', content)
+                    if rel_match:
+                        source_name = rel_match.group(1).strip()
+                        source_type = rel_match.group(2).strip()
+                        rel_type = rel_match.group(3).strip()
+                        target_name = rel_match.group(4).strip()
+                        target_type = rel_match.group(5).strip()
                         
+                        relationship_data["source"] = {"name": source_name, "type": source_type}
+                        relationship_data["target"] = {"name": target_name, "type": target_type}
                         relationship_data["type"] = rel_type
                         
-                        # Extract target entity details
-                        if "(" in target_entity and ")" in target_entity:
-                            target_name = target_entity.split("(", 1)[0].strip()
-                            target_type = target_entity.split("(", 1)[1].rstrip(")").strip()
-                            relationship_data["target"] = {"name": target_name, "type": target_type}
-                        else:
-                            relationship_data["target"] = {"name": target_entity, "type": "Entity"}
-                    else:
-                        # Handle case where relationship type isn't explicitly marked
-                        relationship_data["target"] = {"name": target_part.strip(), "type": "Entity"}
-                        relationship_data["type"] = "RELATED_TO"  # Default relationship type
+                        # Extract properties if they exist
+                        if "{" in content and "}" in content:
+                            props_str = content.split("{", 1)[1].split("}", 1)[0]
+                            props = {}
+                            for prop in props_str.split(","):
+                                if ":" in prop:
+                                    key, value = prop.split(":", 1)
+                                    props[key.strip()] = value.strip()
+                            relationship_data["properties"] = props
+                        
+                        result["relationships"].append(relationship_data)
+                        
+                # Original format parsing
+                elif rel_match:
+                    source_part = rel_match.group(1).strip()
+                    rel_type = rel_match.group(2).strip()
+                    target_part = rel_match.group(3).strip()
                     
-                    # Add properties if they exist
-                    if "{" in content and "}" in content:
-                        props_str = content.split("{", 1)[1].split("}", 1)[0]
-                        props = {}
-                        for prop in props_str.split(","):
-                            if ":" in prop:
-                                key, value = prop.split(":", 1)
-                                props[key.strip()] = value.strip()
-                        relationship_data["properties"] = props
-
-                    # Look ahead for additional relationship details
-                    j = i + 1
-                    while j < len(lines) and (
-                        lines[j].strip().startswith("Context:") or
-                        lines[j].strip().startswith("Confidence:") or
-                        lines[j].strip().startswith("Sources:") or
-                        lines[j].strip().startswith("Weight:") or
-                        lines[j].strip().startswith("Context Type:") or
-                        lines[j].strip().startswith("Context Strength:") or
-                        lines[j].strip().startswith("Memory Aids:") or
-                        lines[j].strip().startswith("Relationship Category:") or
-                        lines[j].strip() == ""):
-                        
-                        detail_line = lines[j].strip()
-                        
-                        if detail_line.startswith("Context:"):
-                            relationship_data["context"] = detail_line[len("Context:"):].strip()
-                        elif detail_line.startswith("Confidence:"):
-                            confidence_text = detail_line[len("Confidence:"):].strip()
-                            try:
-                                relationship_data["confidenceScore"] = float(confidence_text)
-                            except ValueError:
-                                # Convert text confidence to numeric
-                                if confidence_text.lower() == "high":
-                                    relationship_data["confidenceScore"] = 0.9
-                                elif confidence_text.lower() == "medium":
-                                    relationship_data["confidenceScore"] = 0.6
-                                elif confidence_text.lower() == "low":
-                                    relationship_data["confidenceScore"] = 0.3
-                        elif detail_line.startswith("Sources:"):
-                            sources = detail_line[len("Sources:"):].strip()
-                            relationship_data["sources"] = [s.strip() for s in sources.split(";")]
-                        elif detail_line.startswith("Weight:"):
-                            try:
-                                relationship_data["weight"] = float(detail_line[len("Weight:"):].strip())
-                            except ValueError:
-                                relationship_data["weight"] = 0.5  # Default
-                        elif detail_line.startswith("Context Type:"):
-                            context_type = detail_line[len("Context Type:"):].strip().lower()
-                            if context_type in ["hierarchical", "associative", "causal", "temporal", "analogical", "attributive"]:
-                                relationship_data["contextType"] = context_type
-                        elif detail_line.startswith("Context Strength:"):
-                            try:
-                                relationship_data["contextStrength"] = float(detail_line[len("Context Strength:"):].strip())
-                            except ValueError:
-                                relationship_data["contextStrength"] = 0.5  # Default
-                        elif detail_line.startswith("Memory Aids:"):
-                            memory_aids = detail_line[len("Memory Aids:"):].strip()
-                            relationship_data["memoryAids"] = [ma.strip() for ma in memory_aids.split(";")]
-                        elif detail_line.startswith("Relationship Category:"):
-                            relationship_data["relationshipCategory"] = detail_line[len("Relationship Category:"):].strip()
-                        
-                        j += 1
+                    # Extract source entity
+                    relationship_data["source"] = {"name": source_part, "type": "Entity"}
                     
-                    # Skip the detail lines that we've already processed
-                    if j > i + 1:
-                        i = j - 1
+                    # Set relationship type
+                    relationship_data["type"] = rel_type
+                    
+                    # Extract target entity
+                    relationship_data["target"] = {"name": target_part, "type": "Entity"}
+                    
+                    # Extract context if available
+                    if "(" in content and ")" in content and "Context:" in content:
+                        context_match = re.search(r'\(Context: (.+?)\)', content)
+                        if context_match:
+                            context = context_match.group(1).strip()
+                            if "properties" not in relationship_data:
+                                relationship_data["properties"] = {}
+                            relationship_data["properties"]["context"] = context
                     
                     result["relationships"].append(relationship_data)
+                
+                # Another common format: SourceEntity -> RELATIONSHIP_TYPE -> TargetEntity
+                elif " -> " in content:
+                    parts = content.split(" -> ")
+                    if len(parts) == 3:  # SourceEntity -> REL_TYPE -> TargetEntity
+                        source = parts[0].strip()
+                        rel_type = parts[1].strip()
+                        target = parts[2].strip()
+                        
+                        # Extract source type if available
+                        source_type = "Entity"
+                        if "(" in source and ")" in source:
+                            source_type_match = re.search(r'\(([^)]+)\)', source)
+                            if source_type_match:
+                                source_type = source_type_match.group(1).strip()
+                                source = re.sub(r'\s*\([^)]+\)', '', source).strip()
+                        
+                        # Extract target type if available
+                        target_type = "Entity"
+                        if "(" in target and ")" in target:
+                            target_type_match = re.search(r'\(([^)]+)\)', target)
+                            if target_type_match:
+                                target_type = target_type_match.group(1).strip()
+                                target = re.sub(r'\s*\([^)]+\)', '', target).strip()
+                        
+                        relationship_data["source"] = {"name": source, "type": source_type}
+                        relationship_data["target"] = {"name": target, "type": target_type}
+                        relationship_data["type"] = rel_type
+                        
+                        result["relationships"].append(relationship_data)
                 else:
                     # Handle unstructured relationship descriptions
                     logging.warning(f"Relationship not in expected format: {content}")
@@ -1309,15 +1320,21 @@ async def extract_knowledge(text_chunk):
     """Extract knowledge entities from text using GPT-4 with retries"""
     # Update the prompt to include guidance on relationship formatting
     relationship_guidance = """
-    For relationships, please format them following Neo4j best practices:
-    - SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {{property1: value1, property2: value2}}
+    For relationships, please format them following one of these patterns:
     
-    Use specific, descriptive relationship types (verbs in UPPERCASE_WITH_UNDERSCORES).
-    Choose relationship direction based on the most natural query direction.
+    FORMAT 1: [SourceEntity] --RELATIONSHIP_TYPE--> [TargetEntity] (Context: additional information)
     Examples:
-    - John Smith(Person) -> [WORKS_FOR] Acme Inc(Organization) {{since: "2020", position: "Senior Developer"}}
-    - Climate Change(Concept) -> [IMPACTS] Polar Ice Caps(Location) {{severity: "high", timeframe: "ongoing"}}
-    - Einstein(Person) -> [DEVELOPED] Theory of Relativity(Concept) {{year: "1915"}}
+    - [Albert Einstein] --DEVELOPED--> [Theory of Relativity] (Context: published in 1915)
+    - [Climate Change] --IMPACTS--> [Polar Ice Caps] (Context: causing accelerated melting)
+    
+    FORMAT 2: SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {property1: value1, property2: value2}
+    Examples:
+    - John Smith(Person) -> [WORKS_FOR] Acme Inc(Organization) {since: "2020", position: "Senior Developer", confidenceScore: 0.9}
+    - Climate Change(Concept) -> [IMPACTS] Polar Ice Caps(Location) {severity: "high", timeframe: "ongoing", confidenceScore: 0.95}
+    
+    Use specific relationship types (verbs in UPPERCASE_WITH_UNDERSCORES).
+    Choose relationship direction based on the most natural flow of information.
+    Add confidence scores where possible (0.0-1.0 scale).
     """
     
     # Add guidance for structured person details
@@ -1325,26 +1342,65 @@ async def extract_knowledge(text_chunk):
     IMPORTANT: When extracting Person Details, return structured data in valid JSON format.
     Use proper nesting of objects and arrays, and make sure all JSON is well-formed.
     
-    For Person Details, be sure to include:
-    1. All sections: Personality Traits, Cognitive Style, Emotional Profile, Relational Dynamics, 
-       Value System, Psychological Development, and Meta Attributes.
-    2. Format arrays as valid JSON arrays with objects: [{{"key": "value"}}, {{"key": "value"}}]
-    3. Format objects as valid JSON objects: {{"key1": "value1", "key2": {{"nestedKey": "nestedValue"}}}}
-    4. Ensure all strings are properly quoted and all objects/arrays properly closed.
+    For Person Details, implement the COMPLETE schema, structured exactly as follows:
     
-    Example of well-structured Person Details format:
-    Person Details for John Doe:
-    - Biography: Accomplished scientist and philanthropist.
-    - Personality Traits: [
-        {{"trait": "Analytical", "evidence": ["decision-making pattern", "problem-solving approach"], "confidence": 0.9}},
-        {{"trait": "Compassionate", "evidence": ["philanthropic activities"], "confidence": 0.8}}
-      ]
-    - Cognitive Style: {{
-        "decisionMaking": "Data-driven", 
+    ```json
+    {
+      "name": "Person Name",
+      "biography": "Brief biographical summary",
+      "aliases": ["alternative name", "nickname"],
+      "personalityTraits": [
+        {"trait": "Analytical", "evidence": ["evidence1", "evidence2"], "confidence": 0.9},
+        {"trait": "Compassionate", "evidence": ["evidence3"], "confidence": 0.8}
+      ],
+      "cognitiveStyle": {
+        "decisionMaking": "Data-driven",
         "problemSolving": "Systematic",
         "worldview": "Scientific realism",
-        "biases": ["confirmation bias"]
-      }}
+        "biases": ["confirmation bias", "recency bias"]
+      },
+      "emotionalProfile": {
+        "emotionalDisposition": "Reserved",
+        "emotionalTriggers": [
+          {"trigger": "Personal criticism", "reaction": "Withdrawal", "evidence": ["example situation"]}
+        ]
+      },
+      "relationalDynamics": {
+        "interpersonalStyle": "Collaborative",
+        "powerDynamics": {
+          "authorityResponse": "Respectful but questioning",
+          "subordinateManagement": "Mentoring approach",
+          "negotiationTactics": ["Data-backed argumentation", "Compromise-oriented"]
+        },
+        "loyalties": [
+          {"target": "Scientific integrity", "strength": 0.9, "evidence": ["refused to falsify data"]}
+        ]
+      },
+      "valueSystem": {
+        "coreValues": [
+          {"value": "Truth", "importance": 0.9, "consistency": 0.8}
+        ],
+        "ethicalFramework": "Utilitarian with deontological constraints"
+      },
+      "psychologicalDevelopment": [
+        {"period": "Early career", "changes": "Shifted from theoretical to applied focus", "catalysts": ["event1", "event2"]}
+      ],
+      "metaAttributes": {
+        "authorBias": 0.1,
+        "portrayalConsistency": 0.8,
+        "controversialAspects": ["disputed claim"]
+      },
+      "modelConfidence": 0.85,
+      "evidenceStrength": 0.75
+    }
+    ```
+    
+    Key requirements:
+    1. For each person you extract, create a complete section labeled "Person Details for [Name]:"
+    2. Follow the EXACT field names shown in the template (case-sensitive)
+    3. Fill as many fields as possible based on available information in the text
+    4. Leave fields as empty arrays [] or empty objects {} if no information is available
+    5. Ensure all JSON is properly quoted and structured for error-free parsing
     """
     
     # Append both guidance sections to the extraction prompt

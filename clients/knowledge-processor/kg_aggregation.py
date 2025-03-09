@@ -238,95 +238,124 @@ class EntityAggregator:
         
         # Process person details
         for person_name, details in data.get('personDetails', {}).items():
-            # Merge details into existing person data
+            # Standardize person name
             person_std = standardize_entity(person_name)
             
-            # Handle complex structures properly
+            # Ensure person exists in the persons dictionary
+            if person_std not in self.persons:
+                self.persons[person_std] = {'mentions': 1}
+            
+            # Create structured fields if they don't exist
+            for field in ["personalityTraits", "cognitiveStyle", "emotionalProfile", 
+                         "relationalDynamics", "valueSystem", "psychologicalDevelopment", 
+                         "metaAttributes", "aliases"]:
+                if field not in self.persons[person_std]:
+                    if field in ["personalityTraits", "psychologicalDevelopment", "aliases"]:
+                        self.persons[person_std][field] = []
+                    else:
+                        self.persons[person_std][field] = {}
+            
+            # Handle each field appropriately based on type
             for key, value in details.items():
-                # Handle string fields
-                if isinstance(value, str) or (key != "Personality Traits" and 
-                                            key != "Emotional Profile" and 
-                                            key != "Relational Dynamics" and 
-                                            key != "Value System" and 
-                                            key != "Psychological Development" and 
-                                            key != "Meta Attributes" and
-                                            key != "Cognitive Style"):
-                    if key not in self.persons[person_std]:
-                        self.persons[person_std][key] = value
+                # Skip name as it's already the key
+                if key == "name":
+                    continue
+                    
+                # Handle simple scalar fields
+                if key in ["biography", "modelConfidence", "evidenceStrength", 
+                          "emotionalDisposition", "interpersonalStyle", "ethicalFramework"]:
+                    self.persons[person_std][key] = value
                 
                 # Handle array fields
-                elif isinstance(value, list):
-                    # For array fields like Personality Traits
-                    if key not in self.persons[person_std]:
-                        self.persons[person_std][key] = value
-                    else:
-                        # If exists, extend the array, avoiding duplicates
-                        existing_items = self.persons[person_std][key]
-                        if isinstance(existing_items, list):
-                            # For personality traits, merge by trait name
-                            if key == "Personality Traits":
-                                # Extract existing trait names
-                                existing_trait_names = [item.get('trait') for item in existing_items 
-                                                      if isinstance(item, dict) and 'trait' in item]
-                                # Add only new traits
-                                for trait in value:
-                                    if isinstance(trait, dict) and 'trait' in trait:
-                                        if trait['trait'] not in existing_trait_names:
-                                            existing_items.append(trait)
-                            # For emotional triggers and other arrays of objects
-                            elif key == "Emotional Profile" and "emotionalTriggers" in value:
-                                if "emotionalTriggers" not in self.persons[person_std].get(key, {}):
-                                    if key not in self.persons[person_std]:
-                                        self.persons[person_std][key] = {}
-                                    self.persons[person_std][key]["emotionalTriggers"] = value["emotionalTriggers"]
-                                else:
-                                    existing_triggers = self.persons[person_std][key]["emotionalTriggers"]
-                                    existing_trigger_names = [t.get('trigger') for t in existing_triggers 
-                                                           if isinstance(t, dict) and 'trigger' in t]
-                                    for trigger in value.get("emotionalTriggers", []):
-                                        if isinstance(trigger, dict) and 'trigger' in trigger:
-                                            if trigger['trigger'] not in existing_trigger_names:
-                                                existing_triggers.append(trigger)
-                            # For psychological development array
-                            elif key == "Psychological Development":
-                                # Just append new periods that don't exist yet
-                                existing_periods = [item.get('period') for item in existing_items
-                                                  if isinstance(item, dict) and 'period' in item]
-                                for period_item in value:
-                                    if isinstance(period_item, dict) and 'period' in period_item:
-                                        if period_item['period'] not in existing_periods:
-                                            existing_items.append(period_item)
-                            # For other array types, just extend
-                            else:
-                                for item in value:
-                                    if item not in existing_items:
-                                        existing_items.append(item)
-                        else:
-                            # If existing value is not a list, replace it
-                            self.persons[person_std][key] = value
+                elif key in ["aliases", "personalityTraits", "psychologicalDevelopment"]:
+                    if not isinstance(value, list):
+                        continue
+                        
+                    # Get existing items
+                    existing = self.persons[person_std].get(key, [])
+                    if not isinstance(existing, list):
+                        existing = []
+                    
+                    # Identify existing items by primary key
+                    if key == "personalityTraits":
+                        existing_names = [item.get('trait') for item in existing if isinstance(item, dict) and 'trait' in item]
+                        for item in value:
+                            if isinstance(item, dict) and 'trait' in item and item['trait'] not in existing_names:
+                                existing.append(item)
+                                existing_names.append(item['trait'])
+                    elif key == "psychologicalDevelopment":
+                        existing_periods = [item.get('period') for item in existing if isinstance(item, dict) and 'period' in item]
+                        for item in value:
+                            if isinstance(item, dict) and 'period' in item and item['period'] not in existing_periods:
+                                existing.append(item)
+                                existing_periods.append(item['period'])
+                    elif key == "aliases":
+                        for alias in value:
+                            if alias not in existing:
+                                existing.append(alias)
+                    
+                    # Update the field
+                    self.persons[person_std][key] = existing
                 
-                # Handle object fields (nested dictionaries)
-                elif isinstance(value, dict):
-                    # For object fields like Cognitive Style
-                    if key not in self.persons[person_std]:
-                        self.persons[person_std][key] = value
-                    else:
-                        # Merge dictionaries, favoring new values for simple keys
-                        existing_obj = self.persons[person_std][key]
-                        if isinstance(existing_obj, dict):
-                            # Deep merge of nested objects
-                            for obj_key, obj_value in value.items():
-                                # If nested object exists, merge it
-                                if obj_key in existing_obj and isinstance(obj_value, dict) and isinstance(existing_obj[obj_key], dict):
-                                    for inner_key, inner_value in obj_value.items():
-                                        if inner_key not in existing_obj[obj_key]:
-                                            existing_obj[obj_key][inner_key] = inner_value
-                                # If field doesn't exist or is not an object, replace/add it
-                                else:
-                                    existing_obj[obj_key] = obj_value
-                        else:
-                            # If existing value is not a dictionary, replace it
-                            self.persons[person_std][key] = value
+                # Handle nested objects
+                elif key in ["cognitiveStyle", "emotionalProfile", "relationalDynamics", "valueSystem", "metaAttributes"]:
+                    if not isinstance(value, dict):
+                        continue
+                        
+                    # Get existing object
+                    existing = self.persons[person_std].get(key, {})
+                    if not isinstance(existing, dict):
+                        existing = {}
+                    
+                    # Handle special nested cases
+                    if key == "emotionalProfile" and "emotionalTriggers" in value:
+                        # Handle emotionalTriggers array within emotionalProfile
+                        if "emotionalTriggers" not in existing:
+                            existing["emotionalTriggers"] = []
+                            
+                        existing_triggers = [t.get('trigger') for t in existing.get("emotionalTriggers", []) 
+                                          if isinstance(t, dict) and 'trigger' in t]
+                                          
+                        for trigger in value.get("emotionalTriggers", []):
+                            if isinstance(trigger, dict) and 'trigger' in trigger and trigger['trigger'] not in existing_triggers:
+                                existing["emotionalTriggers"].append(trigger)
+                                existing_triggers.append(trigger['trigger'])
+                    
+                    if key == "relationalDynamics":
+                        # Handle loyalties array within relationalDynamics
+                        if "loyalties" in value:
+                            if "loyalties" not in existing:
+                                existing["loyalties"] = []
+                                
+                            existing_targets = [l.get('target') for l in existing.get("loyalties", []) 
+                                             if isinstance(l, dict) and 'target' in l]
+                                             
+                            for loyalty in value.get("loyalties", []):
+                                if isinstance(loyalty, dict) and 'target' in loyalty and loyalty['target'] not in existing_targets:
+                                    existing["loyalties"].append(loyalty)
+                                    existing_targets.append(loyalty['target'])
+                    
+                    if key == "valueSystem":
+                        # Handle coreValues array within valueSystem
+                        if "coreValues" in value:
+                            if "coreValues" not in existing:
+                                existing["coreValues"] = []
+                                
+                            existing_values = [v.get('value') for v in existing.get("coreValues", []) 
+                                            if isinstance(v, dict) and 'value' in v]
+                                            
+                            for core_value in value.get("coreValues", []):
+                                if isinstance(core_value, dict) and 'value' in core_value and core_value['value'] not in existing_values:
+                                    existing["coreValues"].append(core_value)
+                                    existing_values.append(core_value['value'])
+                    
+                    # Merge scalar properties
+                    for prop_key, prop_value in value.items():
+                        if not isinstance(prop_value, (list, dict)) and prop_key not in existing:
+                            existing[prop_key] = prop_value
+                    
+                    # Update the field
+                    self.persons[person_std][key] = existing
             
             # Increment mentions counter
             self.persons[person_std]['mentions'] = self.persons[person_std].get('mentions', 0) + 1

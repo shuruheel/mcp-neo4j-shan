@@ -147,40 +147,70 @@ async def main():
             logging.info("Storing extracted entities and relationships")
             stored_entities = set()
             
-            # Process entities first
-            for data in tqdm(extracted_data, desc="Storing base entities"):
-                # Store entities
+            # Process entities first to establish nodes
+            for data in tqdm(extracted_data, desc="Storing entities"):
                 for entity in data.get('entities', []):
                     try:
                         if isinstance(entity, str):
-                            # Handle string format
-                            entity_parts = entity.split('[Type:', 1)
-                            if len(entity_parts) == 2:
-                                entity_name = standardize_entity(entity_parts[0].strip())
-                                entity_type = entity_parts[1].strip().rstrip(']')
+                            # Basic entity parsing (older format)
+                            # Format: Winston Churchill (Person) - Prime Minister of UK
+                            if " - " in entity:
+                                entity_parts = entity.split(" - ", 1)
+                                entity_with_type = entity_parts[0].strip()
+                                description = entity_parts[1].strip() if len(entity_parts) > 1 else ""
                                 
-                                # Skip if already processed
-                                if entity_name in stored_entities:
-                                    continue
+                                # Extract name and type if format matches
+                                if "(" in entity_with_type and ")" in entity_with_type:
+                                    name_parts = entity_with_type.split("(", 1)
+                                    entity_name = standardize_entity(name_parts[0].strip())
+                                    entity_type = name_parts[1].rstrip(")").strip()
+                                else:
+                                    # Just use the whole thing as name if can't parse
+                                    entity_name = standardize_entity(entity_with_type)
+                                    entity_type = "General"
+                            else:
+                                # Fall back to treating the whole string as name if no description
+                                entity_name = standardize_entity(entity)
+                                entity_type = "General"
+                                description = ""
+                            
+                            # Skip if name appears to be an attribute
+                            if entity_name.lower().startswith("observations:") or entity_name.lower().startswith("keycontributions:"):
+                                logging.warning(f"Skipping entity that appears to be an attribute: {entity_name}")
+                                continue
                                 
-                                # Basic entity data
-                                entity_data = {
-                                    "name": entity_name,
-                                    "nodeType": "Entity",
-                                    "subType": entity_type
-                                }
-                                
-                                # Store entity
-                                result = session.execute_write(lambda tx: add_to_neo4j(tx, {"entity": entity_data}))
-                                if result:
-                                    stored_entities.add(entity_name)
-                                    logging.info(f"Stored entity: {entity_name}")
+                            # Skip if already processed
+                            if entity_name in stored_entities:
+                                continue
+                            
+                            # Basic entity data
+                            entity_data = {
+                                "name": entity_name,
+                                "nodeType": "Entity",
+                                "subType": entity_type,
+                                "observations": [description] if description else []
+                            }
+                            
+                            # Store entity
+                            result = session.execute_write(lambda tx: add_to_neo4j(tx, {"entity": entity_data}))
+                            if result:
+                                stored_entities.add(entity_name)
+                                logging.info(f"Stored entity: {entity_name}")
                         elif isinstance(entity, dict) and 'name' in entity:
                             # Handle dictionary format
                             entity_name = standardize_entity(entity['name'])
                             
-                            # Skip if already processed
+                            # Skip if name appears to be an attribute
+                            if entity_name.lower().startswith("observations:") or entity_name.lower().startswith("keycontributions:"):
+                                logging.warning(f"Skipping entity that appears to be an attribute: {entity_name}")
+                                continue
+                            
+                            # Skip if already processed - but merge observations if they exist
                             if entity_name in stored_entities:
+                                # Check if we have observations to add to existing entity
+                                if 'observations' in entity and entity['observations']:
+                                    # Merge with existing entity - not implemented yet but could be added
+                                    pass
                                 continue
                                 
                             # Store full entity data
@@ -196,23 +226,11 @@ async def main():
             for data in tqdm(extracted_data, desc="Storing events"):
                 for event in data.get('events', []):
                     try:
-                        if isinstance(event, str):
-                            # Handle string format
-                            event_parts = event.split(':', 1)
-                            if len(event_parts) == 2:
-                                event_name = standardize_entity(event_parts[1].strip())
-                                event_data = {
-                                    "name": event_name,
-                                    "nodeType": "Event"
-                                }
-                                session.execute_write(lambda tx: add_to_neo4j(tx, {"event": event_data}))
-                        elif isinstance(event, dict) and 'name' in event:
-                            # Handle dictionary format
+                        if isinstance(event, dict) and 'name' in event:
                             event_name = standardize_entity(event['name'])
                             session.execute_write(lambda tx: add_to_neo4j(tx, {"event": event}))
                     except Exception as e:
-                        event_name = event.get('name', 'unknown') if isinstance(event, dict) else 'unknown'
-                        logging.error(f"Error storing event {event_name}: {str(e)}")
+                        logging.error(f"Error storing event: {str(e)}")
             
             # Process concepts
             for data in tqdm(extracted_data, desc="Storing concepts"):
@@ -237,6 +255,21 @@ async def main():
                         concept_name = concept.get('name', 'unknown') if isinstance(concept, dict) else 'unknown'
                         logging.error(f"Error storing concept {concept_name}: {str(e)}")
             
+            # Log relationship count and sample before storing
+            relationship_count = sum(len(data.get('relationships', [])) for data in extracted_data)
+            logging.info(f"Found {relationship_count} relationships to store")
+            
+            # Log samples of the first few relationships for debugging
+            if relationship_count > 0:
+                for data in extracted_data[:2]:  # Just check first two data items
+                    for rel in data.get('relationships', [])[:3]:  # Log up to 3 relationships
+                        logging.info(f"Sample relationship: {rel}")
+            else:
+                logging.warning("No relationships found in extracted data. Check the extraction prompt and output.")
+
+            # Track relationship processing success
+            successful_relationships = 0
+
             # Store relationships after all entities exist
             for data in tqdm(extracted_data, desc="Storing relationships"):
                 for rel in data.get('relationships', []):
@@ -255,11 +288,62 @@ async def main():
                                 if context_match:
                                     context = context_match.group(1).strip()
                                 
+                                # Create relationship data structure
+                                rel_data = {
+                                    'source': {'name': source, 'type': 'Entity'},
+                                    'target': {'name': target, 'type': 'Entity'},
+                                    'type': rel_type,
+                                    'properties': {"context": context, "confidenceScore": 0.8}
+                                }
+                                
                                 # Add relationship
-                                rel_props = {"context": context, "confidenceScore": 0.8}
                                 session.execute_write(
-                                    lambda tx: add_relationship_to_neo4j(tx, source, rel_type, target, rel_props)
+                                    lambda tx: add_relationship_to_neo4j(tx, rel_data)
                                 )
+                                successful_relationships += 1
+                                logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
+                            
+                            # Try alternate format: SourceEntity(Type) -> [RELATIONSHIP_TYPE] TargetEntity(Type)
+                            else:
+                                rel_match = re.match(r'(.+?)\(\s*(.+?)\s*\)\s*->\s*\[(.+?)\]\s*(.+?)\(\s*(.+?)\s*\)', rel)
+                                if rel_match:
+                                    source_name = standardize_entity(rel_match.group(1).strip())
+                                    source_type = rel_match.group(2).strip()
+                                    rel_type = rel_match.group(3).strip()
+                                    target_name = standardize_entity(rel_match.group(4).strip())
+                                    target_type = rel_match.group(5).strip()
+                                    
+                                    # Extract properties if available
+                                    properties = {"confidenceScore": 0.8}
+                                    if "{" in rel and "}" in rel:
+                                        props_text = re.search(r'\{(.+?)\}', rel)
+                                        if props_text:
+                                            props_str = props_text.group(1)
+                                            try:
+                                                # First try parsing as JSON
+                                                properties = json.loads("{" + props_str + "}")
+                                            except json.JSONDecodeError:
+                                                # Fall back to simple key-value parsing
+                                                for prop in props_str.split(","):
+                                                    if ":" in prop:
+                                                        key, value = prop.split(":", 1)
+                                                        properties[key.strip()] = value.strip().strip('"\'')
+                                    
+                                    # Create relationship data structure
+                                    rel_data = {
+                                        'source': {'name': source_name, 'type': source_type},
+                                        'target': {'name': target_name, 'type': target_type},
+                                        'type': rel_type,
+                                        'properties': properties
+                                    }
+                                    
+                                    # Add relationship
+                                    session.execute_write(
+                                        lambda tx: add_relationship_to_neo4j(tx, rel_data)
+                                    )
+                                    successful_relationships += 1
+                                    logging.info(f"Added relationship: {source_name} --{rel_type}--> {target_name}")
+                                    
                         elif isinstance(rel, dict) and 'source' in rel and 'target' in rel and 'type' in rel:
                             # Handle dictionary format relationship
                             source = rel['source']['name'] if isinstance(rel['source'], dict) else rel['source']
@@ -271,13 +355,28 @@ async def main():
                             if 'confidenceScore' not in rel_props:
                                 rel_props['confidenceScore'] = 0.8
                             
+                            # Create relationship data structure
+                            rel_data = {
+                                'source': {'name': source, 'type': rel.get('source', {}).get('type', 'Entity') if isinstance(rel.get('source'), dict) else 'Entity'},
+                                'target': {'name': target, 'type': rel.get('target', {}).get('type', 'Entity') if isinstance(rel.get('target'), dict) else 'Entity'},
+                                'type': rel_type,
+                                'properties': rel_props
+                            }
+                            
                             # Add relationship
                             session.execute_write(
-                                lambda tx: add_relationship_to_neo4j(tx, source, rel_type, target, rel_props)
+                                lambda tx: add_relationship_to_neo4j(tx, rel_data)
                             )
+                            successful_relationships += 1
+                            logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
                     except Exception as e:
                         rel_description = rel.get('description', 'unknown') if isinstance(rel, dict) else rel
                         logging.error(f"Error storing relationship {rel_description}: {str(e)}")
+            
+            # Log relationship processing summary
+            logging.info(f"Successfully stored {successful_relationships} relationships out of {relationship_count} found")
+            if successful_relationships == 0 and relationship_count > 0:
+                logging.warning("No relationships were successfully stored. Check formats and database constraints.")
             
             # Store comprehensive person profiles
             if comprehensive_profiles.get('persons'):
