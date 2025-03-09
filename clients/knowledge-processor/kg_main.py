@@ -132,7 +132,7 @@ async def main():
             logging.warning("No entities or persons were found to store in the database")
         
         # Generate comprehensive profiles
-        comprehensive_model = ChatOpenAI(model_name="gpt-4.5-preview-2025-02-27", temperature=0.2)
+        comprehensive_model = ChatOpenAI(model_name="gpt-4o", temperature=0.2)
         comprehensive_profiles = await aggregator.generate_comprehensive_profiles(comprehensive_model)
         
         # Save comprehensive profiles

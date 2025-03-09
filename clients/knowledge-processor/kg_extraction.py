@@ -4,6 +4,8 @@ import re
 import asyncio
 import json
 import logging
+import os
+from datetime import datetime
 from tqdm import tqdm
 from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -51,8 +53,70 @@ def parse_gpt4_response(response):
     reasoning_chain_headers = [r"Reasoning Chains?:"]
     reasoning_step_headers = [r"Reasoning Steps?:"]
     relationship_headers = [r"Relationships?:"]
-    person_details_headers = [r"Person Details for "]
-    location_details_headers = [r"Location Details for "]
+    person_details_headers = [r"Person Details for (.+?):"]
+    location_details_headers = [r"Location Details for (.+?):"]
+    
+    # Helper function to handle JSON blocks
+    def extract_json_block(start_idx):
+        """Extract a JSON block starting from the given index"""
+        # Try to find JSON enclosed in code blocks first
+        json_start = None
+        json_end = None
+        
+        # Case 1: Look for ```json code blocks
+        for j in range(start_idx, len(lines)):
+            if "```json" in lines[j] or ("```" in lines[j] and "json" in lines[j]):
+                json_start = j + 1
+                break
+        
+        if json_start is not None:
+            for j in range(json_start, len(lines)):
+                if "```" in lines[j]:
+                    json_end = j
+                    break
+            
+            if json_end is not None:
+                json_content = "\n".join(lines[json_start:json_end]).strip()
+                try:
+                    json_obj = json.loads(json_content)
+                    return json_obj, json_end + 1
+                except json.JSONDecodeError as e:
+                    logging.warning(f"Failed to parse JSON in code block: {str(e)}\nContent: {json_content[:100]}...")
+                    # Continue to other methods if this fails
+        
+        # Case 2: Look for JSON directly in the text (without code blocks)
+        # Try to find a valid JSON object starting from each line
+        for j in range(start_idx, len(lines)):
+            # Skip empty lines
+            if not lines[j].strip():
+                continue
+                
+            # Try with the current line and all subsequent lines
+            for end_j in range(j+1, len(lines)+1):
+                try:
+                    potential_json = "\n".join(lines[j:end_j]).strip()
+                    # Try to find the JSON object boundaries
+                    if potential_json.startswith("{") or potential_json.startswith("["):
+                        json_obj = json.loads(potential_json)
+                        return json_obj, end_j
+                except json.JSONDecodeError:
+                    continue  # Try with one more line
+            
+            # If still here, try to extract JSON from a line with possible preamble text
+            line = lines[j]
+            json_start_idx = line.find('{')
+            json_end_idx = line.rfind('}')
+            
+            if json_start_idx != -1 and json_end_idx != -1 and json_start_idx < json_end_idx:
+                try:
+                    json_text = line[json_start_idx:json_end_idx+1]
+                    json_obj = json.loads(json_text)
+                    return json_obj, j + 1
+                except json.JSONDecodeError:
+                    pass
+        
+        # If we got here, we couldn't find a valid JSON object
+        return None, start_idx
     
     # Helper function to extract required attributes
     def ensure_required_attributes(node_dict, node_type):
@@ -147,7 +211,7 @@ def parse_gpt4_response(response):
             if 'confidenceScore' not in node_dict:
                 node_dict['confidenceScore'] = 0.5
             if 'creator' not in node_dict:
-                node_dict['creator'] = "AI System"
+                node_dict['creator'] = ""
             if 'methodology' not in node_dict:
                 node_dict['methodology'] = "mixed"
                 
@@ -176,49 +240,335 @@ def parse_gpt4_response(response):
         # Check for section headers
         if any(re.match(pattern, line) for pattern in entity_headers):
             current_section = "entities"
+            # After identifying entities section, look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    entity_json, i = extract_json_block(i)
+                    if entity_json:
+                        entity_json = ensure_required_attributes(entity_json, "Entity")
+                        result["entities"].append(entity_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in event_headers + concept_headers + 
+                                   proposition_headers + attribute_headers + emotion_headers + 
+                                   agent_headers + thought_headers + scientific_insight_headers + 
+                                   law_headers + reasoning_chain_headers + reasoning_step_headers + 
+                                   relationship_headers + person_details_headers + location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+        
         elif any(re.match(pattern, line) for pattern in event_headers):
             current_section = "events"
+            # After identifying events section, look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    event_json, i = extract_json_block(i)
+                    if event_json:
+                        event_json = ensure_required_attributes(event_json, "Event")
+                        result["events"].append(event_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in concept_headers + proposition_headers + 
+                                     attribute_headers + emotion_headers + agent_headers + thought_headers + 
+                                     scientific_insight_headers + law_headers + reasoning_chain_headers + 
+                                     reasoning_step_headers + relationship_headers + person_details_headers + 
+                                     location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in concept_headers):
             current_section = "concepts"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    concept_json, i = extract_json_block(i)
+                    if concept_json:
+                        concept_json = ensure_required_attributes(concept_json, "Concept")
+                        result["concepts"].append(concept_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in proposition_headers + 
+                                     attribute_headers + emotion_headers + agent_headers + thought_headers + 
+                                     scientific_insight_headers + law_headers + reasoning_chain_headers + 
+                                     reasoning_step_headers + relationship_headers + person_details_headers + 
+                                     location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in proposition_headers):
             current_section = "propositions"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    proposition_json, i = extract_json_block(i)
+                    if proposition_json:
+                        proposition_json = ensure_required_attributes(proposition_json, "Proposition")
+                        result["propositions"].append(proposition_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in attribute_headers + 
+                                     emotion_headers + agent_headers + thought_headers + 
+                                     scientific_insight_headers + law_headers + reasoning_chain_headers + 
+                                     reasoning_step_headers + relationship_headers + person_details_headers + 
+                                     location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in attribute_headers):
             current_section = "attributes"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    attribute_json, i = extract_json_block(i)
+                    if attribute_json:
+                        attribute_json = ensure_required_attributes(attribute_json, "Attribute")
+                        result["attributes"].append(attribute_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in emotion_headers + 
+                                     agent_headers + thought_headers + scientific_insight_headers + 
+                                     law_headers + reasoning_chain_headers + reasoning_step_headers + 
+                                     relationship_headers + person_details_headers + location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in emotion_headers):
             current_section = "emotions"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    emotion_json, i = extract_json_block(i)
+                    if emotion_json:
+                        emotion_json = ensure_required_attributes(emotion_json, "Emotion")
+                        result["emotions"].append(emotion_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in agent_headers + 
+                                     thought_headers + scientific_insight_headers + law_headers + 
+                                     reasoning_chain_headers + reasoning_step_headers + relationship_headers + 
+                                     person_details_headers + location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in agent_headers):
             current_section = "agents"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    agent_json, i = extract_json_block(i)
+                    if agent_json:
+                        agent_json = ensure_required_attributes(agent_json, "Agent")
+                        result["agents"].append(agent_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in thought_headers + 
+                                     scientific_insight_headers + law_headers + reasoning_chain_headers + 
+                                     reasoning_step_headers + relationship_headers + person_details_headers + 
+                                     location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in thought_headers):
             current_section = "thoughts"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    thought_json, i = extract_json_block(i)
+                    if thought_json:
+                        thought_json = ensure_required_attributes(thought_json, "Thought")
+                        result["thoughts"].append(thought_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in scientific_insight_headers + 
+                                     law_headers + reasoning_chain_headers + reasoning_step_headers + 
+                                     relationship_headers + person_details_headers + location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in scientific_insight_headers):
             current_section = "scientificInsights"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    insight_json, i = extract_json_block(i)
+                    if insight_json:
+                        insight_json = ensure_required_attributes(insight_json, "ScientificInsight")
+                        result["scientificInsights"].append(insight_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in law_headers + 
+                                     reasoning_chain_headers + reasoning_step_headers + relationship_headers + 
+                                     person_details_headers + location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in law_headers):
             current_section = "laws"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    law_json, i = extract_json_block(i)
+                    if law_json:
+                        law_json = ensure_required_attributes(law_json, "Law")
+                        result["laws"].append(law_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in reasoning_chain_headers + 
+                                     reasoning_step_headers + relationship_headers + person_details_headers + 
+                                     location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in reasoning_chain_headers):
             current_section = "reasoningChains"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    chain_json, i = extract_json_block(i)
+                    if chain_json:
+                        chain_json = ensure_required_attributes(chain_json, "ReasoningChain")
+                        result["reasoningChains"].append(chain_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in reasoning_step_headers + 
+                                     relationship_headers + person_details_headers + location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in reasoning_step_headers):
             current_section = "reasoningSteps"
+            # Look for JSON blocks
+            while i < len(lines) - 1:
+                i += 1
+                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                    step_json, i = extract_json_block(i)
+                    if step_json:
+                        step_json = ensure_required_attributes(step_json, "ReasoningStep")
+                        result["reasoningSteps"].append(step_json)
+                    i -= 1  # Adjust for the increment at the end of the loop
+                    break
+                elif any(re.match(pattern, lines[i]) for pattern in relationship_headers + 
+                                     person_details_headers + location_details_headers):
+                    i -= 1  # Go back to the header line
+                    break
+                elif lines[i].startswith("- "):
+                    # We found a line-by-line entry, go back and process as normal
+                    i -= 1
+                    break
+                    
         elif any(re.match(pattern, line) for pattern in relationship_headers):
             current_section = "relationships"
         elif any(re.match(pattern, line) for pattern in person_details_headers):
             current_section = "person_details"
             # Extract person name
+            person_match = None
             for pattern in person_details_headers:
                 match = re.match(pattern, line)
-                if match and len(match.groups()) > 0:
-                    current_person = match.group(1).strip()
-                    person_details[current_person] = {}
+                if match and match.groups():
+                    person_match = match
                     break
+                    
+            if person_match:
+                current_person = person_match.group(1).strip()
+                person_details[current_person] = {}
+                
+                # Look for JSON block after person details header
+                while i < len(lines) - 1:
+                    i += 1
+                    if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                        person_json, i = extract_json_block(i)
+                        if person_json:
+                            person_details[current_person] = person_json
+                        i -= 1  # Adjust for the increment at the end of the loop
+                        break
+                    elif lines[i].startswith("- "):
+                        # We found a line-by-line entry, go back and process as normal
+                        i -= 1
+                        break
+            
         elif any(re.match(pattern, line) for pattern in location_details_headers):
             current_section = "location_details"
             # Extract location name
+            location_match = None
             for pattern in location_details_headers:
                 match = re.match(pattern, line)
-                if match and len(match.groups()) > 0:
-                    current_location = match.group(1).strip()
-                    location_details[current_location] = {}
+                if match and match.groups():
+                    location_match = match
                     break
-        
+                    
+            if location_match:
+                current_location = location_match.group(1).strip()
+                location_details[current_location] = {}
+                
+                # Look for JSON block after location details header
+                while i < len(lines) - 1:
+                    i += 1
+                    if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
+                        location_json, i = extract_json_block(i)
+                        if location_json:
+                            location_details[current_location] = location_json
+                        i -= 1  # Adjust for the increment at the end of the loop
+                        break
+                    elif lines[i].startswith("- "):
+                        # We found a line-by-line entry, go back and process as normal
+                        i -= 1
+                        break
+
         # Process content based on current section
         elif line.startswith("- "):
             content = line[2:].strip()
@@ -1408,7 +1758,7 @@ async def extract_knowledge(text_chunk):
     prompt = ChatPromptTemplate.from_template(enhanced_prompt_template)
     
     # Initialize GPT-4 model with retries
-    gpt4_model = ChatOpenAI(model_name="gpt-4.5-preview-2025-02-27", temperature=0)
+    gpt4_model = ChatOpenAI(model_name="gpt-4o", temperature=0)
     
     max_retries = 3
     retry_count = 0
