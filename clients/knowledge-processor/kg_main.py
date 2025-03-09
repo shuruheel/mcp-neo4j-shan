@@ -10,6 +10,7 @@ from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import ChatOpenAI
 import sys
+import re
 
 from kg_db import Neo4jConnection, setup_neo4j_constraints, add_to_neo4j, add_relationship_to_neo4j
 from kg_extraction import process_chunks
