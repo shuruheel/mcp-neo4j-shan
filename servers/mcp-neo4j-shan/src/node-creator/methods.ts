@@ -1,5 +1,5 @@
 import { Driver as Neo4jDriver } from 'neo4j-driver';
-import { Entity, Relation, KnowledgeGraph, EnhancedRelation } from '../types/index.js';
+import { Entity, Relation, KnowledgeGraph, EnhancedRelation, RelationshipCategory } from '../types/index.js';
 import { loadGraph, processEntityDates } from './utils.js';
 
 /**
@@ -23,6 +23,51 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
       
       // Specific query based on entity type
       if (entity.entityType === 'Entity') {
+        // Serialize complex person details if present and subType is Person
+        let personDetailsJson = null;
+        if (entity.subType === 'Person') {
+          try {
+            // Create a person details object from the various person fields
+            const personDetails = {
+              aliases: entity.aliases || [],
+              personalityTraits: entity.personalityTraits || [],
+              cognitiveStyle: entity.cognitiveStyle || {},
+              emotionalDisposition: entity.emotionalDisposition || null,
+              emotionalTriggers: entity.emotionalTriggers || [],
+              interpersonalStyle: entity.interpersonalStyle || null,
+              powerDynamics: entity.powerDynamics || {},
+              loyalties: entity.loyalties || [],
+              coreValues: entity.coreValues || [],
+              ethicalFramework: entity.ethicalFramework || null,
+              psychologicalDevelopment: entity.psychologicalDevelopment || [],
+              narrativeTreatment: entity.narrativeTreatment || {},
+              modelConfidence: entity.modelConfidence || null,
+              evidenceStrength: entity.personEvidenceStrength || null
+            };
+            
+            // Validate personalityTraits structure if present
+            if (entity.personalityTraits && Array.isArray(entity.personalityTraits)) {
+              for (const trait of entity.personalityTraits) {
+                if (!trait.trait) {
+                  console.error(`Warning: Personality trait missing 'trait' field for entity ${entity.name}`);
+                }
+              }
+            }
+            
+            // Validate cognitiveStyle if present
+            if (entity.cognitiveStyle && typeof entity.cognitiveStyle !== 'object') {
+              console.error(`Warning: Invalid cognitiveStyle format for entity ${entity.name}, should be an object`);
+              personDetails.cognitiveStyle = {};
+            }
+            
+            personDetailsJson = JSON.stringify(personDetails);
+          } catch (e) {
+            console.error(`Error creating personDetails for ${entity.name}:`, e);
+            // Provide a minimal valid structure to avoid database errors
+            personDetailsJson = JSON.stringify({});
+          }
+        }
+        
         const result = await session.executeWrite(tx => tx.run(`
           MERGE (node:Memory {name: $name})
           SET node.nodeType = 'Entity',
@@ -36,6 +81,8 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
               node.keyContributions = $keyContributions,
               node.emotionalValence = $emotionalValence,
               node.emotionalArousal = $emotionalArousal,
+              node.subType = $subType,
+              node.personDetails = $personDetails,
               node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
           RETURN node
         `, {
@@ -47,17 +94,59 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
           biography: entity.biography || null,
           keyContributions: entity.keyContributions || [],
           emotionalValence: entity.emotionalValence || null,
-          emotionalArousal: entity.emotionalArousal || null
+          emotionalArousal: entity.emotionalArousal || null,
+          subType: entity.subType || null,
+          personDetails: personDetailsJson
         }));
         
-        if (result.records.length > 0) {
-          createdEntities.push(entity);
-          console.error(`Entity creation result: Success`);
-        } else {
-          console.error(`Entity creation result: Failed`);
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          
+          // Parse personDetails if it exists
+          let personDetails = null;
+          if (nodeProps.personDetails) {
+            try {
+              personDetails = JSON.parse(nodeProps.personDetails);
+            } catch (e) {
+              console.error('Error parsing personDetails:', e);
+            }
+          }
+          
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Entity',
+            observations: nodeProps.observations,
+            confidence: nodeProps.confidence,
+            source: nodeProps.source,
+            description: nodeProps.description,
+            biography: nodeProps.biography,
+            keyContributions: nodeProps.keyContributions,
+            emotionalValence: nodeProps.emotionalValence,
+            emotionalArousal: nodeProps.emotionalArousal,
+            subType: nodeProps.subType,
+            // Add parsed person details properties if available
+            ...(personDetails ? {
+              aliases: personDetails.aliases,
+              personalityTraits: personDetails.personalityTraits,
+              cognitiveStyle: personDetails.cognitiveStyle,
+              emotionalDisposition: personDetails.emotionalDisposition,
+              emotionalTriggers: personDetails.emotionalTriggers,
+              interpersonalStyle: personDetails.interpersonalStyle,
+              powerDynamics: personDetails.powerDynamics,
+              loyalties: personDetails.loyalties,
+              coreValues: personDetails.coreValues,
+              ethicalFramework: personDetails.ethicalFramework,
+              psychologicalDevelopment: personDetails.psychologicalDevelopment,
+              narrativeTreatment: personDetails.narrativeTreatment,
+              modelConfidence: personDetails.modelConfidence,
+              personEvidenceStrength: personDetails.evidenceStrength
+            } : {})
+          });
         }
-      } 
-      else if (entity.entityType === 'Event') {
+      } else if (entity.entityType === 'Event') {
+        // Update the Event creation to include subType
         const result = await session.executeWrite(tx => tx.run(`
           MERGE (node:Memory {name: $name})
           SET node.nodeType = 'Event',
@@ -65,36 +154,39 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
               node.lastUpdated = datetime(),
               node.startDate = $startDate,
               node.endDate = $endDate,
-              node.status = $status,
               node.timestamp = $timestamp,
               node.duration = $duration,
               node.location = $location,
               node.participants = $participants,
               node.outcome = $outcome,
               node.significance = $significance,
+              node.status = $status,
               node.emotionalValence = $emotionalValence,
               node.emotionalArousal = $emotionalArousal,
               node.causalPredecessors = $causalPredecessors,
               node.causalSuccessors = $causalSuccessors,
+              node.subType = $subType,
               node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
           RETURN node
         `, {
           name: entity.name,
           startDate: entity.startDate || null,
           endDate: entity.endDate || null,
-          status: entity.status || null,
           timestamp: entity.timestamp || null,
           duration: entity.duration || null,
           location: entity.location || null,
           participants: entity.participants || [],
           outcome: entity.outcome || null,
           significance: entity.significance || null,
+          status: entity.status || null,
           emotionalValence: entity.emotionalValence || null,
           emotionalArousal: entity.emotionalArousal || null,
           causalPredecessors: entity.causalPredecessors || [],
-          causalSuccessors: entity.causalSuccessors || []
+          causalSuccessors: entity.causalSuccessors || [],
+          subType: entity.subType || null
         }));
         
+        // Process the result and add to createdEntities
         if (result.records.length > 0) {
           createdEntities.push(entity);
           console.error(`Event creation result: Success`);
@@ -231,6 +323,92 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
           console.error(`Law creation result: Failed`);
         }
       }
+      else if (entity.entityType === 'Location') {
+        // Create a Location node
+        let coordinatesJson = null;
+        if (entity.coordinates) {
+          try {
+            coordinatesJson = JSON.stringify(entity.coordinates);
+          } catch (e) {
+            console.error(`Error creating coordinates for ${entity.name}:`, e);
+            coordinatesJson = null;
+          }
+        }
+        
+        const result = await session.executeWrite(tx => tx.run(`
+          MERGE (node:Memory {name: $name})
+          SET node.nodeType = 'Location',
+              node:Location,
+              node.lastUpdated = datetime(),
+              node.locationType = $locationType,
+              node.coordinates = $coordinates,
+              node.description = $description,
+              node.locationSignificance = $locationSignificance,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+          RETURN node
+        `, {
+          name: entity.name,
+          locationType: entity.locationType || null,
+          coordinates: coordinatesJson,
+          description: entity.description || null,
+          locationSignificance: entity.locationSignificance || null
+        }));
+        
+        // Process relationships after node creation
+        
+        // Handle containedWithin relationship if specified
+        if (entity.containedWithin) {
+          await session.executeWrite(tx => tx.run(`
+            MATCH (location:Location {name: $locationName})
+            MATCH (container:Location {name: $containerName})
+            MERGE (location)-[r:CONTAINED_IN {
+              relationType: 'CONTAINED_IN',
+              relationshipType: 'PART_OF',
+              context: $context,
+              relationshipCategory: 'COMPOSITIONAL'
+            }]->(container)
+            RETURN r
+          `, {
+            locationName: entity.name,
+            containerName: entity.containedWithin,
+            context: `${entity.name} is geographically contained within ${entity.containedWithin}`
+          }));
+        }
+        
+        // Handle eventsOccurred relationships if specified
+        if (entity.eventsOccurred && entity.eventsOccurred.length > 0) {
+          for (const eventName of entity.eventsOccurred) {
+            await session.executeWrite(tx => tx.run(`
+              MATCH (location:Location {name: $locationName})
+              MATCH (event:Event {name: $eventName})
+              MERGE (event)-[r:OCCURRED_AT {
+                relationType: 'OCCURRED_AT',
+                relationshipType: 'HAS_LOCATION',
+                context: $context,
+                relationshipCategory: 'SPATIAL'
+              }]->(location)
+              RETURN r
+            `, {
+              locationName: entity.name,
+              eventName: eventName,
+              context: `${eventName} occurred at ${entity.name}`
+            }));
+          }
+        }
+        
+        const record = result.records[0];
+        const node = record.get('node');
+        
+        // Process the saved entity
+        const savedEntity = processEntityDates({
+          name: node.properties.name,
+          entityType: node.properties.nodeType,
+          // Include all node properties
+          ...node.properties
+        });
+        
+        createdEntities.push(savedEntity);
+      }
       else if (entity.entityType === 'ReasoningChain') {
         const result = await session.executeWrite(tx => tx.run(`
           MERGE (node:Memory {name: $name})
@@ -247,7 +425,8 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
               node.sourceThought = $sourceThought,
               node.numberOfSteps = $numberOfSteps,
               node.alternativeConclusionsConsidered = $alternativeConclusionsConsidered,
-              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END,
+              node.lastUpdated = datetime()
           RETURN node
         `, {
           name: entity.name,
@@ -259,7 +438,7 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
           domain: entity.domain || null,
           tags: entity.tags || [],
           sourceThought: entity.sourceThought || null,
-          numberOfSteps: entity.numberOfSteps || 0,
+          numberOfSteps: entity.numberOfSteps || null,
           alternativeConclusionsConsidered: entity.alternativeConclusionsConsidered || []
         }));
         
@@ -285,10 +464,28 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
               node.counterarguments = $counterarguments,
               node.assumptions = $assumptions,
               node.formalNotation = $formalNotation,
-              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+              node.propositions = $propositions,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END,
+              node.lastUpdated = datetime()
+          
+          // Connect to the reasoning chain with step order
+          WITH node
+          MATCH (rc:Memory:ReasoningChain {name: $chainName})
+          MERGE (rc)-[r:CONTAINS_STEP {order: $stepNumber}]->(node)
+          SET r.lastUpdated = datetime()
+          
+          // Update the numberOfSteps counter if this is a new maximum
+          WITH rc, node, $stepNumber as newStep
+          SET rc.numberOfSteps = CASE 
+              WHEN rc.numberOfSteps IS NULL THEN newStep
+              WHEN rc.numberOfSteps < newStep THEN newStep
+              ELSE rc.numberOfSteps 
+            END
+          
           RETURN node
         `, {
           name: entity.name,
+          chainName: entity.chainName,
           content: entity.content || null,
           stepType: entity.stepType || null,
           evidenceType: entity.evidenceType || null,
@@ -297,14 +494,241 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
           alternatives: entity.alternatives || [],
           counterarguments: entity.counterarguments || [],
           assumptions: entity.assumptions || [],
-          formalNotation: entity.formalNotation || null
+          formalNotation: entity.formalNotation || null,
+          stepNumber: entity.stepNumber || null
         }));
         
-        if (result.records.length > 0) {
-          createdEntities.push(entity);
-          console.error(`ReasoningStep creation result: Success`);
-        } else {
-          console.error(`ReasoningStep creation result: Failed`);
+        if (result.records.length === 0) {
+          const errorMsg = `Failed to create ReasoningStep node "${entity.name}"`;
+          console.error(errorMsg);
+          throw new Error(errorMsg);
+        }
+        
+        console.error(`Successfully created reasoning step "${entity.name}"`);
+        
+        // Create relationships to supporting references
+        if (entity.supportingReferences && entity.supportingReferences.length > 0) {
+          try {
+            console.error(`Adding ${entity.supportingReferences.length} supporting references to step "${entity.name}"`);
+            
+            // First check which references exist
+            const refCheck = await session.executeRead(tx => tx.run(`
+              UNWIND $references as refName
+              MATCH (ref:Memory {name: refName})
+              RETURN ref.name as foundRef
+            `, { references: entity.supportingReferences }));
+            
+            const foundRefs = refCheck.records.map(record => record.get('foundRef'));
+            
+            if (foundRefs.length < entity.supportingReferences.length) {
+              const missingRefs = entity.supportingReferences.filter(ref => !foundRefs.includes(ref));
+              console.error(`Warning: Some supporting references not found: ${missingRefs.join(', ')}`);
+            }
+            
+            if (foundRefs.length > 0) {
+              const refResult = await session.executeWrite(tx => tx.run(`
+                MATCH (rs:ReasoningStep:Memory {name: $stepName})
+                UNWIND $references as refName
+                MATCH (ref:Memory {name: refName})
+                MERGE (rs)-[r:REFERENCES]->(ref)
+                SET r.lastUpdated = datetime()
+                RETURN count(r) as relCount
+              `, {
+                stepName: entity.name,
+                references: foundRefs
+              }));
+              
+              const relCount = refResult.records[0].get('relCount').toNumber();
+              console.error(`Created ${relCount} reference relationships from step "${entity.name}"`);
+            }
+          } catch (refError) {
+            console.error(`Error creating reference relationships:`, refError);
+            // Don't fail the entire operation if just the references fail
+          }
+        }
+        
+        const stepNode = result.records[0].get('node');
+        
+        // Convert to Entity format for return
+        const stepEntity: Entity = {
+          name: stepNode.properties.name,
+          entityType: 'ReasoningStep',
+          observations: []
+        };
+        
+        createdEntities.push(stepEntity);
+      }
+      else if (entity.entityType === 'Attribute') {
+        const result = await session.executeWrite(tx => tx.run(`
+          MERGE (node:Memory {name: $name})
+          SET node.nodeType = 'Attribute',
+              node:Attribute,
+              node.lastUpdated = datetime(),
+              node.value = $value,
+              node.unit = $unit,
+              node.valueType = $valueType,
+              node.possibleValues = $possibleValues,
+              node.description = $description,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+          RETURN node
+        `, {
+          name: entity.name,
+          value: entity.value || null,
+          unit: entity.unit || null,
+          valueType: entity.valueType || null,
+          possibleValues: entity.possibleValues || [],
+          description: entity.description || null
+        }));
+        
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Attribute',
+            observations: [],
+            value: nodeProps.value,
+            unit: nodeProps.unit,
+            valueType: nodeProps.valueType,
+            possibleValues: nodeProps.possibleValues,
+            description: nodeProps.description
+          });
+        }
+      }
+      else if (entity.entityType === 'Proposition') {
+        const result = await session.executeWrite(tx => tx.run(`
+          MERGE (node:Memory {name: $name})
+          SET node.nodeType = 'Proposition',
+              node:Proposition,
+              node.lastUpdated = datetime(),
+              node.statement = $statement,
+              node.status = $status,
+              node.confidence = $confidence,
+              node.truthValue = $truthValue,
+              node.sources = $sources,
+              node.domain = $domain,
+              node.emotionalValence = $emotionalValence,
+              node.emotionalArousal = $emotionalArousal,
+              node.evidenceStrength = $evidenceStrength,
+              node.counterEvidence = $counterEvidence,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+          RETURN node
+        `, {
+          name: entity.name,
+          statement: entity.statement || null,
+          status: entity.status || null,
+          confidence: entity.confidence || null,
+          truthValue: entity.truthValue || null,
+          sources: entity.source ? [entity.source] : [],
+          domain: entity.domain || null,
+          emotionalValence: entity.emotionalValence || null,
+          emotionalArousal: entity.emotionalArousal || null,
+          evidenceStrength: entity.evidenceStrength || null,
+          counterEvidence: entity.counterEvidence || []
+        }));
+        
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Proposition',
+            observations: [],
+            statement: nodeProps.statement,
+            status: nodeProps.status,
+            confidence: nodeProps.confidence,
+            truthValue: nodeProps.truthValue,
+            source: nodeProps.sources?.[0] || null,
+            domain: nodeProps.domain,
+            emotionalValence: nodeProps.emotionalValence,
+            emotionalArousal: nodeProps.emotionalArousal,
+            evidenceStrength: nodeProps.evidenceStrength,
+            counterEvidence: nodeProps.counterEvidence
+          });
+        }
+      }
+      else if (entity.entityType === 'Emotion') {
+        const result = await session.executeWrite(tx => tx.run(`
+          MERGE (node:Memory {name: $name})
+          SET node.nodeType = 'Emotion',
+              node:Emotion,
+              node.lastUpdated = datetime(),
+              node.intensity = $intensity,
+              node.valence = $valence,
+              node.category = $category,
+              node.subcategory = $subcategory,
+              node.description = $description,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+          RETURN node
+        `, {
+          name: entity.name,
+          intensity: entity.intensity || null,
+          valence: entity.valence || null,
+          category: entity.category || null,
+          subcategory: entity.subcategory || null,
+          description: entity.description || null
+        }));
+        
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Emotion',
+            observations: [],
+            intensity: nodeProps.intensity,
+            valence: nodeProps.valence,
+            category: nodeProps.category,
+            subcategory: nodeProps.subcategory,
+            description: nodeProps.description
+          });
+        }
+      }
+      else if (entity.entityType === 'Agent') {
+        const result = await session.executeWrite(tx => tx.run(`
+          MERGE (node:Memory {name: $name})
+          SET node.nodeType = 'Agent',
+              node:Agent,
+              node.lastUpdated = datetime(),
+              node.agentType = $agentType,
+              node.description = $description,
+              node.capabilities = $capabilities,
+              node.beliefs = $beliefs,
+              node.knowledge = $knowledge,
+              node.preferences = $preferences,
+              node.emotionalState = $emotionalState,
+              node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+          RETURN node
+        `, {
+          name: entity.name,
+          agentType: entity.agentType || null,
+          description: entity.description || null,
+          capabilities: entity.capabilities || [],
+          beliefs: entity.beliefs || [],
+          knowledge: entity.knowledge || [],
+          preferences: entity.preferences || [],
+          emotionalState: entity.emotionalState || null
+        }));
+        
+        // Process the result and add to createdEntities
+        const record = result.records[0];
+        if (record) {
+          const nodeProps = record.get('node').properties;
+          createdEntities.push({
+            name: nodeProps.name,
+            entityType: 'Agent',
+            observations: [],
+            agentType: nodeProps.agentType,
+            description: nodeProps.description,
+            capabilities: nodeProps.capabilities,
+            beliefs: nodeProps.beliefs,
+            knowledge: nodeProps.knowledge,
+            preferences: nodeProps.preferences,
+            emotionalState: nodeProps.emotionalState
+          });
         }
       }
       else {
@@ -329,134 +753,115 @@ export async function createEntities(neo4jDriver: Neo4jDriver, entities: Entity[
  */
 export async function createRelations(neo4jDriver: Neo4jDriver, relations: Relation[]): Promise<Relation[]> {
   const session = neo4jDriver.session();
+  const createdRelations: Relation[] = [];
   
   try {
-    console.error(`Creating ${relations.length} relations`);
-    
-    const createdRelations: Relation[] = [];
-    
-    // Process each relation separately for better debugging
     for (const relation of relations) {
-      const enhancedRelation = relation as EnhancedRelation;
-      console.error(`Processing relation: ${relation.from} --[${relation.relationType}]--> ${relation.to}`);
+      console.error(`Creating relation ${relation.from} -[${relation.relationType}]-> ${relation.to}`);
       
-      // First check if both nodes exist and get their types
-      const nodesExist = await session.executeRead(tx => tx.run(`
-        MATCH (from:Memory {name: $fromName}), (to:Memory {name: $toName})
-        RETURN from.nodeType as fromNodeType, to.nodeType as toNodeType
-      `, { 
+      // Check for Person-specific relationship types and enhance them
+      let enhancedRelation = { ...relation } as EnhancedRelation;
+      
+      // List of Person-specific relationship types
+      const personRelationshipTypes = [
+        'MENTORS', 'MENTORED_BY', 'ADMIRES', 'ADMIRED_BY', 'OPPOSES', 'OPPOSED_BY',
+        'EXHIBITS_TRAIT', 'HAS_PERSONALITY', 'VALUES', 'ADHERES_TO', 'REJECTS',
+        'SHAPED_BY', 'TRANSFORMED', 'STRUGGLES_WITH', 'LOYAL_TO', 'HAS_COGNITIVE_STYLE',
+        'HAS_ETHICAL_FRAMEWORK'
+      ];
+      
+      // If this is a Person-specific relationship, enhance it
+      if (personRelationshipTypes.includes(relation.relationType)) {
+        // Set the default weight higher for Person relationships to prioritize them
+        if (!enhancedRelation.weight) {
+          enhancedRelation.weight = 0.8;
+        }
+        
+        // Set the relationship category if not already set
+        if (!enhancedRelation.relationshipCategory) {
+          // Determine the appropriate category based on relationship type
+          if (['MENTORS', 'MENTORED_BY', 'ADMIRES', 'ADMIRED_BY'].includes(relation.relationType)) {
+            enhancedRelation.relationshipCategory = RelationshipCategory.LATERAL;
+          } else if (['EXHIBITS_TRAIT', 'HAS_PERSONALITY', 'HAS_COGNITIVE_STYLE'].includes(relation.relationType)) {
+            enhancedRelation.relationshipCategory = RelationshipCategory.ATTRIBUTIVE;
+          } else if (['VALUES', 'ADHERES_TO', 'REJECTS', 'HAS_ETHICAL_FRAMEWORK'].includes(relation.relationType)) {
+            enhancedRelation.relationshipCategory = RelationshipCategory.HIERARCHICAL;
+          } else if (['SHAPED_BY', 'TRANSFORMED'].includes(relation.relationType)) {
+            enhancedRelation.relationshipCategory = RelationshipCategory.CAUSAL;
+          } else if (['STRUGGLES_WITH'].includes(relation.relationType)) {
+            enhancedRelation.relationshipCategory = RelationshipCategory.LATERAL;
+          }
+        }
+        
+        // Set context type if not already set
+        if (!enhancedRelation.contextType) {
+          // This must be one of the valid contextType values
+          switch (enhancedRelation.relationshipCategory) {
+            case RelationshipCategory.HIERARCHICAL:
+              enhancedRelation.contextType = 'hierarchical';
+              break;
+            case RelationshipCategory.LATERAL:
+              enhancedRelation.contextType = 'associative';
+              break;
+            case RelationshipCategory.CAUSAL:
+              enhancedRelation.contextType = 'causal';
+              break;
+            case RelationshipCategory.TEMPORAL:
+              enhancedRelation.contextType = 'temporal';
+              break;
+            case RelationshipCategory.COMPOSITIONAL:
+              enhancedRelation.contextType = 'hierarchical';
+              break;
+            case RelationshipCategory.ATTRIBUTIVE:
+              enhancedRelation.contextType = 'attributive';
+              break;
+            default:
+              enhancedRelation.contextType = 'associative';
+          }
+        }
+      }
+      
+      // Proceed with creating the relationship
+      const result = await session.executeWrite(tx => tx.run(`
+        MATCH (from:Entity {name: $fromName})
+        MATCH (to:Entity {name: $toName})
+        MERGE (from)-[r:${relation.relationType} {
+          relationType: $relationType,
+          relationshipType: $relationshipType,
+          context: $context,
+          confidenceScore: $confidenceScore,
+          weight: $weight,
+          sources: $sources,
+          contextType: $contextType,
+          contextStrength: $contextStrength,
+          memoryAids: $memoryAids,
+          relationshipCategory: $relationshipCategory,
+          createdAt: datetime(),
+          lastUpdated: datetime()
+        }]->(to)
+        RETURN from, r, to
+      `, {
         fromName: relation.from,
-        toName: relation.to
+        toName: relation.to,
+        relationType: relation.relationType,
+        relationshipType: relation.relationshipType || relation.relationType,
+        context: relation.context || null,
+        confidenceScore: relation.confidenceScore || null,
+        weight: enhancedRelation.weight || 0.5,
+        sources: relation.sources || [],
+        contextType: enhancedRelation.contextType || null,
+        contextStrength: relation.contextStrength || null,
+        memoryAids: relation.memoryAids || [],
+        relationshipCategory: enhancedRelation.relationshipCategory || null
       }));
       
-      if (nodesExist.records.length === 0) {
-        console.error(`Failed to create relation - one or both nodes not found: ${relation.from} or ${relation.to}`);
-        continue;
-      }
-      
-      // Check if node types match the specified types (if provided)
-      const fromNodeType = nodesExist.records[0].get('fromNodeType');
-      const toNodeType = nodesExist.records[0].get('toNodeType');
-      
-      if (enhancedRelation.fromType && fromNodeType !== enhancedRelation.fromType) {
-        console.error(`Type mismatch for source node. Expected: ${enhancedRelation.fromType}, Actual: ${fromNodeType}`);
-        continue;
-      }
-      
-      if (enhancedRelation.toType && toNodeType !== enhancedRelation.toType) {
-        console.error(`Type mismatch for target node. Expected: ${enhancedRelation.toType}, Actual: ${toNodeType}`);
-        continue;
-      }
-      
-      // Create the relationship using the APOC library
-      try {
-        const result = await session.executeWrite(tx => tx.run(`
-          MATCH (from:Memory {name: $fromName}), (to:Memory {name: $toName})
-          CALL apoc.merge.relationship(from, $relType, {}, 
-                                     {
-                                       lastUpdated: datetime(),
-                                       fromType: $fromNodeType,
-                                       toType: $toNodeType,
-                                       context: $context,
-                                       confidenceScore: $confidenceScore,
-                                       sources: $sources,
-                                       weight: $weight,
-                                       // Cognitive enhancement fields
-                                       contextType: $contextType,
-                                       contextStrength: $contextStrength,
-                                       memoryAids: $memoryAids,
-                                       relationshipCategory: $relationshipCategory
-                                     }, to, {})
-          YIELD rel
-          RETURN rel
-        `, {
-          fromName: relation.from,
-          toName: relation.to,
-          relType: relation.relationType || 'RELATES_TO',
-          fromNodeType: fromNodeType,
-          toNodeType: toNodeType,
-          context: enhancedRelation.context || null,
-          confidenceScore: enhancedRelation.confidenceScore || null,
-          sources: enhancedRelation.sources || [],
-          weight: enhancedRelation.weight || null,
-          // Cognitive enhancement fields
-          contextType: enhancedRelation.contextType || null,
-          contextStrength: enhancedRelation.contextStrength || null,
-          memoryAids: enhancedRelation.memoryAids || [],
-          relationshipCategory: enhancedRelation.relationshipCategory || null
-        }));
-        
-        if (result.records.length > 0) {
-          console.error(`Relationship created successfully: ${relation.from} (${fromNodeType}) --[${relation.relationType}]--> ${relation.to} (${toNodeType})`);
-          createdRelations.push(relation);
-        } else {
-          console.error(`Failed to create relationship: ${relation.from} (${fromNodeType}) --[${relation.relationType}]--> ${relation.to} (${toNodeType})`);
-        }
-      } catch (relError) {
-        // Handle the case where APOC might not be available
-        console.error(`Error with APOC for relation creation: ${relError}`);
-        
-        // Fallback to standard Cypher if APOC fails
-        try {
-          const fallbackResult = await session.executeWrite(tx => tx.run(`
-            MATCH (from:Memory {name: $fromName}), (to:Memory {name: $toName})
-            MERGE (from)-[r:${relation.relationType || 'RELATES_TO'}]->(to)
-            ON CREATE SET r = $properties
-            ON MATCH SET r = $properties
-            RETURN r
-          `, {
-            fromName: relation.from,
-            toName: relation.to,
-            properties: {
-              lastUpdated: new Date().toISOString(),
-              fromType: fromNodeType,
-              toType: toNodeType,
-              context: enhancedRelation.context,
-              confidenceScore: enhancedRelation.confidenceScore,
-              sources: enhancedRelation.sources,
-              weight: enhancedRelation.weight,
-              contextType: enhancedRelation.contextType,
-              contextStrength: enhancedRelation.contextStrength,
-              memoryAids: enhancedRelation.memoryAids,
-              relationshipCategory: enhancedRelation.relationshipCategory
-            }
-          }));
-          
-          if (fallbackResult.records.length > 0) {
-            console.error(`Relationship created with fallback method: ${relation.from} --[${relation.relationType}]--> ${relation.to}`);
-            createdRelations.push(relation);
-          } else {
-            console.error(`Failed to create relationship with fallback method: ${relation.from} --[${relation.relationType}]--> ${relation.to}`);
-          }
-        } catch (fallbackError) {
-          console.error(`Fallback relation creation failed too: ${fallbackError}`);
-        }
-      }
+      createdRelations.push(enhancedRelation);
     }
     
+    console.error(`Created ${createdRelations.length} relations`);
     return createdRelations;
   } catch (error) {
-    console.error(`Error creating relations: ${error}`);
+    console.error('Error creating relations:', error);
     throw error;
   } finally {
     await session.close();
@@ -1079,6 +1484,130 @@ export async function createReasoningStep(
     }
     
     throw new Error(errorMessage);
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * Create a Location node in Neo4j
+ * @param neo4jDriver - Neo4j driver instance
+ * @param location - Location data to create
+ * @param location.name - Name of the location
+ * @param location.locationType - Type of location (City, Country, Region, Building, Virtual, etc.)
+ * @param location.coordinates - Geographical coordinates {latitude, longitude}
+ * @param location.description - Textual description of the location
+ * @param location.locationSignificance - Historical, cultural, or personal importance
+ * @param location.containedWithin - Creates a CONTAINED_IN relationship to another Location
+ * @param location.eventsOccurred - Creates OCCURRED_AT relationships from Events to this Location
+ * @returns Promise resolving to the created location entity
+ */
+export async function createLocation(
+  neo4jDriver: Neo4jDriver,
+  location: {
+    name: string;
+    locationType?: string;
+    coordinates?: {
+      latitude: number;
+      longitude: number;
+    };
+    description?: string;
+    containedWithin?: string;
+    locationSignificance?: string;
+    eventsOccurred?: string[];
+  }
+): Promise<Entity> {
+  const session = neo4jDriver.session();
+  
+  try {
+    console.error(`Creating Location: ${location.name}`);
+    
+    // Convert coordinates to JSON if present
+    let coordinatesJson = null;
+    if (location.coordinates) {
+      try {
+        coordinatesJson = JSON.stringify(location.coordinates);
+      } catch (e) {
+        console.error(`Error creating coordinates for ${location.name}:`, e);
+        coordinatesJson = null;
+      }
+    }
+    
+    // Create the Location node - without containedWithin and eventsOccurred attributes
+    const result = await session.executeWrite(tx => tx.run(`
+      MERGE (node:Memory {name: $name})
+      SET node.nodeType = 'Location',
+          node:Location,
+          node.lastUpdated = datetime(),
+          node.locationType = $locationType,
+          node.coordinates = $coordinates,
+          node.description = $description,
+          node.locationSignificance = $locationSignificance,
+          node.createdAt = CASE WHEN node.createdAt IS NULL THEN datetime() ELSE node.createdAt END
+      RETURN node
+    `, {
+      name: location.name,
+      locationType: location.locationType || null,
+      coordinates: coordinatesJson,
+      description: location.description || null,
+      locationSignificance: location.locationSignificance || null
+    }));
+    
+    // If containedWithin is specified, create relationship to parent location
+    if (location.containedWithin) {
+      await session.executeWrite(tx => tx.run(`
+        MATCH (location:Location {name: $locationName})
+        MATCH (container:Location {name: $containerName})
+        MERGE (location)-[r:CONTAINED_IN {
+          relationType: 'CONTAINED_IN',
+          relationshipType: 'PART_OF',
+          context: $context,
+          relationshipCategory: 'COMPOSITIONAL'
+        }]->(container)
+        RETURN r
+      `, {
+        locationName: location.name,
+        containerName: location.containedWithin,
+        context: `${location.name} is geographically contained within ${location.containedWithin}`
+      }));
+    }
+    
+    // If events are specified, create relationships to event nodes
+    if (location.eventsOccurred && location.eventsOccurred.length > 0) {
+      for (const eventName of location.eventsOccurred) {
+        await session.executeWrite(tx => tx.run(`
+          MATCH (location:Location {name: $locationName})
+          MATCH (event:Event {name: $eventName})
+          MERGE (event)-[r:OCCURRED_AT {
+            relationType: 'OCCURRED_AT',
+            relationshipType: 'HAS_LOCATION',
+            context: $context,
+            relationshipCategory: 'SPATIAL'
+          }]->(location)
+          RETURN r
+        `, {
+          locationName: location.name,
+          eventName: eventName,
+          context: `${eventName} occurred at ${location.name}`
+        }));
+      }
+    }
+    
+    const record = result.records[0];
+    const node = record.get('node');
+    
+    // Process the saved entity
+    const savedEntity = processEntityDates({
+      name: node.properties.name,
+      entityType: node.properties.nodeType,
+      // Include all node properties
+      ...node.properties
+    });
+    
+    return savedEntity;
+  } catch (error) {
+    console.error(`Error creating Location node ${location.name}:`, error);
+    throw error;
   } finally {
     await session.close();
   }

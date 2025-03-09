@@ -17,5 +17,6 @@ export {
   searchNodes,
   createThought,
   createReasoningChain,
-  createReasoningStep
+  createReasoningStep,
+  createLocation
 } from './methods.js'; 

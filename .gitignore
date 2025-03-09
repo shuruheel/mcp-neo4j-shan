@@ -52,3 +52,4 @@ Thumbs.db
 .env.production
 
 .cursor/
+.writing
