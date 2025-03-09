@@ -9,10 +9,254 @@ from datetime import datetime
 from tqdm import tqdm
 from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from kg_schema import EXTRACTION_PROMPT_TEMPLATE
+from kg_schema import EXTRACTION_PROMPT_TEMPLATE, RELATIONSHIP_TYPES, RELATIONSHIP_CATEGORIES
+from kg_utils import standardize_entity
+import time
+from typing import List, Dict, Any, Tuple, Optional
 
-def parse_gpt4_response(response):
-    """Parse the GPT-4 response into structured data"""
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+def clean_json_content(json_content):
+    """Clean and normalize JSON content to fix common formatting issues"""
+    # Replace single quotes with double quotes
+    cleaned = json_content.replace("'", '"')
+    
+    # Quote unquoted keys
+    cleaned = re.sub(r'([{,])\s*(\w+):', r'\1"\2":', cleaned)
+    
+    # Remove trailing commas (common in LLM-generated JSON)
+    cleaned = re.sub(r',\s*}', '}', cleaned)
+    cleaned = re.sub(r',\s*]', ']', cleaned)
+    
+    # Handle multi-line strings and normalize whitespace in string values
+    cleaned = re.sub(r'"\s*\n\s*([^"]*)\s*\n\s*"', r'"\1"', cleaned)
+    
+    # Remove any non-standard JSON comments
+    cleaned = re.sub(r'//.*?(\n|$)', r'\1', cleaned)
+    cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+    
+    # Fix boolean and null values that might be unquoted
+    cleaned = re.sub(r':\s*True', r': true', cleaned)
+    cleaned = re.sub(r':\s*False', r': false', cleaned)
+    cleaned = re.sub(r':\s*None', r': null', cleaned)
+    
+    # Fix common errors with properties that cause parse failures
+    cleaned = re.sub(r':\s*"([^"]*),([^"]*)"', r': "\1, \2"', cleaned)  # Fix commas inside string values
+    cleaned = re.sub(r'"(\w+)":\s*,', r'"\1": null,', cleaned)  # Handle missing values
+    cleaned = re.sub(r',\s*"(\w+)":\s*}', r'}', cleaned)  # Handle trailing property with missing value
+    
+    # Fix quote escaping issues
+    cleaned = re.sub(r'(?<!\\)"(?=\w+":)', r'\\"', cleaned)  # Fix unescaped quotes in keys
+    cleaned = re.sub(r'(?<!\\\s)"\s*$', r'\\"', cleaned, flags=re.MULTILINE)  # Fix unescaped quotes at end of lines
+    
+    return cleaned
+
+def validate_relationship_type(rel_type):
+    """Validate and normalize relationship type against the schema
+    
+    Args:
+        rel_type: The relationship type to validate
+        
+    Returns:
+        Tuple of (valid_rel_type, relationship_category)
+    """
+    # Convert to uppercase for consistent comparison
+    normalized_type = rel_type.upper()
+    
+    # Check if the relationship type is in the schema
+    if normalized_type in RELATIONSHIP_TYPES:
+        # Find the corresponding category
+        category = None
+        
+        # Determine the category based on the relationship type
+        if normalized_type in ["IS_A", "INSTANCE_OF", "SUB_CLASS_OF", "SUPER_CLASS_OF"]:
+            category = "hierarchical"
+        elif normalized_type in ["HAS_PART", "PART_OF"]:
+            category = "compositional"
+        elif normalized_type in ["LOCATED_IN", "HAS_LOCATION", "CONTAINED_IN", "CONTAINS", "OCCURRED_AT"]:
+            category = "compositional"  # spatial relationships are compositional
+        elif normalized_type in ["HAS_TIME", "OCCURS_ON", "BEFORE", "AFTER", "DURING", "NEXT", "PREVIOUS"]:
+            category = "temporal"
+        elif normalized_type in ["CAUSES", "CAUSED_BY", "INFLUENCES", "INFLUENCED_BY"]:
+            category = "causal"
+        elif normalized_type in ["HAS_PROPERTY", "PROPERTY_OF"]:
+            category = "attributive"
+        elif normalized_type in ["KNOWS", "FRIEND_OF", "MEMBER_OF"]:
+            category = "lateral"  # social relationships
+        elif normalized_type in ["RELATED_TO", "ASSOCIATED_WITH"]:
+            category = "lateral"  # general relationships
+        elif normalized_type in ["EXPRESSES_EMOTION", "FEELS", "EVOKES_EMOTION"]:
+            category = "attributive"  # emotional relationships
+        elif normalized_type in ["BELIEVES", "SUPPORTS", "CONTRADICTS"]:
+            category = "attributive"  # belief relationships
+        elif normalized_type in ["DERIVED_FROM", "CITES", "SOURCE"]:
+            category = "lateral"  # source relationships
+        elif normalized_type in ["MENTORS", "MENTORED_BY", "ADMIRES", "ADMIRED_BY", "OPPOSES", "OPPOSED_BY",
+                                "SHAPED_BY", "TRANSFORMED", "EXHIBITS_TRAIT", "HAS_PERSONALITY", 
+                                "HAS_COGNITIVE_STYLE", "STRUGGLES_WITH", "VALUES", "ADHERES_TO", 
+                                "REJECTS", "HAS_ETHICAL_FRAMEWORK", "LOYAL_TO"]:
+            category = "attributive"  # person-specific relationships
+        elif normalized_type in ["PARTICIPANT", "HAS_PARTICIPANT", "AGENT", "HAS_AGENT", "PATIENT", "HAS_PATIENT"]:
+            category = "causal"  # participation relationships are related to causal relationships
+        else:
+            # Default for other relationship types
+            category = "lateral"
+        
+        return normalized_type, category
+    else:
+        logging.warning(f"Non-standard relationship type: {rel_type}")
+        # Default to RELATED_TO for invalid relationship types
+        return "RELATED_TO", "lateral"
+
+def parse_gpt4_response(response, use_validation=False):
+    """Parse the GPT-4 response into structured data
+    
+    Args:
+        response (str): The LLM response text to parse
+        use_validation (bool): If True, validate and add required attributes for each node type.
+                              If False, don't add missing attributes (useful for initial parsing).
+    """
+    # For completely empty responses
+    if not response or response.strip() == "":
+        logging.warning("Received empty response from LLM")
+        return {}
+        
+    # First, try to detect if the entire response contains structured JSON 
+    # regardless of surrounding text or markdown
+    try:
+        # Check if the response is already a JSON object
+        response_str = response.strip()
+        
+        # Case 1: Direct JSON object - looks for entire response being valid JSON
+        if response_str.startswith('{') and response_str.endswith('}'):
+            logging.info("Response appears to be a complete JSON object, attempting direct parsing")
+            try:
+                # First, clean the JSON to handle common formatting issues
+                cleaned_json = clean_json_content(response_str)
+                result = json.loads(cleaned_json)
+                
+                # Ensure we have the expected structure
+                for key in ["entities", "events", "concepts", "propositions", "attributes", 
+                           "emotions", "agents", "thoughts", "scientificInsights", "laws", 
+                           "reasoningChains", "reasoningSteps", "relationships", 
+                           "personDetails", "locationDetails"]:
+                    if key not in result:
+                        result[key] = []
+                
+                # Normalize structure for relationships and entities if requested
+                if use_validation:
+                    # For entities
+                    for entity in result.get("entities", []):
+                        ensure_required_attributes(entity, "Entity", include_optional=True)
+                        
+                    # For relationships - fix any inconsistencies in structure
+                    for relationship in result.get("relationships", []):
+                        # Ensure source has proper structure
+                        if "source" in relationship and isinstance(relationship["source"], str):
+                            relationship["source"] = {"name": relationship["source"], "type": "Entity"}
+                        
+                        # Ensure target has proper structure    
+                        if "target" in relationship and isinstance(relationship["target"], str):
+                            relationship["target"] = {"name": relationship["target"], "type": "Entity"}
+                        
+                        # Ensure relationship type is valid and normalized
+                        if "relationshipType" in relationship and "type" not in relationship:
+                            relationship["type"] = relationship["relationshipType"]
+                            
+                        # Ensure we have a relationship category    
+                        if "relationshipCategory" not in relationship and "type" in relationship:
+                            rel_type, rel_category = validate_relationship_type(relationship["type"])
+                            relationship["relationshipCategory"] = rel_category
+                
+                return result
+            except json.JSONDecodeError as e:
+                logging.warning(f"Failed to parse direct JSON: {str(e)}")
+                # Continue with other parsing methods
+            
+        # Case 2: JSON block inside markdown code blocks - most common from LLMs
+        code_block_matches = re.findall(r'```(?:json)?\s*\n([\s\S]*?)\n```', response_str)
+        if code_block_matches:
+            logging.info(f"Found {len(code_block_matches)} code blocks in response, checking for valid JSON")
+            for block in code_block_matches:
+                try:
+                    # Clean up potential issues before parsing
+                    json_content = clean_json_content(block.strip())
+                    
+                    # Try to parse as JSON
+                    if json_content.startswith('{') and json_content.endswith('}'):
+                        result = json.loads(json_content)
+                        logging.info("Successfully parsed JSON from code block")
+                        
+                        # Ensure we have the expected structure
+                        for key in ["entities", "events", "concepts", "propositions", "attributes", 
+                                   "emotions", "agents", "thoughts", "scientificInsights", "laws", 
+                                   "reasoningChains", "reasoningSteps", "relationships", 
+                                   "personDetails", "locationDetails"]:
+                            if key not in result:
+                                result[key] = []
+                                
+                        # Normalize structure if requested
+                        if use_validation:
+                            # For entities
+                            for entity in result.get("entities", []):
+                                ensure_required_attributes(entity, "Entity", include_optional=True)
+                                
+                            # For relationships - normalize structure
+                            for relationship in result.get("relationships", []):
+                                # Ensure source has proper structure
+                                if "source" in relationship and isinstance(relationship["source"], str):
+                                    relationship["source"] = {"name": relationship["source"], "type": "Entity"}
+                                
+                                # Ensure target has proper structure    
+                                if "target" in relationship and isinstance(relationship["target"], str):
+                                    relationship["target"] = {"name": relationship["target"], "type": "Entity"}
+                                
+                                # Ensure relationship type is valid and normalized
+                                if "relationshipType" in relationship and "type" not in relationship:
+                                    relationship["type"] = relationship["relationshipType"]
+                                    
+                                # Ensure we have a relationship category    
+                                if "relationshipCategory" not in relationship and "type" in relationship:
+                                    rel_type, rel_category = validate_relationship_type(relationship["type"])
+                                    relationship["relationshipCategory"] = rel_category
+                        
+                        return result
+                except json.JSONDecodeError as e:
+                    logging.warning(f"Failed to parse potential JSON code block: {str(e)}")
+                    # Continue checking other blocks
+        
+        # Case 3: Look for JSON object anywhere in the text
+        json_regex = r'({(?:[^{}]|(?R))*})'
+        matches = re.finditer(json_regex, response_str, re.DOTALL)
+        for match in matches:
+            try:
+                potential_json = match.group(0)
+                # Clean up common issues
+                potential_json = potential_json.replace("'", '"')  # Replace single quotes
+                potential_json = re.sub(r'([{,])\s*(\w+):', r'\1"\2":', potential_json)  # Quote keys
+                potential_json = re.sub(r',\s*}', '}', potential_json)  # Remove trailing commas
+                
+                # Check if it looks like our expected structure
+                result = json.loads(potential_json)
+                if any(key in result for key in ["entities", "events", "concepts", "propositions", 
+                                              "attributes", "emotions", "agents", "thoughts"]):
+                    logging.info("Found and parsed JSON object embedded in text")
+                    # Ensure we have the expected structure
+                    for key in ["entities", "events", "concepts", "propositions", "attributes", 
+                               "emotions", "agents", "thoughts", "scientificInsights", "laws", 
+                               "reasoningChains", "reasoningSteps", "relationships", 
+                               "personDetails", "locationDetails"]:
+                        if key not in result:
+                            result[key] = []
+                    return result
+            except (json.JSONDecodeError, re.error) as e:
+                logging.warning(f"Failed to parse potential JSON within text: {str(e)}")
+                # Continue checking
+    except Exception as e:
+        logging.warning(f"Error during initial JSON detection: {str(e)}")
+        # Continue with regular parsing
+    
+    # Default structure for results
     result = {
         "entities": [],
         "events": [],
@@ -40,21 +284,22 @@ def parse_gpt4_response(response):
     location_details = {}
     
     # Define pattern matchers for section headers
-    entity_headers = [r"Entities?:", r"Named Entities?:"]
-    event_headers = [r"Events?:"]
-    concept_headers = [r"Concepts?:"]
-    proposition_headers = [r"Propositions?:"]
-    attribute_headers = [r"Attributes?:"]
-    emotion_headers = [r"Emotions?:"]
-    agent_headers = [r"Agents?:"]
-    thought_headers = [r"Thoughts?:"]
-    scientific_insight_headers = [r"Scientific Insights?:"]
-    law_headers = [r"Laws?:"]
-    reasoning_chain_headers = [r"Reasoning Chains?:"]
-    reasoning_step_headers = [r"Reasoning Steps?:"]
-    relationship_headers = [r"Relationships?:"]
-    person_details_headers = [r"Person Details for (.+?):"]
-    location_details_headers = [r"Location Details for (.+?):"]
+    # Enhanced to catch more markdown and heading variations
+    entity_headers = [r"(?:##?\s*)?(?:Entities?|Named Entities?)(?::|\.|\s+|$)", r"\*\*Entities?\*\*(?::|\.|\s+|$)"]
+    event_headers = [r"(?:##?\s*)?Events?(?::|\.|\s+|$)", r"\*\*Events?\*\*(?::|\.|\s+|$)"]
+    concept_headers = [r"(?:##?\s*)?Concepts?(?::|\.|\s+|$)", r"\*\*Concepts?\*\*(?::|\.|\s+|$)"]
+    proposition_headers = [r"(?:##?\s*)?Propositions?(?::|\.|\s+|$)", r"\*\*Propositions?\*\*(?::|\.|\s+|$)"]
+    attribute_headers = [r"(?:##?\s*)?Attributes?(?::|\.|\s+|$)", r"\*\*Attributes?\*\*(?::|\.|\s+|$)"]
+    emotion_headers = [r"(?:##?\s*)?Emotions?(?::|\.|\s+|$)", r"\*\*Emotions?\*\*(?::|\.|\s+|$)"]
+    agent_headers = [r"(?:##?\s*)?Agents?(?::|\.|\s+|$)", r"\*\*Agents?\*\*(?::|\.|\s+|$)"]
+    thought_headers = [r"(?:##?\s*)?Thoughts?(?::|\.|\s+|$)", r"\*\*Thoughts?\*\*(?::|\.|\s+|$)"]
+    scientific_insight_headers = [r"(?:##?\s*)?Scientific Insights?(?::|\.|\s+|$)", r"\*\*Scientific Insights?\*\*(?::|\.|\s+|$)"]
+    law_headers = [r"(?:##?\s*)?Laws?(?::|\.|\s+|$)", r"\*\*Laws?\*\*(?::|\.|\s+|$)"]
+    reasoning_chain_headers = [r"(?:##?\s*)?Reasoning Chains?(?::|\.|\s+|$)", r"\*\*Reasoning Chains?\*\*(?::|\.|\s+|$)"]
+    reasoning_step_headers = [r"(?:##?\s*)?Reasoning Steps?(?::|\.|\s+|$)", r"\*\*Reasoning Steps?\*\*(?::|\.|\s+|$)"]
+    relationship_headers = [r"(?:##?\s*)?Relationships?(?::|\.|\s+|$)", r"\*\*Relationships?\*\*(?::|\.|\s+|$)"]
+    person_details_headers = [r"(?:##?\s*)?Person Details for (.+?)(?::|\.|\s+|$)", r"\*\*Person Details for (.+?)\*\*(?::|\.|\s+|$)"]
+    location_details_headers = [r"(?:##?\s*)?Location Details for (.+?)(?::|\.|\s+|$)", r"\*\*Location Details for (.+?)\*\*(?::|\.|\s+|$)"]
     
     # Helper function to handle JSON blocks
     def extract_json_block(start_idx):
@@ -63,83 +308,192 @@ def parse_gpt4_response(response):
         json_start = None
         json_end = None
         
-        # Case 1: Look for ```json code blocks
-        for j in range(start_idx, len(lines)):
-            if "```json" in lines[j] or ("```" in lines[j] and "json" in lines[j]):
-                json_start = j + 1
-                break
+        # Log the current section being processed
+        if start_idx < len(lines):
+            logging.debug(f"Looking for JSON block starting at line: '{lines[start_idx][:50]}...'")
+        
+        # Case 1: Look for ```json code blocks - most common in LLM responses
+        for j in range(start_idx, min(len(lines), start_idx + 20)):  # Limit search range to avoid search entire doc
+            # Match various markdown code block formats
+            if any(marker in lines[j].lower() for marker in ["```json", "``` json", "```\njson", "```"]):
+                if "```" in lines[j] and j + 1 < len(lines):
+                    json_start = j + 1
+                    logging.debug(f"Found JSON code block start at line {j+1}")
+                    break
         
         if json_start is not None:
-            for j in range(json_start, len(lines)):
+            # Search for the end marker
+            for j in range(json_start, min(len(lines), json_start + 200)):  # Reasonable limit for JSON block size
                 if "```" in lines[j]:
                     json_end = j
+                    logging.debug(f"Found JSON code block end at line {j+1}")
                     break
             
             if json_end is not None:
                 json_content = "\n".join(lines[json_start:json_end]).strip()
                 try:
-                    json_obj = json.loads(json_content)
+                    # Attempt to fix common JSON formatting issues
+                    cleaned_json = clean_json_content(json_content)
+                    
+                    json_obj = json.loads(cleaned_json)
+                    logging.debug(f"Successfully parsed JSON from code block: {len(cleaned_json)} chars")
                     return json_obj, json_end + 1
                 except json.JSONDecodeError as e:
                     logging.warning(f"Failed to parse JSON in code block: {str(e)}\nContent: {json_content[:100]}...")
                     # Continue to other methods if this fails
         
-        # Case 2: Look for JSON directly in the text (without code blocks)
-        # Try to find a valid JSON object starting from each line
-        for j in range(start_idx, len(lines)):
-            # Skip empty lines
-            if not lines[j].strip():
-                continue
-                
-            # Try with the current line and all subsequent lines
-            for end_j in range(j+1, len(lines)+1):
-                try:
-                    potential_json = "\n".join(lines[j:end_j]).strip()
-                    # Try to find the JSON object boundaries
-                    if potential_json.startswith("{") or potential_json.startswith("["):
-                        json_obj = json.loads(potential_json)
-                        return json_obj, end_j
-                except json.JSONDecodeError:
-                    continue  # Try with one more line
+        # Case 2: Look for JSON directly in the text (no markdown)
+        logging.debug(f"No valid JSON code block found, trying to extract JSON directly from text")
+        
+        # First, try to detect the simplest case - a complete JSON object on single or multiple lines
+        full_text = "\n".join(lines[start_idx:min(len(lines), start_idx + 100)])
+        # Get rid of leading/trailing markdown or text noise
+        full_text = re.sub(r'^.*?({)', r'\1', full_text, flags=re.DOTALL)
+        try:
+            # Look for balanced braces to extract the complete JSON
+            brace_level = 0
+            start_pos = -1
+            for i, char in enumerate(full_text):
+                if char == '{':
+                    if brace_level == 0:
+                        start_pos = i
+                    brace_level += 1
+                elif char == '}':
+                    brace_level -= 1
+                    if brace_level == 0 and start_pos != -1:
+                        potential_json = full_text[start_pos:i+1]
+                        try:
+                            # Clean and parse the potential JSON
+                            cleaned_json = clean_json_content(potential_json)
+                            json_obj = json.loads(cleaned_json)
+                            logging.debug(f"Extracted valid JSON object using brace matching")
+                            
+                            # Calculate the ending line number for parser to continue
+                            preceding_text = full_text[:start_pos]
+                            line_count = preceding_text.count('\n')
+                            return json_obj, start_idx + line_count + potential_json.count('\n') + 1
+                        except json.JSONDecodeError:
+                            # Continue searching if this particular object fails
+                            pass
+        except Exception as e:
+            logging.warning(f"Error in brace matching JSON extraction: {str(e)}")
+        
+        # If all previous methods failed, try regex as a last resort
+        try:
+            # Pattern for matching JSON objects (will handle basic nested structure)
+            # Much more reliable than the recursive regex that can cause stack overflows
+            pattern = r'(\{(?:[^{}]|(?:\{[^{}]*\}))*\})'
+            matches = re.finditer(pattern, full_text)
             
-            # If still here, try to extract JSON from a line with possible preamble text
-            line = lines[j]
-            json_start_idx = line.find('{')
-            json_end_idx = line.rfind('}')
-            
-            if json_start_idx != -1 and json_end_idx != -1 and json_start_idx < json_end_idx:
+            for match in matches:
+                potential_json = match.group(0)
                 try:
-                    json_text = line[json_start_idx:json_end_idx+1]
-                    json_obj = json.loads(json_text)
-                    return json_obj, j + 1
+                    # Clean and try to parse
+                    cleaned_json = clean_json_content(potential_json)
+                    json_obj = json.loads(cleaned_json)
+                    logging.debug(f"Extracted valid JSON object using regex pattern matching")
+                    
+                    # Calculate the ending line number
+                    preceding_text = full_text[:match.start()]
+                    line_count = preceding_text.count('\n')
+                    return json_obj, start_idx + line_count + potential_json.count('\n') + 1
                 except json.JSONDecodeError:
-                    pass
+                    continue
+        except Exception as e:
+            logging.warning(f"Error in regex JSON extraction: {str(e)}")
         
         # If we got here, we couldn't find a valid JSON object
+        logging.warning(f"No valid JSON object found in response")
         return None, start_idx
     
     # Helper function to extract required attributes
-    def ensure_required_attributes(node_dict, node_type):
-        """Ensure the node has all required attributes for its type"""
+    def ensure_required_attributes(node_dict, node_type, include_optional=False):
+        """Ensure the node has all required attributes for its type based on GraphSchema.md
+        
+        Args:
+            node_dict: The node dictionary to validate/enhance
+            node_type: The type of node being processed
+            include_optional: If True, include all optional fields with defaults.
+                             If False, only include required fields.
+        """
         if not isinstance(node_dict, dict):
-            return node_dict
+            logging.warning(f"Node is not a dictionary: {type(node_dict)}")
+            # Create a minimal valid dict for this node type
+            node_dict = {"name": f"Auto-generated {node_type}", "nodeType": node_type}
             
         # Add nodeType if missing
         if 'nodeType' not in node_dict:
             node_dict['nodeType'] = node_type
+        
+        # Add name if missing (critical for Neo4j)
+        if 'name' not in node_dict or not node_dict['name']:
+            node_dict['name'] = f"Unnamed {node_type} {datetime.now().strftime('%Y%m%d%H%M%S')}"
             
         # Ensure required attributes based on node type
         if node_type == 'Entity':
+            # Required fields from GraphSchema.md
             if 'observations' not in node_dict:
                 node_dict['observations'] = []
+            
+            # Optional fields only added when requested
+            if include_optional:
+                if 'subType' not in node_dict:
+                    node_dict['subType'] = None
+                if 'confidence' not in node_dict:
+                    node_dict['confidence'] = 0.5
+                if 'source' not in node_dict:
+                    node_dict['source'] = None
+                if 'description' not in node_dict:
+                    node_dict['description'] = None
+                if 'biography' not in node_dict:
+                    node_dict['biography'] = None
+                if 'keyContributions' not in node_dict:
+                    node_dict['keyContributions'] = []
+                if 'emotionalValence' not in node_dict:
+                    node_dict['emotionalValence'] = 0.0
+                if 'emotionalArousal' not in node_dict:
+                    node_dict['emotionalArousal'] = 0.0
+                
+                # Person details handling
+                if node_dict.get('subType') == 'Person' and 'personDetails' not in node_dict:
+                    node_dict['personDetails'] = {}
                 
         elif node_type == 'Event':
+            # Required fields
             if 'participants' not in node_dict:
                 node_dict['participants'] = []
             if 'outcome' not in node_dict:
-                node_dict['outcome'] = ""
+                node_dict['outcome'] = None
+                
+            # Optional fields only added when requested
+            if include_optional:
+                if 'startDate' not in node_dict:
+                    node_dict['startDate'] = None
+                if 'endDate' not in node_dict:
+                    node_dict['endDate'] = None
+                if 'status' not in node_dict:
+                    node_dict['status'] = None
+                if 'timestamp' not in node_dict:
+                    node_dict['timestamp'] = None
+                if 'duration' not in node_dict:
+                    node_dict['duration'] = None
+                if 'location' not in node_dict:
+                    node_dict['location'] = None
+                if 'significance' not in node_dict:
+                    node_dict['significance'] = None
+                if 'emotionalValence' not in node_dict:
+                    node_dict['emotionalValence'] = 0.0
+                if 'emotionalArousal' not in node_dict:
+                    node_dict['emotionalArousal'] = 0.0
+                if 'causalPredecessors' not in node_dict:
+                    node_dict['causalPredecessors'] = []
+                if 'causalSuccessors' not in node_dict:
+                    node_dict['causalSuccessors'] = []
+                if 'subType' not in node_dict:
+                    node_dict['subType'] = None
                 
         elif node_type == 'Concept':
+            # Required fields
             if 'definition' not in node_dict:
                 node_dict['definition'] = ""
             if 'examples' not in node_dict:
@@ -149,7 +503,27 @@ def parse_gpt4_response(response):
             if 'domain' not in node_dict:
                 node_dict['domain'] = ""
                 
+            # Optional fields only added when requested
+            if include_optional:
+                if 'description' not in node_dict:
+                    node_dict['description'] = None
+                if 'significance' not in node_dict:
+                    node_dict['significance'] = None
+                if 'perspectives' not in node_dict:
+                    node_dict['perspectives'] = []
+                if 'historicalDevelopment' not in node_dict:
+                    node_dict['historicalDevelopment'] = []
+                if 'emotionalValence' not in node_dict:
+                    node_dict['emotionalValence'] = 0.0
+                if 'emotionalArousal' not in node_dict:
+                    node_dict['emotionalArousal'] = 0.0
+                if 'abstractionLevel' not in node_dict:
+                    node_dict['abstractionLevel'] = 0.5  # Middle of scale
+                if 'metaphoricalMappings' not in node_dict:
+                    node_dict['metaphoricalMappings'] = []
+                
         elif node_type == 'Proposition':
+            # Required fields
             if 'statement' not in node_dict:
                 node_dict['statement'] = ""
             if 'status' not in node_dict:
@@ -157,13 +531,50 @@ def parse_gpt4_response(response):
             if 'confidence' not in node_dict:
                 node_dict['confidence'] = 0.5
                 
+            # Optional fields only added when requested
+            if include_optional:
+                if 'truthValue' not in node_dict:
+                    node_dict['truthValue'] = None
+                if 'sources' not in node_dict:
+                    node_dict['sources'] = []
+                if 'domain' not in node_dict:
+                    node_dict['domain'] = None
+                if 'emotionalValence' not in node_dict:
+                    node_dict['emotionalValence'] = 0.0
+                if 'emotionalArousal' not in node_dict:
+                    node_dict['emotionalArousal'] = 0.0
+                if 'evidenceStrength' not in node_dict:
+                    node_dict['evidenceStrength'] = 0.0
+                if 'counterEvidence' not in node_dict:
+                    node_dict['counterEvidence'] = []
+                
+        # Only include minimal required fields for other node types unless specifically requested
+        # This drastically reduces data bloat while ensuring valid nodes
+        
         elif node_type == 'Attribute':
+            # Required fields
             if 'value' not in node_dict:
                 node_dict['value'] = ""
             if 'valueType' not in node_dict:
-                node_dict['valueType'] = "text"
+                # Try to infer value type
+                if isinstance(node_dict.get('value'), (int, float)):
+                    node_dict['valueType'] = "numeric"
+                elif isinstance(node_dict.get('value'), bool):
+                    node_dict['valueType'] = "boolean"
+                else:
+                    node_dict['valueType'] = "text"
+                
+            # Optional fields only added when requested
+            if include_optional:
+                if 'unit' not in node_dict:
+                    node_dict['unit'] = None
+                if 'possibleValues' not in node_dict:
+                    node_dict['possibleValues'] = []
+                if 'description' not in node_dict:
+                    node_dict['description'] = None
                 
         elif node_type == 'Emotion':
+            # Required fields
             if 'intensity' not in node_dict:
                 node_dict['intensity'] = 0.5
             if 'valence' not in node_dict:
@@ -171,19 +582,92 @@ def parse_gpt4_response(response):
             if 'category' not in node_dict:
                 node_dict['category'] = ""
                 
+            # Optional fields only added when requested
+            if include_optional:
+                if 'subcategory' not in node_dict:
+                    node_dict['subcategory'] = None
+                if 'description' not in node_dict:
+                    node_dict['description'] = None
+                
         elif node_type == 'Agent':
+            # Required fields
             if 'agentType' not in node_dict:
                 node_dict['agentType'] = "human"
             if 'capabilities' not in node_dict:
                 node_dict['capabilities'] = []
                 
+            # Optional fields only added when requested
+            if include_optional:
+                if 'description' not in node_dict:
+                    node_dict['description'] = None
+                if 'beliefs' not in node_dict:
+                    node_dict['beliefs'] = []
+                if 'knowledge' not in node_dict:
+                    node_dict['knowledge'] = []
+                if 'preferences' not in node_dict:
+                    node_dict['preferences'] = []
+                if 'emotionalState' not in node_dict:
+                    node_dict['emotionalState'] = None
+                
+                # AI-specific attributes for AI agents
+                if node_dict.get('agentType') == "ai":
+                    if 'modelName' not in node_dict:
+                        node_dict['modelName'] = None
+                    if 'provider' not in node_dict:
+                        node_dict['provider'] = None
+                    if 'apiEndpoint' not in node_dict:
+                        node_dict['apiEndpoint'] = None
+                    if 'trainingData' not in node_dict:
+                        node_dict['trainingData'] = []
+                    if 'operationalConstraints' not in node_dict:
+                        node_dict['operationalConstraints'] = []
+                    if 'performanceMetrics' not in node_dict:
+                        node_dict['performanceMetrics'] = {}
+                    if 'version' not in node_dict:
+                        node_dict['version'] = None
+                    if 'operationalStatus' not in node_dict:
+                        node_dict['operationalStatus'] = "active"
+                    if 'ownership' not in node_dict:
+                        node_dict['ownership'] = None
+                    if 'interactionHistory' not in node_dict:
+                        node_dict['interactionHistory'] = []
+                
         elif node_type == 'Thought':
+            # Required fields
             if 'thoughtContent' not in node_dict:
                 node_dict['thoughtContent'] = ""
             if 'references' not in node_dict:
                 node_dict['references'] = []
                 
+            # Optional fields only added when requested
+            if include_optional:
+                if 'confidence' not in node_dict:
+                    node_dict['confidence'] = 0.5
+                if 'source' not in node_dict:
+                    node_dict['source'] = None
+                if 'createdBy' not in node_dict:
+                    node_dict['createdBy'] = None
+                if 'tags' not in node_dict:
+                    node_dict['tags'] = []
+                if 'impact' not in node_dict:
+                    node_dict['impact'] = None
+                if 'emotionalValence' not in node_dict:
+                    node_dict['emotionalValence'] = 0.0
+                if 'emotionalArousal' not in node_dict:
+                    node_dict['emotionalArousal'] = 0.0
+                if 'evidentialBasis' not in node_dict:
+                    node_dict['evidentialBasis'] = []
+                if 'thoughtCounterarguments' not in node_dict:
+                    node_dict['thoughtCounterarguments'] = []
+                if 'implications' not in node_dict:
+                    node_dict['implications'] = []
+                if 'thoughtConfidenceScore' not in node_dict:
+                    node_dict['thoughtConfidenceScore'] = 0.0
+                if 'reasoningChains' not in node_dict:
+                    node_dict['reasoningChains'] = []
+                
         elif node_type == 'ScientificInsight':
+            # Required fields
             if 'hypothesis' not in node_dict:
                 node_dict['hypothesis'] = ""
             if 'evidence' not in node_dict:
@@ -193,7 +677,29 @@ def parse_gpt4_response(response):
             if 'field' not in node_dict:
                 node_dict['field'] = ""
                 
+            # Optional fields only added when requested
+            if include_optional:
+                if 'methodology' not in node_dict:
+                    node_dict['methodology'] = None
+                if 'publications' not in node_dict:
+                    node_dict['publications'] = []
+                if 'emotionalValence' not in node_dict:
+                    node_dict['emotionalValence'] = 0.0
+                if 'emotionalArousal' not in node_dict:
+                    node_dict['emotionalArousal'] = 0.0
+                if 'evidenceStrength' not in node_dict:
+                    node_dict['evidenceStrength'] = 0.0
+                if 'scientificCounterarguments' not in node_dict:
+                    node_dict['scientificCounterarguments'] = []
+                if 'applicationDomains' not in node_dict:
+                    node_dict['applicationDomains'] = []
+                if 'replicationStatus' not in node_dict:
+                    node_dict['replicationStatus'] = None
+                if 'surpriseValue' not in node_dict:
+                    node_dict['surpriseValue'] = 0.0
+                
         elif node_type == 'Law':
+            # Required fields
             if 'statement' not in node_dict:
                 node_dict['statement'] = ""
             if 'conditions' not in node_dict:
@@ -203,7 +709,25 @@ def parse_gpt4_response(response):
             if 'domain' not in node_dict:
                 node_dict['domain'] = ""
                 
+            # Optional fields only added when requested
+            if include_optional:
+                if 'proofs' not in node_dict:
+                    node_dict['proofs'] = []
+                if 'emotionalValence' not in node_dict:
+                    node_dict['emotionalValence'] = 0.0
+                if 'emotionalArousal' not in node_dict:
+                    node_dict['emotionalArousal'] = 0.0
+                if 'domainConstraints' not in node_dict:
+                    node_dict['domainConstraints'] = []
+                if 'historicalPrecedents' not in node_dict:
+                    node_dict['historicalPrecedents'] = []
+                if 'counterexamples' not in node_dict:
+                    node_dict['counterexamples'] = []
+                if 'formalRepresentation' not in node_dict:
+                    node_dict['formalRepresentation'] = None
+                
         elif node_type == 'ReasoningChain':
+            # Required fields
             if 'description' not in node_dict:
                 node_dict['description'] = ""
             if 'conclusion' not in node_dict:
@@ -215,7 +739,23 @@ def parse_gpt4_response(response):
             if 'methodology' not in node_dict:
                 node_dict['methodology'] = "mixed"
                 
+            # Optional fields only added when requested
+            if include_optional:
+                if 'domain' not in node_dict:
+                    node_dict['domain'] = None
+                if 'tags' not in node_dict:
+                    node_dict['tags'] = []
+                if 'sourceThought' not in node_dict:
+                    node_dict['sourceThought'] = None
+                if 'numberOfSteps' not in node_dict:
+                    node_dict['numberOfSteps'] = 0
+                if 'alternativeConclusionsConsidered' not in node_dict:
+                    node_dict['alternativeConclusionsConsidered'] = []
+                if 'relatedPropositions' not in node_dict:
+                    node_dict['relatedPropositions'] = []
+                
         elif node_type == 'ReasoningStep':
+            # Required fields
             if 'content' not in node_dict:
                 node_dict['content'] = ""
             if 'stepType' not in node_dict:
@@ -223,11 +763,44 @@ def parse_gpt4_response(response):
             if 'confidence' not in node_dict:
                 node_dict['confidence'] = 0.5
                 
+            # Optional fields only added when requested
+            if include_optional:
+                if 'evidenceType' not in node_dict:
+                    node_dict['evidenceType'] = None
+                if 'supportingReferences' not in node_dict:
+                    node_dict['supportingReferences'] = []
+                if 'alternatives' not in node_dict:
+                    node_dict['alternatives'] = []
+                if 'counterarguments' not in node_dict:
+                    node_dict['counterarguments'] = []
+                if 'assumptions' not in node_dict:
+                    node_dict['assumptions'] = []
+                if 'formalNotation' not in node_dict:
+                    node_dict['formalNotation'] = None
+                if 'propositions' not in node_dict:
+                    node_dict['propositions'] = []
+                if 'chainName' not in node_dict:
+                    node_dict['chainName'] = None
+                if 'order' not in node_dict:
+                    node_dict['order'] = 0
+                
         elif node_type == 'Location':
+            # Required fields
             if 'locationType' not in node_dict:
                 node_dict['locationType'] = "Place"
             if 'description' not in node_dict:
                 node_dict['description'] = ""
+                
+            # Optional fields only added when requested
+            if include_optional:
+                if 'coordinates' not in node_dict:
+                    node_dict['coordinates'] = {"latitude": 0.0, "longitude": 0.0}
+                if 'locationSignificance' not in node_dict:
+                    node_dict['locationSignificance'] = None
+                
+        # Check for invalid node types
+        else:
+            logging.warning(f"Unknown node type: {node_type}")
                 
         return node_dict
     
@@ -240,28 +813,61 @@ def parse_gpt4_response(response):
         # Check for section headers
         if any(re.match(pattern, line) for pattern in entity_headers):
             current_section = "entities"
-            # After identifying entities section, look for JSON blocks
-            while i < len(lines) - 1:
+            i += 1  # Move to next line after entity header
+            
+            # Process entity lines - format expected: "- Entity Name (Type) - Description"
+            while i < len(lines):
+                line = lines[i].strip()
+                
+                # If we hit another section header, break out
+                if any(re.match(pattern, line) for pattern in event_headers + concept_headers + 
+                      proposition_headers + attribute_headers + emotion_headers + 
+                      agent_headers + thought_headers + scientific_insight_headers + 
+                      law_headers + reasoning_chain_headers + reasoning_step_headers + 
+                      relationship_headers + person_details_headers + location_details_headers):
+                    break
+                
+                # Skip empty lines or non-entity lines
+                if not line or not line.startswith('-'):
+                    i += 1
+                    continue
+                    
+                # Extract entity from line format: "- Entity Name (Type) - Description"
+                # Remove the leading dash and space
+                entity_line = line[2:].strip()
+                
+                # Try to match the expected format
+                entity_match = re.match(r'([^(]+)\s*\(([^)]+)\)\s*-\s*(.+)', entity_line)
+                if entity_match:
+                    name = entity_match.group(1).strip()
+                    entity_type = entity_match.group(2).strip()
+                    description = entity_match.group(3).strip()
+                    
+                    # Create entity object with required attributes
+                    entity = {
+                        "name": name,
+                        "nodeType": "Entity",
+                        "entityType": entity_type,
+                        "description": description,
+                        "observations": []  # Ensure required attributes
+                    }
+                    
+                    logging.debug(f"Extracted entity: {name} ({entity_type})")
+                    result["entities"].append(entity)
+                else:
+                    logging.warning(f"Could not parse entity from line: {line}")
                 i += 1
-                if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
-                    entity_json, i = extract_json_block(i)
-                    if entity_json:
-                        entity_json = ensure_required_attributes(entity_json, "Entity")
-                        result["entities"].append(entity_json)
-                    i -= 1  # Adjust for the increment at the end of the loop
-                    break
-                elif any(re.match(pattern, lines[i]) for pattern in event_headers + concept_headers + 
-                                   proposition_headers + attribute_headers + emotion_headers + 
-                                   agent_headers + thought_headers + scientific_insight_headers + 
-                                   law_headers + reasoning_chain_headers + reasoning_step_headers + 
-                                   relationship_headers + person_details_headers + location_details_headers):
-                    i -= 1  # Go back to the header line
-                    break
-                elif lines[i].startswith("- "):
-                    # We found a line-by-line entry, go back and process as normal
-                    i -= 1
-                    break
         
+        # Check if this is the start of JSON block for entities
+        elif current_section == "entities" and ("```json" in line or ("```" in line and "json" in line)):
+            entity_json, i = extract_json_block(i)
+            if entity_json:
+                # Only validate if specified
+                if use_validation:
+                    entity_json = ensure_required_attributes(entity_json, "Entity", include_optional=False)
+                result["entities"].append(entity_json)
+            continue
+            
         elif any(re.match(pattern, line) for pattern in event_headers):
             current_section = "events"
             # After identifying events section, look for JSON blocks
@@ -270,7 +876,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     event_json, i = extract_json_block(i)
                     if event_json:
-                        event_json = ensure_required_attributes(event_json, "Event")
+                        # Only validate if specified
+                        if use_validation:
+                            event_json = ensure_required_attributes(event_json, "Event", include_optional=False)
                         result["events"].append(event_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -294,7 +902,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     concept_json, i = extract_json_block(i)
                     if concept_json:
-                        concept_json = ensure_required_attributes(concept_json, "Concept")
+                        # Only validate if specified
+                        if use_validation:
+                            concept_json = ensure_required_attributes(concept_json, "Concept", include_optional=False)
                         result["concepts"].append(concept_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -318,7 +928,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     proposition_json, i = extract_json_block(i)
                     if proposition_json:
-                        proposition_json = ensure_required_attributes(proposition_json, "Proposition")
+                        # Only validate if specified
+                        if use_validation:
+                            proposition_json = ensure_required_attributes(proposition_json, "Proposition", include_optional=False)
                         result["propositions"].append(proposition_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -342,7 +954,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     attribute_json, i = extract_json_block(i)
                     if attribute_json:
-                        attribute_json = ensure_required_attributes(attribute_json, "Attribute")
+                        # Only validate if specified
+                        if use_validation:
+                            attribute_json = ensure_required_attributes(attribute_json, "Attribute", include_optional=False)
                         result["attributes"].append(attribute_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -365,7 +979,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     emotion_json, i = extract_json_block(i)
                     if emotion_json:
-                        emotion_json = ensure_required_attributes(emotion_json, "Emotion")
+                        # Only validate if specified
+                        if use_validation:
+                            emotion_json = ensure_required_attributes(emotion_json, "Emotion", include_optional=False)
                         result["emotions"].append(emotion_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -388,7 +1004,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     agent_json, i = extract_json_block(i)
                     if agent_json:
-                        agent_json = ensure_required_attributes(agent_json, "Agent")
+                        # Only validate if specified
+                        if use_validation:
+                            agent_json = ensure_required_attributes(agent_json, "Agent", include_optional=False)
                         result["agents"].append(agent_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -411,7 +1029,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     thought_json, i = extract_json_block(i)
                     if thought_json:
-                        thought_json = ensure_required_attributes(thought_json, "Thought")
+                        # Only validate if specified
+                        if use_validation:
+                            thought_json = ensure_required_attributes(thought_json, "Thought", include_optional=False)
                         result["thoughts"].append(thought_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -433,7 +1053,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     insight_json, i = extract_json_block(i)
                     if insight_json:
-                        insight_json = ensure_required_attributes(insight_json, "ScientificInsight")
+                        # Only validate if specified
+                        if use_validation:
+                            insight_json = ensure_required_attributes(insight_json, "ScientificInsight", include_optional=False)
                         result["scientificInsights"].append(insight_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -455,7 +1077,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     law_json, i = extract_json_block(i)
                     if law_json:
-                        law_json = ensure_required_attributes(law_json, "Law")
+                        # Only validate if specified
+                        if use_validation:
+                            law_json = ensure_required_attributes(law_json, "Law", include_optional=False)
                         result["laws"].append(law_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -477,7 +1101,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     chain_json, i = extract_json_block(i)
                     if chain_json:
-                        chain_json = ensure_required_attributes(chain_json, "ReasoningChain")
+                        # Only validate if specified
+                        if use_validation:
+                            chain_json = ensure_required_attributes(chain_json, "ReasoningChain", include_optional=False)
                         result["reasoningChains"].append(chain_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -498,7 +1124,9 @@ def parse_gpt4_response(response):
                 if "```json" in lines[i] or ("```" in lines[i] and "json" in lines[i]):
                     step_json, i = extract_json_block(i)
                     if step_json:
-                        step_json = ensure_required_attributes(step_json, "ReasoningStep")
+                        # Only validate if specified
+                        if use_validation:
+                            step_json = ensure_required_attributes(step_json, "ReasoningStep", include_optional=False)
                         result["reasoningSteps"].append(step_json)
                     i -= 1  # Adjust for the increment at the end of the loop
                     break
@@ -579,101 +1207,13 @@ def parse_gpt4_response(response):
                     "observations": [],
                     "confidence": 0.0,
                 }
+
                 
-                # Extract entity name, type and description
-                entity_parts = content.split(" - ", 1)
-                entity_with_type = entity_parts[0].strip()
+                # In JSON response mode, we don't need to look ahead for additional details
+                # as all data should be contained in the JSON structure
+                # The validation step will ensure required fields are present
                 
-                # Extract name and type
-                if "(" in entity_with_type and ")" in entity_with_type:
-                    name_parts = entity_with_type.split("(", 1)
-                    entity_data["name"] = name_parts[0].strip()
-                    entity_data["subType"] = name_parts[1].rstrip(")").strip()
-                else:
-                    entity_data["name"] = entity_with_type
-                
-                # Extract description if available
-                if len(entity_parts) > 1 and entity_parts[1].strip():
-                    description = entity_parts[1].strip()
-                    # Check if this is an observation rather than a separate entity
-                    if not ":" in description:
-                        entity_data["observations"].append(description)
-                    else:
-                        # This might be a property description
-                        prop_parts = description.split(":", 1)
-                        if len(prop_parts) == 2 and prop_parts[0].strip() in [
-                            "Observations", "Key Contributions", "Biography", "Description"
-                        ]:
-                            prop_name = prop_parts[0].strip()
-                            prop_value = prop_parts[1].strip()
-                            
-                            if prop_name == "Observations":
-                                entity_data["observations"].append(prop_value)
-                            elif prop_name == "Key Contributions":
-                                if "keyContributions" not in entity_data:
-                                    entity_data["keyContributions"] = []
-                                entity_data["keyContributions"].append(prop_value)
-                            elif prop_name == "Biography":
-                                entity_data["biography"] = prop_value
-                            elif prop_name == "Description":
-                                entity_data["description"] = prop_value
-                        else:
-                            # Just treat as an observation if we don't recognize the format
-                            entity_data["observations"].append(description)
-                
-                # Look ahead for additional entity details in subsequent lines
-                j = i + 1
-                while j < len(lines) and (
-                    lines[j].strip().startswith("Description:") or
-                    lines[j].strip().startswith("Observations:") or
-                    lines[j].strip().startswith("Source:") or
-                    lines[j].strip().startswith("Confidence:") or
-                    lines[j].strip().startswith("Biography:") or
-                    lines[j].strip().startswith("Key Contributions:") or
-                    lines[j].strip().startswith("Emotional Valence:") or
-                    lines[j].strip().startswith("Emotional Arousal:") or
-                    lines[j].strip() == ""):
-                    
-                    detail_line = lines[j].strip()
-                    
-                    if detail_line.startswith("Description:"):
-                        entity_data["description"] = detail_line[len("Description:"):].strip()
-                    elif detail_line.startswith("Observations:"):
-                        observations = detail_line[len("Observations:"):].strip()
-                        entity_data["observations"] = [obs.strip() for obs in observations.split(";")]
-                    elif detail_line.startswith("Source:"):
-                        entity_data["source"] = detail_line[len("Source:"):].strip()
-                    elif detail_line.startswith("Confidence:"):
-                        confidence_text = detail_line[len("Confidence:"):].strip()
-                        # Convert text confidence to numeric
-                        if confidence_text.lower() == "high":
-                            entity_data["confidence"] = 0.9
-                        elif confidence_text.lower() == "medium":
-                            entity_data["confidence"] = 0.6
-                        elif confidence_text.lower() == "low":
-                            entity_data["confidence"] = 0.3
-                    elif detail_line.startswith("Biography:"):
-                        entity_data["biography"] = detail_line[len("Biography:"):].strip()
-                    elif detail_line.startswith("Key Contributions:"):
-                        contributions = detail_line[len("Key Contributions:"):].strip()
-                        entity_data["keyContributions"] = [contrib.strip() for contrib in contributions.split(";")]
-                    elif detail_line.startswith("Emotional Valence:"):
-                        try:
-                            entity_data["emotionalValence"] = float(detail_line[len("Emotional Valence:"):].strip())
-                        except ValueError:
-                            entity_data["emotionalValence"] = 0.0
-                    elif detail_line.startswith("Emotional Arousal:"):
-                        try:
-                            entity_data["emotionalArousal"] = float(detail_line[len("Emotional Arousal:"):].strip())
-                        except ValueError:
-                            entity_data["emotionalArousal"] = 0.0
-                    
-                    j += 1
-                
-                # Skip the detail lines that we've already processed
-                if j > i + 1:
-                    i = j - 1  # -1 because we'll increment i at the end of the loop
-                
+                # Add the entity to the result
                 result["entities"].append(entity_data)
             elif current_section == "events":
                 # Parse event data with comprehensive attributes
@@ -716,141 +1256,44 @@ def parse_gpt4_response(response):
                         if duration_match:
                             event_data["duration"] = duration_match.group(1).strip()
                 
-                # Look ahead for additional event details in subsequent lines
-                j = i + 1
-                while j < len(lines) and (
-                    lines[j].strip().startswith("Participants:") or
-                    lines[j].strip().startswith("Outcome:") or
-                    lines[j].strip().startswith("Significance:") or
-                    lines[j].strip().startswith("Emotional Valence:") or
-                    lines[j].strip().startswith("Emotional Arousal:") or
-                    lines[j].strip().startswith("Causal Predecessors:") or
-                    lines[j].strip().startswith("Causal Successors:") or
-                    lines[j].strip().startswith("Description:") or
-                    lines[j].strip() == ""):
-                    
-                    detail_line = lines[j].strip()
-                    
-                    if detail_line.startswith("Participants:"):
-                        participants = detail_line[len("Participants:"):].strip()
-                        event_data["participants"] = [p.strip() for p in participants.split(",")]
-                    elif detail_line.startswith("Outcome:"):
-                        event_data["outcome"] = detail_line[len("Outcome:"):].strip()
-                    elif detail_line.startswith("Significance:"):
-                        event_data["significance"] = detail_line[len("Significance:"):].strip()
-                    elif detail_line.startswith("Emotional Valence:"):
-                        try:
-                            event_data["emotionalValence"] = float(detail_line[len("Emotional Valence:"):].strip())
-                        except ValueError:
-                            event_data["emotionalValence"] = 0.0
-                    elif detail_line.startswith("Emotional Arousal:"):
-                        try:
-                            event_data["emotionalArousal"] = float(detail_line[len("Emotional Arousal:"):].strip())
-                        except ValueError:
-                            event_data["emotionalArousal"] = 0.0
-                    elif detail_line.startswith("Causal Predecessors:"):
-                        predecessors = detail_line[len("Causal Predecessors:"):].strip()
-                        event_data["causalPredecessors"] = [p.strip() for p in predecessors.split(",")]
-                    elif detail_line.startswith("Causal Successors:"):
-                        successors = detail_line[len("Causal Successors:"):].strip()
-                        event_data["causalSuccessors"] = [s.strip() for s in successors.split(",")]
-                    elif detail_line.startswith("Description:"):
-                        event_data["description"] = detail_line[len("Description:"):].strip()
-                    
-                    j += 1
+                # In JSON response mode, we don't need to look ahead for additional details
+                # as all data should be contained in the JSON structure
+                # The validation step will ensure required fields are present
                 
-                # Skip the detail lines that we've already processed
-                if j > i + 1:
-                    i = j - 1  # -1 because we'll increment i at the end of the loop
-                
+                # Add the event to the result
                 result["events"].append(event_data)
             elif current_section == "concepts":
-                # Parse concept data with comprehensive attributes
+                # In JSON response mode, concepts should already have all their attributes
+                # from the structured JSON output
                 concept_data = {
                     "name": content,
                     "nodeType": "Concept",
                     "examples": [],
-                    "relatedConcepts": []
+                    "relatedConcepts": [],
+                    "definition": ""
                 }
                 
-                # Extract concept name and definition
+                # Extract concept name and definition only if not in JSON format
+                # This is kept for backward compatibility with older formats
                 if " - " in content:
                     name_part, definition_part = content.split(" - ", 1)
                     concept_data["name"] = name_part.strip()
                     concept_data["definition"] = definition_part.strip()
                 
-                # Look ahead for additional concept details in subsequent lines
-                j = i + 1
-                while j < len(lines) and (
-                    lines[j].strip().startswith("Description:") or
-                    lines[j].strip().startswith("Examples:") or
-                    lines[j].strip().startswith("Domain:") or
-                    lines[j].strip().startswith("Significance:") or
-                    lines[j].strip().startswith("Related Concepts:") or
-                    lines[j].strip().startswith("Perspectives:") or
-                    lines[j].strip().startswith("Historical Development:") or
-                    lines[j].strip().startswith("Abstraction Level:") or
-                    lines[j].strip().startswith("Metaphorical Mappings:") or
-                    lines[j].strip().startswith("Emotional Valence:") or
-                    lines[j].strip().startswith("Emotional Arousal:") or
-                    lines[j].strip() == ""):
-                    
-                    detail_line = lines[j].strip()
-                    
-                    if detail_line.startswith("Description:"):
-                        concept_data["description"] = detail_line[len("Description:"):].strip()
-                    elif detail_line.startswith("Examples:"):
-                        examples = detail_line[len("Examples:"):].strip()
-                        concept_data["examples"] = [ex.strip() for ex in examples.split(";")]
-                    elif detail_line.startswith("Domain:"):
-                        concept_data["domain"] = detail_line[len("Domain:"):].strip()
-                    elif detail_line.startswith("Significance:"):
-                        concept_data["significance"] = detail_line[len("Significance:"):].strip()
-                    elif detail_line.startswith("Related Concepts:"):
-                        related = detail_line[len("Related Concepts:"):].strip()
-                        concept_data["relatedConcepts"] = [rc.strip() for rc in related.split(",")]
-                    elif detail_line.startswith("Perspectives:"):
-                        perspectives = detail_line[len("Perspectives:"):].strip()
-                        concept_data["perspectives"] = [p.strip() for p in perspectives.split(";")]
-                    elif detail_line.startswith("Historical Development:"):
-                        # This could be complex - either flatten or create structured object
-                        concept_data["historicalDevelopment"] = detail_line[len("Historical Development:"):].strip()
-                    elif detail_line.startswith("Abstraction Level:"):
-                        try:
-                            concept_data["abstractionLevel"] = float(detail_line[len("Abstraction Level:"):].strip())
-                        except ValueError:
-                            concept_data["abstractionLevel"] = 0.5  # Default mid-point
-                    elif detail_line.startswith("Metaphorical Mappings:"):
-                        mappings = detail_line[len("Metaphorical Mappings:"):].strip()
-                        concept_data["metaphoricalMappings"] = [m.strip() for m in mappings.split(";")]
-                    elif detail_line.startswith("Emotional Valence:"):
-                        try:
-                            concept_data["emotionalValence"] = float(detail_line[len("Emotional Valence:"):].strip())
-                        except ValueError:
-                            concept_data["emotionalValence"] = 0.0
-                    elif detail_line.startswith("Emotional Arousal:"):
-                        try:
-                            concept_data["emotionalArousal"] = float(detail_line[len("Emotional Arousal:"):].strip())
-                        except ValueError:
-                            concept_data["emotionalArousal"] = 0.0
-                    
-                    j += 1
-                
-                # Skip the detail lines that we've already processed
-                if j > i + 1:
-                    i = j - 1
-                
+                # Add the concept to the result - validation will ensure required fields
                 result["concepts"].append(concept_data)
             elif current_section == "propositions":
-                # Parse proposition with comprehensive attributes
+                # In JSON response mode, propositions should already have all their attributes
+                # from the structured JSON output
                 prop_data = {
-                    "statement": content,
                     "nodeType": "Proposition",
+                    "statement": content,
                     "sources": [],
                     "counterEvidence": []
                 }
                 
                 # Extract label and statement if format is "Label - Statement"
+                # This is kept for backward compatibility with older formats
                 if " - " in content:
                     label, statement = content.split(" - ", 1)
                     prop_data["name"] = label.strip()
@@ -858,89 +1301,7 @@ def parse_gpt4_response(response):
                 else:
                     prop_data["name"] = content
                 
-                # Extract metadata if present in parentheses
-                if "(" in content and ")" in content:
-                    metadata = content.split("(", 1)[1].rstrip(")")
-                    
-                    # Extract confidence
-                    if "Confidence:" in metadata:
-                        conf_match = re.search(r"Confidence: ([^,]+)", metadata)
-                        if conf_match:
-                            confidence_text = conf_match.group(1).strip()
-                            # Convert text confidence to numeric
-                            if confidence_text.lower() == "high":
-                                prop_data["confidence"] = 0.9
-                            elif confidence_text.lower() == "medium":
-                                prop_data["confidence"] = 0.6
-                            elif confidence_text.lower() == "low":
-                                prop_data["confidence"] = 0.3
-                    
-                    # Extract domain
-                    if "Domain:" in metadata:
-                        domain_match = re.search(r"Domain: ([^,)]+)", metadata)
-                        if domain_match:
-                            prop_data["domain"] = domain_match.group(1).strip()
-                    
-                    # Extract status
-                    if "Status:" in metadata:
-                        status_match = re.search(r"Status: ([^,)]+)", metadata)
-                        if status_match:
-                            prop_data["status"] = status_match.group(1).strip()
-                
-                # Look ahead for additional proposition details
-                j = i + 1
-                while j < len(lines) and (
-                    lines[j].strip().startswith("Truth Value:") or
-                    lines[j].strip().startswith("Sources:") or
-                    lines[j].strip().startswith("Evidence Strength:") or
-                    lines[j].strip().startswith("Counter Evidence:") or
-                    lines[j].strip().startswith("Emotional Valence:") or
-                    lines[j].strip().startswith("Emotional Arousal:") or
-                    lines[j].strip() == ""):
-                    
-                    detail_line = lines[j].strip()
-                    
-                    if detail_line.startswith("Truth Value:"):
-                        truth_value = detail_line[len("Truth Value:"):].strip().lower()
-                        if truth_value in ["true", "yes", "1"]:
-                            prop_data["truthValue"] = True
-                        elif truth_value in ["false", "no", "0"]:
-                            prop_data["truthValue"] = False
-                    elif detail_line.startswith("Sources:"):
-                        sources = detail_line[len("Sources:"):].strip()
-                        prop_data["sources"] = [s.strip() for s in sources.split(";")]
-                    elif detail_line.startswith("Evidence Strength:"):
-                        try:
-                            prop_data["evidenceStrength"] = float(detail_line[len("Evidence Strength:"):].strip())
-                        except ValueError:
-                            # Try to interpret textual values
-                            evidence_text = detail_line[len("Evidence Strength:"):].strip().lower()
-                            if evidence_text == "high":
-                                prop_data["evidenceStrength"] = 0.9
-                            elif evidence_text == "medium":
-                                prop_data["evidenceStrength"] = 0.6
-                            elif evidence_text == "low":
-                                prop_data["evidenceStrength"] = 0.3
-                    elif detail_line.startswith("Counter Evidence:"):
-                        counter_evidence = detail_line[len("Counter Evidence:"):].strip()
-                        prop_data["counterEvidence"] = [ce.strip() for ce in counter_evidence.split(";")]
-                    elif detail_line.startswith("Emotional Valence:"):
-                        try:
-                            prop_data["emotionalValence"] = float(detail_line[len("Emotional Valence:"):].strip())
-                        except ValueError:
-                            prop_data["emotionalValence"] = 0.0
-                    elif detail_line.startswith("Emotional Arousal:"):
-                        try:
-                            prop_data["emotionalArousal"] = float(detail_line[len("Emotional Arousal:"):].strip())
-                        except ValueError:
-                            prop_data["emotionalArousal"] = 0.0
-                    
-                    j += 1
-                
-                # Skip the detail lines that we've already processed
-                if j > i + 1:
-                    i = j - 1
-                
+                # Add the proposition to the result - validation will ensure required fields
                 result["propositions"].append(prop_data)
             elif current_section == "attributes":
                 # Parse attribute data with comprehensive attributes
@@ -948,72 +1309,7 @@ def parse_gpt4_response(response):
                     "name": content,
                     "nodeType": "Attribute"
                 }
-                
-                # Extract name and basic value
-                if " - " in content:
-                    name_part, value_part = content.split(" - ", 1)
-                    attr_data["name"] = name_part.replace("Attribute:", "").strip()
-                    
-                    # Parse value and type
-                    if "Value:" in value_part:
-                        value_match = re.search(r"Value: ([^,]+)", value_part)
-                        if value_match:
-                            value_str = value_match.group(1).strip()
-                            # Try to convert to appropriate type
-                            try:
-                                # Try as number first
-                                attr_data["value"] = float(value_str)
-                                # If it's a whole number, convert to int
-                                if attr_data["value"].is_integer():
-                                    attr_data["value"] = int(attr_data["value"])
-                            except ValueError:
-                                # Keep as string if not numeric
-                                attr_data["value"] = value_str
-                    
-                    if "Type:" in value_part:
-                        type_match = re.search(r"Type: ([^,)]+)", value_part)
-                        if type_match:
-                            attr_data["valueType"] = type_match.group(1).strip()
-                
-                # Look ahead for additional attribute details
-                j = i + 1
-                while j < len(lines) and (
-                    lines[j].strip().startswith("Unit:") or
-                    lines[j].strip().startswith("Possible Values:") or
-                    lines[j].strip().startswith("Description:") or
-                    lines[j].strip().startswith("Value:") or
-                    lines[j].strip().startswith("Value Type:") or
-                    lines[j].strip() == ""):
-                    
-                    detail_line = lines[j].strip()
-                    
-                    if detail_line.startswith("Unit:"):
-                        attr_data["unit"] = detail_line[len("Unit:"):].strip()
-                    elif detail_line.startswith("Possible Values:"):
-                        possible_values = detail_line[len("Possible Values:"):].strip()
-                        attr_data["possibleValues"] = [v.strip() for v in possible_values.split(";")]
-                    elif detail_line.startswith("Description:"):
-                        attr_data["description"] = detail_line[len("Description:"):].strip()
-                    elif detail_line.startswith("Value:"):
-                        value_str = detail_line[len("Value:"):].strip()
-                        # Try to convert to appropriate type
-                        try:
-                            # Try as number first
-                            attr_data["value"] = float(value_str)
-                            # If it's a whole number, convert to int
-                            if attr_data["value"].is_integer():
-                                attr_data["value"] = int(attr_data["value"])
-                        except ValueError:
-                            # Keep as string if not numeric
-                            attr_data["value"] = value_str
-                    elif detail_line.startswith("Value Type:"):
-                        attr_data["valueType"] = detail_line[len("Value Type:"):].strip()
-                    
-                    j += 1
-                
-                # Skip the detail lines that we've already processed
-                if j > i + 1:
-                    i = j - 1
+            
                 
                 # Ensure required fields are present
                 if "value" not in attr_data:
@@ -1043,97 +1339,6 @@ def parse_gpt4_response(response):
                     emotion_data["name"] = name_part.strip()
                     emotion_data["description"] = description_part.strip()
                 
-                # Extract metadata if in parentheses
-                if "(" in content and ")" in content:
-                    metadata_part = content.split("(", 1)[1].rstrip(")")
-                    
-                    # Extract category
-                    if "Category:" in metadata_part:
-                        category_match = re.search(r"Category: ([^,)]+)", metadata_part)
-                        if category_match:
-                            emotion_data["category"] = category_match.group(1).strip()
-                    
-                    # Extract intensity
-                    if "Intensity:" in metadata_part:
-                        intensity_match = re.search(r"Intensity: ([^,)]+)", metadata_part)
-                        if intensity_match:
-                            intensity_text = intensity_match.group(1).strip()
-                            try:
-                                emotion_data["intensity"] = float(intensity_text)
-                            except ValueError:
-                                # Convert text to numeric
-                                if intensity_text.lower() == "high":
-                                    emotion_data["intensity"] = 0.9
-                                elif intensity_text.lower() == "medium":
-                                    emotion_data["intensity"] = 0.6
-                                elif intensity_text.lower() == "low":
-                                    emotion_data["intensity"] = 0.3
-                    
-                    # Extract valence
-                    if "Valence:" in metadata_part:
-                        valence_match = re.search(r"Valence: ([^,)]+)", metadata_part)
-                        if valence_match:
-                            valence_text = valence_match.group(1).strip()
-                            try:
-                                emotion_data["valence"] = float(valence_text)
-                            except ValueError:
-                                # Convert text to numeric
-                                if valence_text.lower() in ["positive", "high"]:
-                                    emotion_data["valence"] = 0.7
-                                elif valence_text.lower() in ["negative", "low"]:
-                                    emotion_data["valence"] = -0.7
-                                elif valence_text.lower() in ["neutral", "medium"]:
-                                    emotion_data["valence"] = 0.0
-                
-                # Look ahead for additional emotion details
-                j = i + 1
-                while j < len(lines) and (
-                    lines[j].strip().startswith("Subcategory:") or
-                    lines[j].strip().startswith("Description:") or
-                    lines[j].strip().startswith("Intensity:") or
-                    lines[j].strip().startswith("Valence:") or
-                    lines[j].strip().startswith("Category:") or
-                    lines[j].strip() == ""):
-                    
-                    detail_line = lines[j].strip()
-                    
-                    if detail_line.startswith("Subcategory:"):
-                        emotion_data["subcategory"] = detail_line[len("Subcategory:"):].strip()
-                    elif detail_line.startswith("Description:"):
-                        emotion_data["description"] = detail_line[len("Description:"):].strip()
-                    elif detail_line.startswith("Intensity:"):
-                        intensity_text = detail_line[len("Intensity:"):].strip()
-                        try:
-                            emotion_data["intensity"] = float(intensity_text)
-                        except ValueError:
-                            # Convert text to numeric
-                            if intensity_text.lower() == "high":
-                                emotion_data["intensity"] = 0.9
-                            elif intensity_text.lower() == "medium":
-                                emotion_data["intensity"] = 0.6
-                            elif intensity_text.lower() == "low":
-                                emotion_data["intensity"] = 0.3
-                    elif detail_line.startswith("Valence:"):
-                        valence_text = detail_line[len("Valence:"):].strip()
-                        try:
-                            emotion_data["valence"] = float(valence_text)
-                        except ValueError:
-                            # Convert text to numeric
-                            if valence_text.lower() in ["positive", "high"]:
-                                emotion_data["valence"] = 0.7
-                            elif valence_text.lower() in ["negative", "low"]:
-                                emotion_data["valence"] = -0.7
-                            elif valence_text.lower() in ["neutral", "medium"]:
-                                emotion_data["valence"] = 0.0
-                    elif detail_line.startswith("Category:"):
-                        emotion_data["category"] = detail_line[len("Category:"):].strip()
-                    
-                    j += 1
-                
-                # Skip the detail lines that we've already processed
-                if j > i + 1:
-                    i = j - 1
-                
                 result["emotions"].append(emotion_data)
             elif current_section == "agents":
                 # Parse agent data with comprehensive attributes
@@ -1147,97 +1352,7 @@ def parse_gpt4_response(response):
                     "preferences": []
                 }
                 
-                # Extract name and description
-                if " - " in content:
-                    name_part, description_part = content.split(" - ", 1)
-                    agent_data["name"] = name_part.strip()
-                    agent_data["description"] = description_part.strip()
-                
-                # Extract metadata if in parentheses
-                if "(" in content and ")" in content:
-                    metadata_part = content.split("(", 1)[1].rstrip(")")
-                    
-                    # Extract agent type
-                    if "Type:" in metadata_part:
-                        type_match = re.search(r"Type: ([^,)]+)", metadata_part)
-                        if type_match:
-                            agent_type = type_match.group(1).strip().lower()
-                            if agent_type in ["human", "ai", "organization", "other"]:
-                                agent_data["agentType"] = agent_type
-                
-                # Look ahead for additional agent details
-                j = i + 1
-                while j < len(lines) and (
-                    lines[j].strip().startswith("Capabilities:") or
-                    lines[j].strip().startswith("Description:") or
-                    lines[j].strip().startswith("Beliefs:") or
-                    lines[j].strip().startswith("Knowledge:") or
-                    lines[j].strip().startswith("Preferences:") or
-                    lines[j].strip().startswith("Emotional State:") or
-                    # AI-specific attributes
-                    lines[j].strip().startswith("Model Name:") or
-                    lines[j].strip().startswith("Provider:") or
-                    lines[j].strip().startswith("API Endpoint:") or
-                    lines[j].strip().startswith("Training Data:") or
-                    lines[j].strip().startswith("Operational Constraints:") or
-                    lines[j].strip().startswith("Performance Metrics:") or
-                    lines[j].strip().startswith("Version:") or
-                    lines[j].strip().startswith("Operational Status:") or
-                    lines[j].strip().startswith("Ownership:") or
-                    lines[j].strip().startswith("Interaction History:") or
-                    lines[j].strip() == ""):
-                    
-                    detail_line = lines[j].strip()
-                    
-                    if detail_line.startswith("Capabilities:"):
-                        capabilities = detail_line[len("Capabilities:"):].strip()
-                        agent_data["capabilities"] = [cap.strip() for cap in capabilities.split(";")]
-                    elif detail_line.startswith("Description:"):
-                        agent_data["description"] = detail_line[len("Description:"):].strip()
-                    elif detail_line.startswith("Beliefs:"):
-                        beliefs = detail_line[len("Beliefs:"):].strip()
-                        agent_data["beliefs"] = [belief.strip() for belief in beliefs.split(";")]
-                    elif detail_line.startswith("Knowledge:"):
-                        knowledge = detail_line[len("Knowledge:"):].strip()
-                        agent_data["knowledge"] = [k.strip() for k in knowledge.split(";")]
-                    elif detail_line.startswith("Preferences:"):
-                        preferences = detail_line[len("Preferences:"):].strip()
-                        agent_data["preferences"] = [pref.strip() for pref in preferences.split(";")]
-                    elif detail_line.startswith("Emotional State:"):
-                        agent_data["emotionalState"] = detail_line[len("Emotional State:"):].strip()
-                    
-                    # AI-specific attributes
-                    elif detail_line.startswith("Model Name:"):
-                        agent_data["modelName"] = detail_line[len("Model Name:"):].strip()
-                    elif detail_line.startswith("Provider:"):
-                        agent_data["provider"] = detail_line[len("Provider:"):].strip()
-                    elif detail_line.startswith("API Endpoint:"):
-                        agent_data["apiEndpoint"] = detail_line[len("API Endpoint:"):].strip()
-                    elif detail_line.startswith("Training Data:"):
-                        training_data = detail_line[len("Training Data:"):].strip()
-                        agent_data["trainingData"] = [td.strip() for td in training_data.split(";")]
-                    elif detail_line.startswith("Operational Constraints:"):
-                        constraints = detail_line[len("Operational Constraints:"):].strip()
-                        agent_data["operationalConstraints"] = [c.strip() for c in constraints.split(";")]
-                    elif detail_line.startswith("Performance Metrics:"):
-                        # This could be complex - either flatten or create structured object
-                        agent_data["performanceMetrics"] = detail_line[len("Performance Metrics:"):].strip()
-                    elif detail_line.startswith("Version:"):
-                        agent_data["version"] = detail_line[len("Version:"):].strip()
-                    elif detail_line.startswith("Operational Status:"):
-                        agent_data["operationalStatus"] = detail_line[len("Operational Status:"):].strip()
-                    elif detail_line.startswith("Ownership:"):
-                        agent_data["ownership"] = detail_line[len("Ownership:"):].strip()
-                    elif detail_line.startswith("Interaction History:"):
-                        history = detail_line[len("Interaction History:"):].strip()
-                        agent_data["interactionHistory"] = [h.strip() for h in history.split(";")]
-                    
-                    j += 1
-                
-                # Skip the detail lines that we've already processed
-                if j > i + 1:
-                    i = j - 1
-                
+                # Add the agent to the result - validation will ensure required fields
                 result["agents"].append(agent_data)
             elif current_section == "thoughts":
                 # Parse thought data
@@ -1435,9 +1550,19 @@ def parse_gpt4_response(response):
                         target_name = rel_match.group(4).strip()
                         target_type = rel_match.group(5).strip()
                         
-                        relationship_data["source"] = {"name": source_name, "type": source_type}
-                        relationship_data["target"] = {"name": target_name, "type": target_type}
-                        relationship_data["type"] = rel_type
+                        # Create structured relationship
+                        # Validate relationship type
+                        validated_rel_type, rel_category = validate_relationship_type(rel_type)
+                        structured_rel = {
+                            "source": {"name": standardize_entity(source_name), "type": source_type},
+                            "target": {"name": standardize_entity(target_name), "type": target_type},
+                            "type": validated_rel_type,
+                            "relationshipCategory": rel_category,
+                            "description": content
+                        }
+                        
+                        relationship_data["relationship"] = structured_rel
+                        relationship_data["relationshipCategory"] = rel_category
                         
                         # Extract properties if they exist
                         if "{" in content and "}" in content:
@@ -1460,8 +1585,10 @@ def parse_gpt4_response(response):
                     # Extract source entity
                     relationship_data["source"] = {"name": source_part, "type": "Entity"}
                     
-                    # Set relationship type
+                    # Validate and set relationship type and category
+                    rel_type, rel_category = validate_relationship_type(rel_type)
                     relationship_data["type"] = rel_type
+                    relationship_data["relationshipCategory"] = rel_category
                     
                     # Extract target entity
                     relationship_data["target"] = {"name": target_part, "type": "Entity"}
@@ -1474,6 +1601,18 @@ def parse_gpt4_response(response):
                             if "properties" not in relationship_data:
                                 relationship_data["properties"] = {}
                             relationship_data["properties"]["context"] = context
+                    
+                    # Validate relationship type
+                    validated_rel_type, rel_category = validate_relationship_type(rel_type)
+                    structured_rel = {
+                        "source": {"name": standardize_entity(source_part), "type": source_type},
+                        "target": {"name": standardize_entity(target_part), "type": target_type},
+                        "type": validated_rel_type,
+                        "relationshipCategory": rel_category,
+                        "description": content
+                    }
+                    relationship_data["relationship"] = structured_rel
+                    relationship_data["relationshipCategory"] = rel_category
                     
                     result["relationships"].append(relationship_data)
                 
@@ -1501,9 +1640,19 @@ def parse_gpt4_response(response):
                                 target_type = target_type_match.group(1).strip()
                                 target = re.sub(r'\s*\([^)]+\)', '', target).strip()
                         
-                        relationship_data["source"] = {"name": source, "type": source_type}
-                        relationship_data["target"] = {"name": target, "type": target_type}
-                        relationship_data["type"] = rel_type
+                        # Create structured relationship
+                        # Validate relationship type
+                        validated_rel_type, rel_category = validate_relationship_type(rel_type)
+                        structured_rel = {
+                            "source": {"name": standardize_entity(source), "type": source_type},
+                            "target": {"name": standardize_entity(target), "type": target_type},
+                            "type": validated_rel_type,
+                            "relationshipCategory": rel_category,
+                            "description": content
+                        }
+                        
+                        relationship_data["relationship"] = structured_rel
+                        relationship_data["relationshipCategory"] = rel_category
                         
                         result["relationships"].append(relationship_data)
                 else:
@@ -1618,147 +1767,129 @@ def parse_gpt4_response(response):
     # When adding to result collections, ensure required attributes are present
     for i in range(len(result["entities"])):
         if isinstance(result["entities"][i], dict):
-            result["entities"][i] = ensure_required_attributes(result["entities"][i], "Entity")
+            result["entities"][i] = ensure_required_attributes(result["entities"][i], "Entity", include_optional=False)
     
     for i in range(len(result["events"])):
         if isinstance(result["events"][i], dict):
-            result["events"][i] = ensure_required_attributes(result["events"][i], "Event")
+            result["events"][i] = ensure_required_attributes(result["events"][i], "Event", include_optional=False)
     
     for i in range(len(result["concepts"])):
         if isinstance(result["concepts"][i], dict):
-            result["concepts"][i] = ensure_required_attributes(result["concepts"][i], "Concept")
+            result["concepts"][i] = ensure_required_attributes(result["concepts"][i], "Concept", include_optional=False)
             
     for i in range(len(result["propositions"])):
         if isinstance(result["propositions"][i], dict):
-            result["propositions"][i] = ensure_required_attributes(result["propositions"][i], "Proposition")
+            result["propositions"][i] = ensure_required_attributes(result["propositions"][i], "Proposition", include_optional=False)
             
     for i in range(len(result["attributes"])):
         if isinstance(result["attributes"][i], dict):
-            result["attributes"][i] = ensure_required_attributes(result["attributes"][i], "Attribute")
+            result["attributes"][i] = ensure_required_attributes(result["attributes"][i], "Attribute", include_optional=False)
             
     for i in range(len(result["emotions"])):
         if isinstance(result["emotions"][i], dict):
-            result["emotions"][i] = ensure_required_attributes(result["emotions"][i], "Emotion")
+            result["emotions"][i] = ensure_required_attributes(result["emotions"][i], "Emotion", include_optional=False)
             
     for i in range(len(result["agents"])):
         if isinstance(result["agents"][i], dict):
-            result["agents"][i] = ensure_required_attributes(result["agents"][i], "Agent")
+            result["agents"][i] = ensure_required_attributes(result["agents"][i], "Agent", include_optional=False)
             
     for i in range(len(result["thoughts"])):
         if isinstance(result["thoughts"][i], dict):
-            result["thoughts"][i] = ensure_required_attributes(result["thoughts"][i], "Thought")
+            result["thoughts"][i] = ensure_required_attributes(result["thoughts"][i], "Thought", include_optional=False)
             
     for i in range(len(result["scientificInsights"])):
         if isinstance(result["scientificInsights"][i], dict):
-            result["scientificInsights"][i] = ensure_required_attributes(result["scientificInsights"][i], "ScientificInsight")
+            result["scientificInsights"][i] = ensure_required_attributes(result["scientificInsights"][i], "ScientificInsight", include_optional=False)
             
     for i in range(len(result["laws"])):
         if isinstance(result["laws"][i], dict):
-            result["laws"][i] = ensure_required_attributes(result["laws"][i], "Law")
+            result["laws"][i] = ensure_required_attributes(result["laws"][i], "Law", include_optional=False)
             
     for i in range(len(result["reasoningChains"])):
         if isinstance(result["reasoningChains"][i], dict):
-            result["reasoningChains"][i] = ensure_required_attributes(result["reasoningChains"][i], "ReasoningChain")
+            result["reasoningChains"][i] = ensure_required_attributes(result["reasoningChains"][i], "ReasoningChain", include_optional=False)
             
     for i in range(len(result["reasoningSteps"])):
         if isinstance(result["reasoningSteps"][i], dict):
-            result["reasoningSteps"][i] = ensure_required_attributes(result["reasoningSteps"][i], "ReasoningStep")
+            result["reasoningSteps"][i] = ensure_required_attributes(result["reasoningSteps"][i], "ReasoningStep", include_optional=False)
+    
+    # Normalize relationships to have consistent structure
+    for i in range(len(result.get("relationships", []))):
+        if isinstance(result["relationships"][i], dict):
+            # If we have a nested 'relationship' structure, move it up
+            if "relationship" in result["relationships"][i]:
+                result["relationships"][i] = result["relationships"][i]["relationship"]
+            
+            # Ensure each relationship has a relationshipCategory if not already present
+            if "relationshipCategory" not in result["relationships"][i] and "type" in result["relationships"][i]:
+                rel_type = result["relationships"][i]["type"]
+                _, rel_category = validate_relationship_type(rel_type)
+                result["relationships"][i]["relationshipCategory"] = rel_category
     
     return result
 
 async def extract_knowledge(text_chunk):
     """Extract knowledge entities from text using GPT-4 with retries"""
-    # Update the prompt to include guidance on relationship formatting
-    relationship_guidance = """
-    For relationships, please format them following one of these patterns:
+    # Log first 100 chars of the chunk to check its content
+    logging.info(f"Processing chunk of length {len(text_chunk.page_content)} characters")
+    logging.info(f"Chunk preview: {text_chunk.page_content[:100]}...")
     
-    FORMAT 1: [SourceEntity] --RELATIONSHIP_TYPE--> [TargetEntity] (Context: additional information)
-    Examples:
-    - [Albert Einstein] --DEVELOPED--> [Theory of Relativity] (Context: published in 1915)
-    - [Climate Change] --IMPACTS--> [Polar Ice Caps] (Context: causing accelerated melting)
+    # Update the prompt to require JSON response format
+    json_format_guidance = """
+    IMPORTANT: Return your ENTIRE response as a single valid JSON object with the following structure:
     
-    FORMAT 2: SourceEntity(EntityType) -> [RELATIONSHIP_TYPE] TargetEntity(EntityType) {{property1: value1, property2: value2}}
-    Examples:
-    - John Smith(Person) -> [WORKS_FOR] Acme Inc(Organization) {{since: "2020", position: "Senior Developer", confidenceScore: 0.9}}
-    - Climate Change(Concept) -> [IMPACTS] Polar Ice Caps(Location) {{severity: "high", timeframe: "ongoing", confidenceScore: 0.95}}
+    {
+      "entities": [
+        { "nodeType": "Entity", "name": "Entity Name", "subType": "Person", "description": "Description" }
+      ],
+      "events": [
+        { "nodeType": "Event", "name": "Event Name", "description": "Description" }
+      ],
+      "concepts": [
+        { "nodeType": "Concept", "name": "Concept Name", "definition": "Definition" }
+      ],
+      "relationships": [
+        { "source": {"name": "Source Entity", "type": "Entity"}, 
+          "target": {"name": "Target Entity", "type": "Entity"}, 
+          "type": "RELATIONSHIP_TYPE", 
+          "relationshipCategory": "causal" }
+      ]
+    }
     
-    Use specific relationship types (verbs in UPPERCASE_WITH_UNDERSCORES).
-    Choose relationship direction based on the most natural flow of information.
-    Add confidence scores where possible (0.0-1.0 scale).
+    DO NOT include markdown headers, explanatory text, or any other content outside the JSON structure.
+    MAKE SURE that your entire response is valid JSON that can be directly parsed.
+    DOUBLE CHECK that your JSON is valid before returning it.
     """
     
-    # Add guidance for structured person details
-    person_details_guidance = """
-    IMPORTANT: When extracting Person Details, return structured data in valid JSON format.
-    Use proper nesting of objects and arrays, and make sure all JSON is well-formed.
+    # Append JSON guidance to the extraction prompt
+    enhanced_prompt_template = EXTRACTION_PROMPT_TEMPLATE + json_format_guidance
     
-    For Person Details, implement the COMPLETE schema, structured exactly as follows:
+    # Log prompt length to verify it's not too large
+    logging.info(f"Prompt template length: {len(enhanced_prompt_template)} characters")
     
-    ```json
-    {{
-      "name": "Person Name",
-      "biography": "Brief biographical summary",
-      "aliases": ["alternative name", "nickname"],
-      "personalityTraits": [
-        {{"trait": "Analytical", "evidence": ["evidence1", "evidence2"], "confidence": 0.9}},
-        {{"trait": "Compassionate", "evidence": ["evidence3"], "confidence": 0.8}}
-      ],
-      "cognitiveStyle": {{
-        "decisionMaking": "Data-driven",
-        "problemSolving": "Systematic",
-        "worldview": "Scientific realism",
-        "biases": ["confirmation bias", "recency bias"]
-      }},
-      "emotionalProfile": {{
-        "emotionalDisposition": "Reserved",
-        "emotionalTriggers": [
-          {{"trigger": "Personal criticism", "reaction": "Withdrawal", "evidence": ["example situation"]}}
-        ]
-      }},
-      "relationalDynamics": {{
-        "interpersonalStyle": "Collaborative",
-        "powerDynamics": {{
-          "authorityResponse": "Respectful but questioning",
-          "subordinateManagement": "Mentoring approach",
-          "negotiationTactics": ["Data-backed argumentation", "Compromise-oriented"]
-        }},
-        "loyalties": [
-          {{"target": "Scientific integrity", "strength": 0.9, "evidence": ["refused to falsify data"]}}
-        ]
-      }},
-      "valueSystem": {{
-        "coreValues": [
-          {{"value": "Truth", "importance": 0.9, "consistency": 0.8}}
-        ],
-        "ethicalFramework": "Utilitarian with deontological constraints"
-      }},
-      "psychologicalDevelopment": [
-        {{"period": "Early career", "changes": "Shifted from theoretical to applied focus", "catalysts": ["event1", "event2"]}}
-      ],
-      "metaAttributes": {{
-        "authorBias": 0.1,
-        "portrayalConsistency": 0.8,
-        "controversialAspects": ["disputed claim"]
-      }},
-      "modelConfidence": 0.85,
-      "evidenceStrength": 0.75
-    }}
-    ```
+    # Make sure the text is explicitly part of the template
+    final_template = enhanced_prompt_template + "\n\nHere is the text to analyze:\n\n{text}\n\n"
     
-    Key requirements:
-    1. For each person you extract, create a complete section labeled "Person Details for [Name]:"
-    2. Follow the EXACT field names shown in the template (case-sensitive)
-    3. Fill as many fields as possible based on available information in the text
-    4. Leave fields as empty arrays [] or empty objects {{}} if no information is available
-    5. Ensure all JSON is properly quoted and structured for error-free parsing
-    """
+    # Escape curly braces in the template to prevent LangChain from interpreting them as variables
+    escaped_template = final_template.replace("{", "{{").replace("}", "}}")
+    # But keep the {text} variable unescaped
+    escaped_template = escaped_template.replace("{{text}}", "{text}")
     
-    # Append both guidance sections to the extraction prompt
-    enhanced_prompt_template = EXTRACTION_PROMPT_TEMPLATE + relationship_guidance + person_details_guidance
-    prompt = ChatPromptTemplate.from_template(enhanced_prompt_template)
+    prompt = ChatPromptTemplate.from_template(escaped_template)
+    
+    # For debugging - show how much of the text is included in the prompt
+    sample_text = text_chunk.page_content[:100] + "..." if len(text_chunk.page_content) > 100 else text_chunk.page_content
+    logging.debug(f"Using text chunk sample in prompt: {sample_text}")
     
     # Initialize GPT-4 model with retries
-    gpt4_model = ChatOpenAI(model_name="gpt-4o", temperature=0)
+    gpt4_model = ChatOpenAI(
+        model_name="gpt-4o", 
+        temperature=0,
+        # Explicitly request JSON format from the model
+        model_kwargs={
+            "response_format": {"type": "json_object"}
+        }
+    )
     
     max_retries = 3
     retry_count = 0
@@ -1767,23 +1898,118 @@ async def extract_knowledge(text_chunk):
         try:
             # Extract knowledge using the LLM
             chain = prompt | gpt4_model
+            logging.info(f"Sending request to OpenAI API...")
+            start_time = time.time()
             result = await chain.ainvoke({"text": text_chunk.page_content})
+            end_time = time.time()
             
-            # Parse the response
-            parsed_result = parse_gpt4_response(result.content)
-            return parsed_result
-        
+            # Log the time taken and result length
+            time_taken = end_time - start_time
+            logging.info(f"Received response from OpenAI API in {time_taken:.2f} seconds")
+            logging.info(f"Response length: {len(result.content)} characters")
+            logging.info(f"Response preview: {result.content[:100]}...")
+            
+            # Parse the response - direct JSON parsing
+            try:
+                # First clean the response to handle any minor JSON issues
+                cleaned_content = clean_json_content(result.content)
+                parsed_result = json.loads(cleaned_content)
+                
+                # Initialize missing fields with empty collections
+                for key in ["entities", "events", "concepts", "propositions", "attributes", 
+                           "emotions", "agents", "thoughts", "scientificInsights", "laws", 
+                           "reasoningChains", "reasoningSteps", "relationships", 
+                           "personDetails", "locationDetails"]:
+                    if key not in parsed_result:
+                        parsed_result[key] = []
+                
+                # Normalize expected fields for each entity type in the results
+                # For entities
+                for entity in parsed_result.get("entities", []):
+                    ensure_required_attributes(entity, "Entity", include_optional=True)
+                    
+                # For relationships - fix any inconsistencies in structure
+                for relationship in parsed_result.get("relationships", []):
+                    # Ensure source has proper structure
+                    if "source" in relationship and isinstance(relationship["source"], str):
+                        relationship["source"] = {"name": relationship["source"], "type": "Entity"}
+                    
+                    # Ensure target has proper structure    
+                    if "target" in relationship and isinstance(relationship["target"], str):
+                        relationship["target"] = {"name": relationship["target"], "type": "Entity"}
+                    
+                    # Ensure relationship type is valid and normalized
+                    if "relationshipType" in relationship and "type" not in relationship:
+                        relationship["type"] = relationship["relationshipType"]
+                        
+                    # Ensure we have a relationship category    
+                    if "relationshipCategory" not in relationship and "type" in relationship:
+                        rel_type, rel_category = validate_relationship_type(relationship["type"])
+                        relationship["relationshipCategory"] = rel_category
+                
+                # Log what was found
+                entity_count = len(parsed_result.get("entities", []))
+                relationship_count = len(parsed_result.get("relationships", []))
+                logging.info(f"Extracted {entity_count} entities and {relationship_count} relationships from chunk")
+                
+                # Log the first few entities for debugging
+                if entity_count > 0:
+                    for i, entity in enumerate(parsed_result.get("entities", [])[:3]):  # Show up to first 3
+                        logging.info(f"  Entity {i+1}: {entity.get('name', 'Unknown')} ({entity.get('subType', 'Unknown')}) - {entity.get('description', 'No description')}")
+                    if entity_count > 3:
+                        logging.info(f"  ...and {entity_count - 3} more entities")
+                
+                return parsed_result
+            except json.JSONDecodeError as e:
+                # Fall back to the more extensive parsing only if JSON parsing fails
+                logging.warning(f"Could not parse response directly as JSON: {str(e)}")
+                logging.warning("Falling back to parse_gpt4_response for more extensive parsing")
+                # Pass use_validation=False to avoid adding all attributes during initial parsing
+                # Also pass include_optional=False to minimize data bloat
+                parsed_result = parse_gpt4_response(result.content, use_validation=False)
+                return parsed_result
+            
         except Exception as e:
             retry_count += 1
             if retry_count < max_retries:
-                logging.warning(f"Error extracting knowledge: {str(e)}. Retrying ({retry_count}/{max_retries})...")
+                logging.warning(f"Error extracting knowledge: {str(e)}")
+                logging.warning(f"Error type: {type(e).__name__}")
+                logging.warning(f"Error details: {repr(e)}")
                 await asyncio.sleep(2)  # Wait before retrying
             else:
-                logging.error(f"Failed to extract knowledge after {max_retries} attempts: {str(e)}")
-                return None
+                logging.error(f"Failed to extract knowledge after {max_retries} retries: {str(e)}")
+                logging.error(f"Last error type: {type(e).__name__}")
+                # Return an empty result structure
+                return {
+                    "entities": [],
+                    "events": [],
+                    "concepts": [],
+                    "propositions": [],
+                    "attributes": [],
+                    "emotions": [],
+                    "agents": [],
+                    "thoughts": [],
+                    "scientificInsights": [],
+                    "laws": [],
+                    "reasoningChains": [],
+                    "reasoningSteps": [],
+                    "relationships": [],
+                    "personDetails": {},
+                    "locationDetails": {},
+                }
 
-async def process_chunks(chunks, batch_size=5, checkpoint_frequency=10):
-    """Process text chunks in batches with checkpointing"""
+async def process_chunks(chunks, batch_size=5, checkpoint_frequency=10, validate_nodes=False, include_optional_fields=False):
+    """Process text chunks in batches with checkpointing
+    
+    Args:
+        chunks: List of text chunks to process
+        batch_size: Number of chunks to process in parallel
+        checkpoint_frequency: How often to save checkpoints (in batches)
+        validate_nodes: Whether to validate and add required fields to all nodes.
+                       Set to False for faster processing and smaller output.
+        include_optional_fields: Whether to include optional fields with defaults.
+                                Set to False to minimize data bloat.
+    """
     results = []
     total_chunks = len(chunks)
     
@@ -1792,7 +2018,12 @@ async def process_chunks(chunks, batch_size=5, checkpoint_frequency=10):
         try:
             batch_results = await asyncio.gather(*[extract_knowledge(chunk) for chunk in batch])
             valid_results = [r for r in batch_results if r]
+    
+            
             results.extend(valid_results)
+            
+            # Log batch processing details
+            logging.info(f"Processed batch {i//batch_size}: {len(batch)} chunks, {len(valid_results)} valid results")
             
             # More efficient checkpointing - only save at intervals and rotate files
             if i % (batch_size * checkpoint_frequency) == 0:
@@ -1808,4 +2039,4 @@ async def process_chunks(chunks, batch_size=5, checkpoint_frequency=10):
             # Continue with next batch instead of failing the entire process
             continue
         
-    return results 
+    return results

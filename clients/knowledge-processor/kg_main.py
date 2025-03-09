@@ -21,7 +21,7 @@ from kg_utils import standardize_entity, cleanup_temp_files
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Suppress OpenAI HTTP request logs for successful calls
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -75,7 +75,7 @@ async def main():
         logging.info(f"Loaded {len(documents)} documents")
         
         # Split documents into chunks
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=500)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=300)
         chunks = text_splitter.split_documents(documents)
         logging.info(f"Split into {len(chunks)} chunks")
         
