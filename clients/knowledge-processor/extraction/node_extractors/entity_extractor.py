@@ -21,7 +21,15 @@ class EntityExtractor(BaseExtractor):
     def _get_extraction_prompt(self) -> str:
         """Return the prompt for extracting entities."""
         return """
-        Analyze the following text and identify all important entities (people, organizations, locations, concepts, etc.).
+        Analyze the following text and identify ALL entities mentioned or implied, including:
+        - People (individuals, groups of people)
+        - Organizations (companies, institutions, governments, departments)
+        - Locations (countries, cities, buildings, regions, natural features)
+        - Artifacts (physical objects, products, technologies, tools)
+        - Animals (species, individual animals)
+        - Concepts (ideas, theories, movements, fields of study)
+        - Other entities that don't fit neatly into these categories
+        
         For each entity, extract relevant information using the provided JSON template.
         
         Text:
@@ -31,16 +39,19 @@ class EntityExtractor(BaseExtractor):
         {template}
         
         Instructions:
-        1. Identify all significant entities in the text.
+        1. Be COMPREHENSIVE - identify ALL entities mentioned in the text, even briefly.
         2. For each entity, fill out the JSON template with all available information.
-        3. Specify the entity name and subType (Person, Organization, Location, Artifact, Animal, Concept).
-        4. IMPORTANT: For Person entities, ALWAYS use the full name (first and last name) if available in the text.
-           Never use only last names like "Einstein" - always use "Albert Einstein". If only the last name is 
-           available, make a note of this in the observations.
-        5. Include factual observations about the entity.
-        6. Provide a description and, if applicable, biographical information.
-        7. Note any key contributions or significance.
-        8. Return a list of entity objects in JSON format.
+        3. Specify the entity name and most appropriate subType. If none of the standard subtypes fit, 
+           use the closest match and note this in the observations.
+        4. For Person entities:
+           - Use the full name (first and last name) when available
+           - If only a partial name is available, use that and note the incompleteness
+           - Track different references to the same person (titles, nicknames, pronouns)
+        5. Include both explicit factual observations and reasonable inferences about the entity.
+        6. Note when the same entity is referred to differently throughout the text.
+        7. Provide a description that captures the entity's role and significance in this context.
+        8. Include biographical information for persons and historical information for other entities when available.
+        9. Return a list of entity objects in JSON format.
         
         Return your response as a list of JSON objects, each following the template format.
         """

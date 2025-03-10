@@ -1103,39 +1103,6 @@ def add_relationship_to_neo4j(tx, relationship_data):
         """
         target_params = {'nodeType': target_type_normalized, 'name': target_name}
     
-    # Check if APOC is available - if not, fall back to simpler queries
-    apoc_check = tx.run("CALL dbms.procedures() YIELD name WHERE name STARTS WITH 'apoc' RETURN count(*) > 0 as apoc_available").single()
-    apoc_available = apoc_check and apoc_check["apoc_available"]
-    
-    if not apoc_available:
-        logging.info("APOC not available, using fallback node existence checks")
-        
-        # Try using the normalized label directly
-        if source_is_entity_subtype:
-            find_source_query = f"""
-            MATCH (source:Entity {{name: $source_name, subType: '{source_type_normalized}'}})
-            RETURN count(source) > 0 as source_exists, "Entity" as label
-            """
-        else:
-            find_source_query = f"""
-            MATCH (source:{source_type_normalized} {{name: $source_name}})
-            RETURN count(source) > 0 as source_exists, "{source_type_normalized}" as label
-            """
-        
-        if target_is_entity_subtype:
-            find_target_query = f"""
-            MATCH (target:Entity {{name: $target_name, subType: '{target_type_normalized}'}})
-            RETURN count(target) > 0 as target_exists, "Entity" as label
-            """
-        else:
-            find_target_query = f"""
-            MATCH (target:{target_type_normalized} {{name: $target_name}})
-            RETURN count(target) > 0 as target_exists, "{target_type_normalized}" as label
-            """
-        
-        source_params = {'source_name': source_name}
-        target_params = {'target_name': target_name}
-    
     # Execute actual queries to check if nodes exist
     try:
         # Try to find the source node
