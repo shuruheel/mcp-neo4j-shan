@@ -101,11 +101,49 @@ class EntityAggregator:
         for proposition in data.get('propositions', []):
             if isinstance(proposition, str):
                 # Handle string format
-                prop_name = standardize_entity(proposition.split(' - ', 1)[0]) if ' - ' in proposition else standardize_entity(proposition)
-                self.propositions[prop_name]['mentions'] = self.propositions[prop_name].get('mentions', 0) + 1
+                prop_parts = proposition.split(':', 1)
+                if len(prop_parts) == 2:
+                    prop_name = standardize_entity(prop_parts[1].strip())
+                    if prop_name not in self.propositions:
+                        self.propositions[prop_name] = {
+                            'mentions': 1,
+                            'nodeType': 'Proposition',
+                            'name': prop_name,
+                            'statement': '',
+                            'status': 'claim',
+                            'confidence': 0.7,
+                            'truthValue': None,
+                            'sources': [],
+                            'domain': '',
+                            'emotionalValence': 0.5,
+                            'emotionalArousal': 0.5,
+                            'evidenceStrength': 0.5,
+                            'counterEvidence': []
+                        }
+                    else:
+                        self.propositions[prop_name]['mentions'] = self.propositions[prop_name].get('mentions', 0) + 1
             elif isinstance(proposition, dict) and 'name' in proposition:
                 # Handle dictionary format
                 prop_name = standardize_entity(proposition['name'])
+                # Initialize with default structure if new
+                if prop_name not in self.propositions:
+                    self.propositions[prop_name] = {
+                        'mentions': 1,
+                        'nodeType': 'Proposition',
+                        'name': prop_name,
+                        'statement': '',
+                        'status': 'claim',
+                        'confidence': 0.7,
+                        'truthValue': None,
+                        'sources': [],
+                        'domain': '',
+                        'emotionalValence': 0.5,
+                        'emotionalArousal': 0.5,
+                        'evidenceStrength': 0.5,
+                        'counterEvidence': []
+                    }
+                
+                # Update with provided values
                 for key, value in proposition.items():
                     if key != 'name':
                         self.propositions[prop_name][key] = value
@@ -157,11 +195,57 @@ class EntityAggregator:
         for thought in data.get('thoughts', []):
             if isinstance(thought, str):
                 # Handle string format
-                thought_name = standardize_entity(thought.split(' - ', 1)[0]) if ' - ' in thought else standardize_entity(thought)
-                self.thoughts[thought_name]['mentions'] = self.thoughts[thought_name].get('mentions', 0) + 1
+                thought_parts = thought.split(':', 1)
+                if len(thought_parts) == 2:
+                    thought_name = standardize_entity(thought_parts[1].strip())
+                    if thought_name not in self.thoughts:
+                        self.thoughts[thought_name] = {
+                            'mentions': 1,
+                            'nodeType': 'Thought',
+                            'name': thought_name,
+                            'thoughtContent': '',
+                            'references': [],
+                            'confidence': 0.7,
+                            'source': '',
+                            'createdBy': '',
+                            'tags': [],
+                            'impact': '',
+                            'emotionalValence': 0.5,
+                            'emotionalArousal': 0.5,
+                            'evidentialBasis': [],
+                            'thoughtCounterarguments': [],
+                            'implications': [],
+                            'thoughtConfidenceScore': 0.7,
+                            'reasoningChains': []
+                        }
+                    else:
+                        self.thoughts[thought_name]['mentions'] = self.thoughts[thought_name].get('mentions', 0) + 1
             elif isinstance(thought, dict) and 'name' in thought:
                 # Handle dictionary format
                 thought_name = standardize_entity(thought['name'])
+                # Initialize with default structure if new
+                if thought_name not in self.thoughts:
+                    self.thoughts[thought_name] = {
+                        'mentions': 1,
+                        'nodeType': 'Thought',
+                        'name': thought_name,
+                        'thoughtContent': '',
+                        'references': [],
+                        'confidence': 0.7,
+                        'source': '',
+                        'createdBy': '',
+                        'tags': [],
+                        'impact': '',
+                        'emotionalValence': 0.5,
+                        'emotionalArousal': 0.5,
+                        'evidentialBasis': [],
+                        'thoughtCounterarguments': [],
+                        'implications': [],
+                        'thoughtConfidenceScore': 0.7,
+                        'reasoningChains': []
+                    }
+                
+                # Update with provided values
                 for key, value in thought.items():
                     if key != 'name':
                         self.thoughts[thought_name][key] = value
@@ -199,17 +283,59 @@ class EntityAggregator:
         for chain in data.get('reasoningChains', []):
             if isinstance(chain, str):
                 # Handle string format
-                chain_name = standardize_entity(chain.split(' - ', 1)[0]) if ' - ' in chain else standardize_entity(chain)
-                self.reasoning_chains[chain_name]['mentions'] = self.reasoning_chains[chain_name].get('mentions', 0) + 1
+                chain_parts = chain.split(':', 1)
+                if len(chain_parts) == 2:
+                    chain_name = standardize_entity(chain_parts[1].strip())
+                    if chain_name not in self.reasoning_chains:
+                        self.reasoning_chains[chain_name] = {
+                            'mentions': 1,
+                            'nodeType': 'ReasoningChain',
+                            'name': chain_name,
+                            'description': f"Reasoning process about {chain_name}",
+                            'conclusion': '',
+                            'confidenceScore': 0.7,
+                            'creator': 'AI System',
+                            'methodology': 'mixed',
+                            'domain': '',
+                            'tags': [],
+                            'sourceThought': '',
+                            'numberOfSteps': 0,
+                            'alternativeConclusionsConsidered': [],
+                            'relatedPropositions': [],
+                            'steps': []
+                        }
+                    else:
+                        self.reasoning_chains[chain_name]['mentions'] = self.reasoning_chains[chain_name].get('mentions', 0) + 1
             elif isinstance(chain, dict) and 'name' in chain:
                 # Handle dictionary format
                 chain_name = standardize_entity(chain['name'])
+                # Initialize with default structure if new
+                if chain_name not in self.reasoning_chains:
+                    self.reasoning_chains[chain_name] = {
+                        'mentions': 1,
+                        'nodeType': 'ReasoningChain',
+                        'name': chain_name,
+                        'description': f"Reasoning process about {chain_name}",
+                        'conclusion': '',
+                        'confidenceScore': 0.7,
+                        'creator': 'AI System',
+                        'methodology': 'mixed',
+                        'domain': '',
+                        'tags': [],
+                        'sourceThought': '',
+                        'numberOfSteps': 0,
+                        'alternativeConclusionsConsidered': [],
+                        'relatedPropositions': [],
+                        'steps': []
+                    }
+                
+                # Update with provided values
                 for key, value in chain.items():
                     if key != 'name':
                         self.reasoning_chains[chain_name][key] = value
                 self.reasoning_chains[chain_name]['mentions'] = self.reasoning_chains[chain_name].get('mentions', 0) + 1
                 
-                # Initialize steps collection for this chain if it doesn't exist
+                # Make sure steps array exists
                 if 'steps' not in self.reasoning_chains[chain_name]:
                     self.reasoning_chains[chain_name]['steps'] = []
         
@@ -217,11 +343,49 @@ class EntityAggregator:
         for step in data.get('reasoningSteps', []):
             if isinstance(step, str):
                 # Handle string format
-                step_name = standardize_entity(step.split(' - ', 1)[0]) if ' - ' in step else standardize_entity(step)
-                self.reasoning_steps[step_name]['mentions'] = self.reasoning_steps[step_name].get('mentions', 0) + 1
+                step_parts = step.split(':', 1)
+                if len(step_parts) == 2:
+                    step_name = standardize_entity(step_parts[1].strip())
+                    if step_name not in self.reasoning_steps:
+                        self.reasoning_steps[step_name] = {
+                            'mentions': 1,
+                            'nodeType': 'ReasoningStep',
+                            'name': step_name,
+                            'content': '',
+                            'stepType': 'inference',
+                            'evidenceType': 'assumption',
+                            'supportingReferences': [],
+                            'confidence': 0.7,
+                            'alternatives': [],
+                            'counterarguments': [],
+                            'assumptions': [],
+                            'formalNotation': '',
+                            'propositions': []
+                        }
+                    else:
+                        self.reasoning_steps[step_name]['mentions'] = self.reasoning_steps[step_name].get('mentions', 0) + 1
             elif isinstance(step, dict) and 'name' in step:
                 # Handle dictionary format
                 step_name = standardize_entity(step['name'])
+                # Initialize with default structure if new
+                if step_name not in self.reasoning_steps:
+                    self.reasoning_steps[step_name] = {
+                        'mentions': 1,
+                        'nodeType': 'ReasoningStep',
+                        'name': step_name,
+                        'content': '',
+                        'stepType': 'inference',
+                        'evidenceType': 'assumption',
+                        'supportingReferences': [],
+                        'confidence': 0.7,
+                        'alternatives': [],
+                        'counterarguments': [],
+                        'assumptions': [],
+                        'formalNotation': '',
+                        'propositions': []
+                    }
+                
+                # Update with provided values
                 for key, value in step.items():
                     if key != 'name':
                         self.reasoning_steps[step_name][key] = value
@@ -452,6 +616,28 @@ class EntityAggregator:
         for name, proposition in self.propositions.items():
             if proposition.get('mentions', 0) > 1:  # Only process propositions with multiple mentions
                 proposition['name'] = name
+                # Ensure all required fields exist
+                if 'nodeType' not in proposition:
+                    proposition['nodeType'] = 'Proposition'
+                if 'statement' not in proposition or not proposition['statement']:
+                    proposition['statement'] = f"Proposition about {name}"
+                if 'status' not in proposition:
+                    proposition['status'] = 'claim'
+                if 'confidence' not in proposition:
+                    proposition['confidence'] = 0.7
+                if 'sources' not in proposition:
+                    proposition['sources'] = []
+                if 'domain' not in proposition:
+                    proposition['domain'] = ''
+                if 'emotionalValence' not in proposition:
+                    proposition['emotionalValence'] = 0.5
+                if 'emotionalArousal' not in proposition:
+                    proposition['emotionalArousal'] = 0.5
+                if 'evidenceStrength' not in proposition:
+                    proposition['evidenceStrength'] = 0.5
+                if 'counterEvidence' not in proposition:
+                    proposition['counterEvidence'] = []
+                    
                 profiles['propositions'].append(proposition)
         
         # Process important emotions
@@ -470,6 +656,38 @@ class EntityAggregator:
         for name, thought in self.thoughts.items():
             if thought.get('mentions', 0) > 1:  # Only process thoughts with multiple mentions
                 thought['name'] = name
+                # Ensure all required fields exist
+                if 'nodeType' not in thought:
+                    thought['nodeType'] = 'Thought'
+                if 'thoughtContent' not in thought or not thought['thoughtContent']:
+                    thought['thoughtContent'] = f"Thought about {name}"
+                if 'references' not in thought:
+                    thought['references'] = []
+                if 'confidence' not in thought:
+                    thought['confidence'] = 0.7
+                if 'source' not in thought:
+                    thought['source'] = ''
+                if 'createdBy' not in thought:
+                    thought['createdBy'] = ''
+                if 'tags' not in thought:
+                    thought['tags'] = []
+                if 'impact' not in thought:
+                    thought['impact'] = ''
+                if 'emotionalValence' not in thought:
+                    thought['emotionalValence'] = 0.5
+                if 'emotionalArousal' not in thought:
+                    thought['emotionalArousal'] = 0.5
+                if 'evidentialBasis' not in thought:
+                    thought['evidentialBasis'] = []
+                if 'thoughtCounterarguments' not in thought:
+                    thought['thoughtCounterarguments'] = []
+                if 'implications' not in thought:
+                    thought['implications'] = []
+                if 'thoughtConfidenceScore' not in thought:
+                    thought['thoughtConfidenceScore'] = 0.7
+                if 'reasoningChains' not in thought:
+                    thought['reasoningChains'] = []
+                    
                 profiles['thoughts'].append(thought)
         
         # Process important scientific insights
@@ -489,6 +707,32 @@ class EntityAggregator:
             if chain.get('mentions', 0) > 1:  # Only process chains with multiple mentions
                 chain['name'] = name
                 
+                # Ensure chain has all required attributes according to schema
+                if 'nodeType' not in chain:
+                    chain['nodeType'] = 'ReasoningChain'
+                if 'description' not in chain or not chain['description']:
+                    chain['description'] = f"Reasoning process about {name}"
+                if 'conclusion' not in chain or not chain['conclusion']:
+                    chain['conclusion'] = "Unknown conclusion"  
+                if 'confidenceScore' not in chain:
+                    chain['confidenceScore'] = 0.7
+                if 'creator' not in chain:
+                    chain['creator'] = "AI System"
+                if 'methodology' not in chain:
+                    chain['methodology'] = "mixed"
+                if 'domain' not in chain:
+                    chain['domain'] = ""
+                if 'tags' not in chain:
+                    chain['tags'] = []
+                if 'sourceThought' not in chain:
+                    chain['sourceThought'] = ""
+                if 'numberOfSteps' not in chain:
+                    chain['numberOfSteps'] = 0
+                if 'alternativeConclusionsConsidered' not in chain:
+                    chain['alternativeConclusionsConsidered'] = []
+                if 'relatedPropositions' not in chain:
+                    chain['relatedPropositions'] = []
+                
                 # Include steps information if available
                 if 'steps' in chain and chain['steps']:
                     # Collect step details
@@ -502,12 +746,28 @@ class EntityAggregator:
                             step_info['chain'] = name
                             
                             # Ensure step has required attributes according to schema
-                            if 'content' not in step_info:
+                            if 'nodeType' not in step_info:
+                                step_info['nodeType'] = 'ReasoningStep'
+                            if 'content' not in step_info or not step_info['content']:
                                 step_info['content'] = f"Step in {name}"
                             if 'stepType' not in step_info:
                                 step_info['stepType'] = "inference"
                             if 'confidence' not in step_info:
                                 step_info['confidence'] = 0.7
+                            if 'evidenceType' not in step_info:
+                                step_info['evidenceType'] = "assumption"
+                            if 'supportingReferences' not in step_info:
+                                step_info['supportingReferences'] = []
+                            if 'alternatives' not in step_info:
+                                step_info['alternatives'] = []
+                            if 'counterarguments' not in step_info:
+                                step_info['counterarguments'] = []
+                            if 'assumptions' not in step_info:
+                                step_info['assumptions'] = []
+                            if 'formalNotation' not in step_info:
+                                step_info['formalNotation'] = ""
+                            if 'propositions' not in step_info:
+                                step_info['propositions'] = []
                                 
                             step_details.append(step_info)
                     
@@ -519,18 +779,6 @@ class EntityAggregator:
                     
                     # Update numberOfSteps attribute
                     chain['numberOfSteps'] = len(step_details)
-                
-                # Ensure chain has all required attributes according to schema
-                if 'description' not in chain or not chain['description']:
-                    chain['description'] = f"Reasoning process about {name}"
-                if 'conclusion' not in chain or not chain['conclusion']:
-                    chain['conclusion'] = "Unknown conclusion"  
-                if 'confidenceScore' not in chain:
-                    chain['confidenceScore'] = 0.7
-                if 'creator' not in chain:
-                    chain['creator'] = "AI System"
-                if 'methodology' not in chain:
-                    chain['methodology'] = "mixed"
                     
                 profiles['reasoningChains'].append(chain)
         
@@ -538,6 +786,44 @@ class EntityAggregator:
         for name, step in self.reasoning_steps.items():
             if step.get('mentions', 0) > 1:  # Only process steps with multiple mentions
                 step['name'] = name
+                
+                # Ensure step has all required attributes
+                if 'nodeType' not in step:
+                    step['nodeType'] = 'ReasoningStep'
+                if 'content' not in step or not step['content']:
+                    step['content'] = f"Reasoning step: {name}"
+                if 'stepType' not in step:
+                    step['stepType'] = "inference"
+                if 'evidenceType' not in step:
+                    step['evidenceType'] = "assumption"
+                if 'supportingReferences' not in step:
+                    step['supportingReferences'] = []
+                if 'confidence' not in step:
+                    step['confidence'] = 0.7
+                if 'alternatives' not in step:
+                    step['alternatives'] = []
+                if 'counterarguments' not in step:
+                    step['counterarguments'] = []
+                if 'assumptions' not in step:
+                    step['assumptions'] = []
+                if 'formalNotation' not in step:
+                    step['formalNotation'] = ""
+                if 'propositions' not in step:
+                    step['propositions'] = []
+                
+                # Make sure the step has a chainName property that matches the 'chain' property
+                if 'chain' in step and step['chain']:
+                    step['chainName'] = step['chain']
+                elif 'chainName' not in step:
+                    # If there's no chain reference, we should try to find one
+                    # Look through reasoning chains to see if this step is part of any chain
+                    for chain_name, chain in self.reasoning_chains.items():
+                        if 'steps' in chain and name in chain.get('steps', []):
+                            step['chain'] = chain_name
+                            step['chainName'] = chain_name
+                            logging.info(f"Found chain {chain_name} for step {name}")
+                            break
+                    
                 profiles['reasoningSteps'].append(step)
         
         # Process generic entities (that aren't persons or locations)

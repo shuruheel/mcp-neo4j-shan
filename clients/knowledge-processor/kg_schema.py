@@ -16,40 +16,51 @@ RELATIONSHIP_TYPES = [
     "IS_A", "INSTANCE_OF", "SUB_CLASS_OF", "SUPER_CLASS_OF",
     
     # Compositional relationships
-    "HAS_PART", "PART_OF",
+    "HAS_PART", "PART_OF", "PART_OF_CHAIN",
     
     # Spatial relationships
-    "LOCATED_IN", "HAS_LOCATION", "CONTAINED_IN", "CONTAINS", "OCCURRED_AT",
+    "LOCATED_IN", "HAS_LOCATION", "CONTAINED_IN", "CONTAINS", "OCCURRED_AT", "VISITED", "ATTENDED",
     
     # Temporal relationships
     "HAS_TIME", "OCCURS_ON", "BEFORE", "AFTER", "DURING",
     
     # Participation relationships
-    "PARTICIPANT", "HAS_PARTICIPANT", "AGENT", "HAS_AGENT", "PATIENT", "HAS_PATIENT",
+    "PARTICIPANT", "HAS_PARTICIPANT", "AGENT", "HAS_AGENT", "PATIENT", "HAS_PATIENT", "INVOLVED_IN", 
+    "PARTICIPATED_IN", "JOINS",
     
     # Causal relationships
-    "CAUSES", "CAUSED_BY", "INFLUENCES", "INFLUENCED_BY",
+    "CAUSES", "CAUSED_BY", "INFLUENCES", "INFLUENCED_BY", "CAUSED",
     
     # Sequential relationships
     "NEXT", "PREVIOUS",
     
     # Social relationships
-    "KNOWS", "FRIEND_OF", "MEMBER_OF",
+    "KNOWS", "FRIEND_OF", "MEMBER_OF", "APPOINTED", "FOUNDED", "FOUNDER_OF", "CHAIRMAN_OF",
     
     # Property relationships
     "HAS_PROPERTY", "PROPERTY_OF",
     
     # General relationships
-    "RELATED_TO", "ASSOCIATED_WITH",
+    "RELATED_TO", "ASSOCIATED_WITH", "REFERENCES",
     
     # Emotional relationships
     "EXPRESSES_EMOTION", "FEELS", "EVOKES_EMOTION",
     
     # Belief relationships
-    "BELIEVES", "SUPPORTS", "CONTRADICTS",
+    "BELIEVES", "SUPPORTS", "CONTRADICTS", "PROPOSED", "ACCEPTS", "SUPPORTED_BY", "ADVOCATED_FOR",
+    "OPPOSITION_TO", 
+    
+    # Competition relationships
+    "COMPETES_WITH",
     
     # Source relationships
     "DERIVED_FROM", "CITES", "SOURCE",
+    
+    # Economic relationships
+    "NATIONALIZATION_OF",
+    
+    # Symbolic relationships
+    "ICON_OF",
     
     # Person-specific relationships
     "MENTORS", "MENTORED_BY", "ADMIRES", "ADMIRED_BY", "OPPOSES", "OPPOSED_BY",
@@ -472,35 +483,6 @@ EMOTIONS: Extract emotional states
 }
 ```
 
-AGENTS: Extract cognitive entities capable of action or belief
-- Format as:
-```json
-{
-  "name": "Agent Name",
-  "nodeType": "Agent",
-  "agentType": "human/ai/organization/other",
-  "description": "Description of the agent",
-  "capabilities": ["capability1", "capability2"],
-  "beliefs": ["belief1", "belief2"],
-  "knowledge": ["knowledge1", "knowledge2"],
-  "preferences": ["preference1", "preference2"],
-  "emotionalState": "Current emotional state",
-  "modelName": "Name/version of AI model",
-  "provider": "Organization providing the AI model",
-  "apiEndpoint": "Endpoint for interaction",
-  "trainingData": ["Data source 1", "Data source 2"],
-  "operationalConstraints": ["Constraint 1", "Constraint 2"],
-  "performanceMetrics": {
-    "accuracy": 0.9,
-    "precision": 0.85
-  },
-  "version": "Version of the AI agent",
-  "operationalStatus": "active/deprecated/experimental",
-  "ownership": "Responsible entity or individual",
-  "interactionHistory": ["Reference 1", "Reference 2"]
-}
-```
-
 THOUGHTS: Extract subjective analyses or interpretations
 - Format as:
 ```json
@@ -619,10 +601,6 @@ REASONING STEPS: Extract individual steps within reasoning chains
   "order": 1
 }
 ```
-
-Note for AI-specific Agent attributes:
-When extracting AI agents, include these specialized attributes when available:
-modelName, provider, apiEndpoint, trainingData, operationalConstraints, performanceMetrics, version, operationalStatus, ownership
 
 IMPORTANT: JSON format must be strictly valid. All string values must be properly quoted, all arrays and objects properly structured.
 """

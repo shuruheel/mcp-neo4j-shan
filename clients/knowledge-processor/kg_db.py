@@ -215,7 +215,6 @@ def add_entity_to_neo4j(tx, entity_data):
            emotionalArousal=entity_data.get("emotionalArousal", 0.0))
     
     summary = result.consume()
-    logging.info(f"Entity created/updated: {name} with observations: {observations_str[:100]}...")
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
 
 def process_person_entity(tx, person_data):
@@ -391,7 +390,6 @@ def process_person_entity(tx, person_data):
            confidence=person_data.get("confidence", 0.8))
     
     summary = result.consume()
-    logging.info(f"Person entity created/updated: {name}")
     
     # Create individual personality trait nodes and connect them
     if personality_traits:
@@ -559,6 +557,7 @@ def add_attribute_to_neo4j(tx, attribute_data):
 
 def add_proposition_to_neo4j(tx, proposition_data):
     """Add a proposition node to Neo4j"""
+    # Create the proposition node
     query = """
     MERGE (p:Proposition {name: $name})
     SET p.nodeType = 'Proposition',
@@ -587,6 +586,20 @@ def add_proposition_to_neo4j(tx, proposition_data):
            emotionalArousal=proposition_data.get("emotionalArousal", 0.0),
            evidenceStrength=proposition_data.get("evidenceStrength", 0.0),
            counterEvidence=proposition_data.get("counterEvidence", []))
+    
+    # Create relationships to sources if present
+    if "sources" in proposition_data and isinstance(proposition_data["sources"], list):
+        for source in proposition_data["sources"]:
+            if source:  # Skip empty values
+                # Create relationship between proposition and source entity
+                source_rel_query = """
+                MATCH (p:Proposition {name: $propName})
+                MATCH (e:Entity {name: $sourceName})
+                MERGE (p)-[rel:DERIVED_FROM]->(e)
+                RETURN rel
+                """
+                
+                tx.run(source_rel_query, propName=proposition_data.get("name", ""), sourceName=source)
     
     summary = result.consume()
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
@@ -683,6 +696,7 @@ def add_agent_to_neo4j(tx, agent_data):
 
 def add_thought_to_neo4j(tx, thought_data):
     """Add a thought node to Neo4j"""
+    # Create the thought node
     query = """
     MERGE (t:Thought {name: $name})
     SET t.nodeType = 'Thought',
@@ -719,6 +733,46 @@ def add_thought_to_neo4j(tx, thought_data):
            implications=thought_data.get("implications", []),
            thoughtConfidenceScore=thought_data.get("thoughtConfidenceScore", 0.0),
            reasoningChains=thought_data.get("reasoningChains", []))
+    
+    # Create relationships to reasoning chains
+    if "reasoningChains" in thought_data and isinstance(thought_data["reasoningChains"], list):
+        for chain in thought_data["reasoningChains"]:
+            if chain:  # Skip empty values
+                # Create relationship between thought and reasoning chain
+                chain_rel_query = """
+                MATCH (t:Thought {name: $thoughtName})
+                MATCH (r:ReasoningChain {name: $chainName})
+                MERGE (t)-[rel:PROPOSED]->(r)
+                RETURN rel
+                """
+                
+                tx.run(chain_rel_query, thoughtName=thought_data.get("name", ""), chainName=chain)
+    
+    # Create relationships to referenced entities
+    if "references" in thought_data and isinstance(thought_data["references"], list):
+        for ref in thought_data["references"]:
+            if ref:  # Skip empty values
+                # Create relationship between thought and referenced entity
+                ref_rel_query = """
+                MATCH (t:Thought {name: $thoughtName})
+                MATCH (e:Entity {name: $refName})
+                MERGE (t)-[rel:REFERS_TO]->(e)
+                RETURN rel
+                """
+                
+                tx.run(ref_rel_query, thoughtName=thought_data.get("name", ""), refName=ref)
+    
+    # Create relationship to creator if present
+    creator = thought_data.get("createdBy", "")
+    if creator:
+        creator_rel_query = """
+        MATCH (t:Thought {name: $thoughtName})
+        MATCH (e:Entity {name: $creatorName})
+        MERGE (e)-[rel:CREATED]->(t)
+        RETURN rel
+        """
+        
+        tx.run(creator_rel_query, thoughtName=thought_data.get("name", ""), creatorName=creator)
     
     summary = result.consume()
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
@@ -801,6 +855,10 @@ def add_law_to_neo4j(tx, law_data):
 
 def add_reasoning_chain_to_neo4j(tx, chain_data):
     """Add a reasoning chain node to Neo4j"""
+    chain_name = chain_data.get("name", "")
+    logging.info(f"Creating ReasoningChain node: {chain_name}")
+    
+    # First create the chain node
     query = """
     MERGE (r:ReasoningChain {name: $name})
     SET r.nodeType = 'ReasoningChain',
@@ -819,7 +877,7 @@ def add_reasoning_chain_to_neo4j(tx, chain_data):
     """
     
     result = tx.run(query,
-           name=chain_data.get("name", ""),
+           name=chain_name,
            description=chain_data.get("description", ""),
            conclusion=chain_data.get("conclusion", ""),
            confidenceScore=chain_data.get("confidenceScore", 0.0),
@@ -832,11 +890,23 @@ def add_reasoning_chain_to_neo4j(tx, chain_data):
            alternativeConclusionsConsidered=chain_data.get("alternativeConclusionsConsidered", []),
            relatedPropositions=chain_data.get("relatedPropositions", []))
     
+    # DO NOT create relationships to steps - this will be done in the relationship phase
+    
+    # DO NOT create relationships to related propositions - this will be done in the relationship phase
+    
+    # DO NOT create relationship to source thought - this will be done in the relationship phase
+    
     summary = result.consume()
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
 
 def add_reasoning_step_to_neo4j(tx, step_data):
     """Add a reasoning step node to Neo4j"""
+    step_name = step_data.get("name", "")
+    chain_name = step_data.get("chain", "") or step_data.get("chainName", "")
+    
+    logging.info(f"Creating ReasoningStep node: {step_name}, Chain: {chain_name}")
+    
+    # First create the step node
     query = """
     MERGE (s:ReasoningStep {name: $name})
     SET s.nodeType = 'ReasoningStep',
@@ -849,12 +919,13 @@ def add_reasoning_step_to_neo4j(tx, step_data):
         s.counterarguments = $counterarguments,
         s.assumptions = $assumptions,
         s.formalNotation = $formalNotation,
-        s.propositions = $propositions
+        s.propositions = $propositions,
+        s.chainName = $chainName
     RETURN s
     """
     
     result = tx.run(query,
-           name=step_data.get("name", ""),
+           name=step_name,
            content=step_data.get("content", ""),
            stepType=step_data.get("stepType", ""),
            evidenceType=step_data.get("evidenceType", ""),
@@ -864,21 +935,30 @@ def add_reasoning_step_to_neo4j(tx, step_data):
            counterarguments=step_data.get("counterarguments", []),
            assumptions=step_data.get("assumptions", []),
            formalNotation=step_data.get("formalNotation", ""),
-           propositions=step_data.get("propositions", []))
+           propositions=step_data.get("propositions", []),
+           chainName=chain_name)
+    
+    # Create relationships to propositions
+    if "propositions" in step_data and isinstance(step_data["propositions"], list):
+        for prop in step_data["propositions"]:
+            if prop:  # Skip empty values
+                # Create relationship between step and proposition
+                prop_rel_query = """
+                MATCH (s:ReasoningStep {name: $stepName})
+                MATCH (p:Proposition {name: $propName})
+                MERGE (s)-[rel:USES]->(p)
+                RETURN rel
+                """
+                
+                prop_result = tx.run(prop_rel_query, stepName=step_name, propName=prop)
+                prop_summary = prop_result.consume()
+                
+                if prop_summary.counters.relationships_created > 0:
+                    logging.info(f"Created USES relationship: {step_name} -[USES]-> {prop}")
+    
+    # DO NOT create relationships to chain or check if chain exists - this will be done in the relationship phase
     
     summary = result.consume()
-    
-    # Connect step to its parent reasoning chain if chain information is available
-    chain_name = step_data.get("chain", "")
-    if chain_name:
-        # Create relationship between reasoning chain and step
-        tx.run("""
-        MATCH (c:ReasoningChain {name: $chainName})
-        MATCH (s:ReasoningStep {name: $stepName})
-        MERGE (c)-[:HAS_PART {order: $order}]->(s)
-        """, chainName=chain_name, stepName=step_data.get("name", ""), 
-              order=step_data.get("order", 0))
-    
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
 
 def add_relationship_to_neo4j(tx, relationship_data):
@@ -908,10 +988,33 @@ def add_relationship_to_neo4j(tx, relationship_data):
         logging.warning(f"Missing source or target name in relationship: {relationship_data}")
         return False
     
+    # Map for known label casing issues
+    # This maps lowercase labels to their proper cased version in the database
+    LABEL_CASE_MAP = {
+        "person": "Person",
+        "organization": "Organization",
+        "location": "Location",
+        "event": "Event",
+        "concept": "Concept",
+        "entity": "Entity",
+        "proposition": "Proposition",
+        "thought": "Thought",
+        "reasoningstep": "ReasoningStep",
+        "reasoningchain": "ReasoningChain",
+        "attribute": "Attribute",
+        "emotion": "Emotion",
+        "agent": "Agent",
+        "scientificinsight": "ScientificInsight",
+        "law": "Law"
+    }
+    
+    # Normalize source and target types for case-sensitivity
+    source_type_normalized = LABEL_CASE_MAP.get(source_type.lower(), source_type)
+    target_type_normalized = LABEL_CASE_MAP.get(target_type.lower(), target_type)
+    
     # Validate relationship type against schema
     if rel_type not in RELATIONSHIP_TYPES:
         logging.warning(f"Non-standard relationship type: {rel_type}, will create it anyway")
-        # Don't default to RELATED_TO, use the type as provided
     
     # Extract properties
     properties = relationship_data.get('properties', {})
@@ -925,7 +1028,7 @@ def add_relationship_to_neo4j(tx, relationship_data):
         rel_category = "hierarchical"
     elif rel_type in ["BEFORE", "AFTER", "DURING"]:
         rel_category = "temporal"
-    elif rel_type in ["HAS_PART", "PART_OF"]:
+    elif rel_type in ["HAS_PART", "PART_OF", "PART_OF_CHAIN"]:
         rel_category = "compositional"
     elif rel_type in ["CAUSES", "CAUSED_BY", "INFLUENCES", "INFLUENCED_BY"]:
         rel_category = "causal"
@@ -936,18 +1039,6 @@ def add_relationship_to_neo4j(tx, relationship_data):
     
     properties['relationshipCategory'] = rel_category
     
-    # Create source and target nodes if they don't exist
-    create_source_query = f"""
-    MERGE (s:{source_type} {{name: $source_name}})
-    """
-    
-    create_target_query = f"""
-    MERGE (t:{target_type} {{name: $target_name}})
-    """
-    
-    tx.run(create_source_query, source_name=source_name)
-    tx.run(create_target_query, target_name=target_name)
-    
     # Build property string for relationship
     property_clauses = []
     for key, value in properties.items():
@@ -955,25 +1046,202 @@ def add_relationship_to_neo4j(tx, relationship_data):
     
     property_string = ", ".join(property_clauses) if property_clauses else "r.created = timestamp()"
     
-    # Create relationship with properties
-    relationship_query = f"""
-    MATCH (s:{source_type} {{name: $source_name}})
-    MATCH (t:{target_type} {{name: $target_name}})
-    MERGE (s)-[r:{rel_type}]->(t)
-    SET {property_string}
-    RETURN r
-    """
-    
     # Add source and target to properties for query
     params = properties.copy()
     params['source_name'] = source_name
     params['target_name'] = target_name
     
-    # Execute query
-    result = tx.run(relationship_query, **params)
-    summary = result.consume()
+    # Define known entity subtypes that should be handled as Entity nodes
+    ENTITY_SUBTYPES = ["Person", "Organization", "Location", "Artifact", "Animal"]
     
-    return summary.counters.relationships_created > 0 or summary.counters.properties_set > 0
+    # Case-insensitive check for entity subtypes
+    source_is_entity_subtype = source_type_normalized in ENTITY_SUBTYPES or source_type_normalized.lower() in [x.lower() for x in ENTITY_SUBTYPES]
+    target_is_entity_subtype = target_type_normalized in ENTITY_SUBTYPES or target_type_normalized.lower() in [x.lower() for x in ENTITY_SUBTYPES]
+    
+    # First, check if the nodes exist with a case-insensitive approach
+    # For source node
+    if source_is_entity_subtype:
+        # Try to find the entity with the right subType (case insensitive)
+        find_source_query = """
+        MATCH (source:Entity)
+        WHERE source.name = $source_name 
+          AND toLower(source.subType) = toLower($subType)
+        RETURN true as source_exists, 'Entity' as label
+        """
+        source_params = {'source_name': source_name, 'subType': source_type_normalized}
+    else:
+        # Try to find the node with the label using custom casing check
+        find_source_query = """
+        CALL apoc.meta.nodeTypeProperties() YIELD nodeType
+        WITH collect(nodeType) AS nodeTypes
+        UNWIND nodeTypes AS type
+        WITH type WHERE toLower(type) = toLower($nodeType)
+        CALL apoc.cypher.run('MATCH (source:' + type + ' {name: $name}) RETURN true as exists', {name: $name}) YIELD value
+        RETURN value.exists as source_exists, type as label
+        """
+        source_params = {'nodeType': source_type_normalized, 'name': source_name}
+    
+    # For target node
+    if target_is_entity_subtype:
+        # Try to find the entity with the right subType (case insensitive)
+        find_target_query = """
+        MATCH (target:Entity)
+        WHERE target.name = $target_name 
+          AND toLower(target.subType) = toLower($subType)
+        RETURN true as target_exists, 'Entity' as label
+        """
+        target_params = {'target_name': target_name, 'subType': target_type_normalized}
+    else:
+        # Try to find the node with the label using custom casing check
+        find_target_query = """
+        CALL apoc.meta.nodeTypeProperties() YIELD nodeType
+        WITH collect(nodeType) AS nodeTypes
+        UNWIND nodeTypes AS type
+        WITH type WHERE toLower(type) = toLower($nodeType)
+        CALL apoc.cypher.run('MATCH (target:' + type + ' {name: $name}) RETURN true as exists', {name: $name}) YIELD value
+        RETURN value.exists as target_exists, type as label
+        """
+        target_params = {'nodeType': target_type_normalized, 'name': target_name}
+    
+    # Check if APOC is available - if not, fall back to simpler queries
+    apoc_check = tx.run("CALL dbms.procedures() YIELD name WHERE name STARTS WITH 'apoc' RETURN count(*) > 0 as apoc_available").single()
+    apoc_available = apoc_check and apoc_check["apoc_available"]
+    
+    if not apoc_available:
+        logging.info("APOC not available, using fallback node existence checks")
+        
+        # Try using the normalized label directly
+        if source_is_entity_subtype:
+            find_source_query = f"""
+            MATCH (source:Entity {{name: $source_name, subType: '{source_type_normalized}'}})
+            RETURN count(source) > 0 as source_exists, "Entity" as label
+            """
+        else:
+            find_source_query = f"""
+            MATCH (source:{source_type_normalized} {{name: $source_name}})
+            RETURN count(source) > 0 as source_exists, "{source_type_normalized}" as label
+            """
+        
+        if target_is_entity_subtype:
+            find_target_query = f"""
+            MATCH (target:Entity {{name: $target_name, subType: '{target_type_normalized}'}})
+            RETURN count(target) > 0 as target_exists, "Entity" as label
+            """
+        else:
+            find_target_query = f"""
+            MATCH (target:{target_type_normalized} {{name: $target_name}})
+            RETURN count(target) > 0 as target_exists, "{target_type_normalized}" as label
+            """
+        
+        source_params = {'source_name': source_name}
+        target_params = {'target_name': target_name}
+    
+    # Execute actual queries to check if nodes exist
+    try:
+        # Try to find the source node
+        source_result = tx.run(find_source_query, **source_params).single()
+        source_exists = source_result and source_result["source_exists"]
+        source_label = source_result and source_result["label"]
+        
+        # If the source node doesn't exist with the expected type, try to find it with any label
+        if not source_exists:
+            find_any_source_query = """
+            MATCH (source {name: $source_name})
+            RETURN labels(source)[0] as label
+            """
+            any_source_result = tx.run(find_any_source_query, source_name=source_name).single()
+            if any_source_result:
+                source_exists = True
+                source_label = any_source_result["label"]
+                logging.info(f"Found source node '{source_name}' with different label: {source_label} (expected: {source_type_normalized})")
+        
+        # Try to find the target node
+        target_result = tx.run(find_target_query, **target_params).single()
+        target_exists = target_result and target_result["target_exists"]
+        target_label = target_result and target_result["label"]
+        
+        # If the target node doesn't exist with the expected type, try to find it with any label
+        if not target_exists:
+            find_any_target_query = """
+            MATCH (target {name: $target_name})
+            RETURN labels(target)[0] as label
+            """
+            any_target_result = tx.run(find_any_target_query, target_name=target_name).single()
+            if any_target_result:
+                target_exists = True
+                target_label = any_target_result["label"]
+                logging.info(f"Found target node '{target_name}' with different label: {target_label} (expected: {target_type_normalized})")
+    except Exception as e:
+        logging.warning(f"Error checking node existence: {str(e)}")
+        # If query fails due to non-existent label, try with the original type
+        # This is often due to the label not existing in the database yet
+        source_exists = False
+        target_exists = False
+    
+    # If source node doesn't exist, try to create a placeholder
+    if not source_exists:
+        create_source = create_placeholder_node(tx, source_name, source_type_normalized)
+        if create_source:
+            source_exists = True
+            source_label = "Entity" if source_is_entity_subtype else source_type_normalized
+        else:
+            logging.warning(f"Source node '{source_name}' not found and couldn't create placeholder")
+            return False
+    
+    # If target node doesn't exist, try to create a placeholder
+    if not target_exists:
+        create_target = create_placeholder_node(tx, target_name, target_type_normalized)
+        if create_target:
+            target_exists = True
+            target_label = "Entity" if target_is_entity_subtype else target_type_normalized
+        else:
+            logging.warning(f"Target node '{target_name}' not found and couldn't create placeholder")
+            return False
+    
+    # Create the relationship using the actual labels of the nodes
+    relationship_query = f"""
+    MATCH (s:{source_label} {{name: $source_name}})
+    MATCH (t:{target_label} {{name: $target_name}})
+    MERGE (s)-[r:{rel_type}]->(t)
+    SET {property_string}
+    RETURN r
+    """
+    
+    try:
+        result = tx.run(relationship_query, **params)
+        summary = result.consume()
+        
+        if summary.counters.relationships_created > 0:
+            logging.info(f"Created relationship: {source_name} -[{rel_type}]-> {target_name}")
+            return True
+        elif summary.counters.properties_set > 0:
+            logging.info(f"Updated relationship properties: {source_name} -[{rel_type}]-> {target_name}")
+            return True
+        else:
+            logging.warning(f"No relationship created or updated: {source_name} -[{rel_type}]-> {target_name}")
+            return False
+    except Exception as e:
+        logging.error(f"Error creating relationship {source_name} -[{rel_type}]-> {target_name}: {str(e)}")
+        
+        # If there's still an error, try one last approach - create without specifying labels
+        try:
+            fallback_query = f"""
+            MATCH (s {{name: $source_name}})
+            MATCH (t {{name: $target_name}})
+            MERGE (s)-[r:{rel_type}]->(t)
+            SET {property_string}
+            RETURN r
+            """
+            result = tx.run(fallback_query, **params)
+            summary = result.consume()
+            
+            if summary.counters.relationships_created > 0 or summary.counters.properties_set > 0:
+                logging.info(f"Added relationship using fallback: {source_name} --{rel_type}--> {target_name}")
+                return True
+        except Exception as e2:
+            logging.error(f"Fallback also failed: {str(e2)}")
+        
+        return False
 
 def process_relationships(session, relationships):
     """Process a list of relationships and add them to Neo4j"""
@@ -1003,4 +1271,76 @@ def add_relationship_to_neo4j_legacy(tx, subject, predicate, object_, props=None
         'properties': props
     }
     
-    return add_relationship_to_neo4j(tx, relationship_data) 
+    return add_relationship_to_neo4j(tx, relationship_data)
+
+def create_placeholder_node(tx, name, node_type):
+    """Create a minimal placeholder node of the specified type with just a name
+    
+    Args:
+        tx: Neo4j transaction
+        name: Name of the node to create
+        node_type: Type/label of the node (Entity, Person, Location, etc.)
+    
+    Returns:
+        bool: True if node was created, False otherwise
+    """
+    # Skip if name is empty
+    if not name:
+        return False
+    
+    # Define known entity subtypes that should be created as Entity nodes with subType
+    ENTITY_SUBTYPES = ["Person", "Organization", "Location", "Artifact", "Animal"]
+    
+    # Map for known label casing issues
+    # This maps lowercase labels to their proper cased version in the database
+    LABEL_CASE_MAP = {
+        "person": "Person",
+        "organization": "Organization",
+        "location": "Location",
+        "event": "Event",
+        "concept": "Concept",
+        "entity": "Entity",
+        "proposition": "Proposition",
+        "thought": "Thought",
+        "reasoningstep": "ReasoningStep",
+        "reasoningchain": "ReasoningChain",
+        "attribute": "Attribute",
+        "emotion": "Emotion",
+        "agent": "Agent",
+        "scientificinsight": "ScientificInsight",
+        "law": "Law"
+    }
+    
+    # Normalize the node type for case-sensitivity
+    node_type_normalized = LABEL_CASE_MAP.get(node_type.lower(), node_type)
+    
+    try:
+        if node_type_normalized in ENTITY_SUBTYPES:
+            # For entity subtypes, create an Entity node with appropriate subType
+            query = """
+            CREATE (e:Entity {name: $name, nodeType: 'Entity', subType: $subType, 
+                description: 'Placeholder node', 
+                source: 'Auto-created for relationship', 
+                isPlaceholder: true})
+            RETURN e
+            """
+            result = tx.run(query, name=name, subType=node_type_normalized)
+        else:
+            # For other node types, create with the specific label
+            query = f"""
+            CREATE (e:{node_type_normalized} {{name: $name, nodeType: $node_type, 
+                description: 'Placeholder node', 
+                source: 'Auto-created for relationship',
+                isPlaceholder: true}})
+            RETURN e
+            """
+            result = tx.run(query, name=name, node_type=node_type_normalized)
+        
+        summary = result.consume()
+        if summary.counters.nodes_created > 0:
+            logging.info(f"Created placeholder {node_type_normalized} node: '{name}'")
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Error creating placeholder node '{name}' of type {node_type_normalized}: {str(e)}")
+        return False 
