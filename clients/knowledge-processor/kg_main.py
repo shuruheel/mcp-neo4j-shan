@@ -75,7 +75,7 @@ async def main():
         logging.info(f"Loaded {len(documents)} documents")
         
         # Split documents into chunks
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=300)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
         chunks = text_splitter.split_documents(documents)
         logging.info(f"Split into {len(chunks)} chunks")
         
@@ -587,4 +587,13 @@ async def main():
         raise
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.warning("Process interrupted. The latest checkpoint will be available for resuming.")
+        print("\nProcess terminated. You can resume from the latest checkpoint next time you run the script.")
+    except Exception as e:
+        logging.error(f"Unhandled exception: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        sys.exit(1) 
