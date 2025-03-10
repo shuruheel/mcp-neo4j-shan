@@ -219,60 +219,183 @@ def add_entity_to_neo4j(tx, entity_data):
     return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
 
 def process_person_entity(tx, person_data):
-    """Process a person entity with extended attributes"""
-    # First add the basic entity
-    entity_data = {
-        "name": person_data.get("name", ""),
-        "nodeType": "Entity",
-        "subType": "Person",
-        "description": person_data.get("biography", "")
-    }
-    add_entity_to_neo4j(tx, entity_data)
+    """Process a person entity with extended psychological and emotional attributes"""
+    if not person_data.get("name"):
+        logging.warning(f"Skipping person with no name: {person_data}")
+        return False
+        
+    # Extract person name and basic properties
+    name = person_data.get("name", "")
     
-    # Create a standardized personDetails structure
+    # Extract key psychological and emotional attributes
+    personality_traits = []
+    try:
+        if "personalityTraits" in person_data and isinstance(person_data["personalityTraits"], list):
+            personality_traits = person_data["personalityTraits"]
+    except Exception as e:
+        logging.warning(f"Error processing personality traits for {name}: {str(e)}")
+    
+    # Extract cognitive style
+    cognitive_style = {}
+    try:
+        if "cognitiveStyle" in person_data and isinstance(person_data["cognitiveStyle"], dict):
+            cognitive_style = person_data["cognitiveStyle"]
+    except Exception as e:
+        logging.warning(f"Error processing cognitive style for {name}: {str(e)}")
+    
+    # Extract emotional profile
+    emotional_profile = {}
+    try:
+        if "emotionalProfile" in person_data and isinstance(person_data["emotionalProfile"], dict):
+            emotional_profile = person_data["emotionalProfile"]
+    except Exception as e:
+        logging.warning(f"Error processing emotional profile for {name}: {str(e)}")
+    
+    # Extract relational dynamics
+    relational_dynamics = {}
+    try:
+        if "relationalDynamics" in person_data and isinstance(person_data["relationalDynamics"], dict):
+            relational_dynamics = person_data["relationalDynamics"]
+    except Exception as e:
+        logging.warning(f"Error processing relational dynamics for {name}: {str(e)}")
+    
+    # Extract value system
+    value_system = {}
+    try:
+        if "valueSystem" in person_data and isinstance(person_data["valueSystem"], dict):
+            value_system = person_data["valueSystem"]
+    except Exception as e:
+        logging.warning(f"Error processing value system for {name}: {str(e)}")
+    
+    # Extract psychological development
+    psychological_development = []
+    try:
+        if "psychologicalDevelopment" in person_data and isinstance(person_data["psychologicalDevelopment"], list):
+            psychological_development = person_data["psychologicalDevelopment"]
+    except Exception as e:
+        logging.warning(f"Error processing psychological development for {name}: {str(e)}")
+    
+    # Create comprehensive person details
     person_details = {
-        "name": person_data.get("name", ""),
         "biography": person_data.get("biography", ""),
         "aliases": person_data.get("aliases", []),
-        "personalityTraits": person_data.get("personalityTraits", []),
-        "cognitiveStyle": person_data.get("cognitiveStyle", {}),
-        "emotionalProfile": {
-            "emotionalDisposition": person_data.get("emotionalDisposition", ""),
-            "emotionalTriggers": person_data.get("emotionalTriggers", [])
-        },
-        "relationalDynamics": {
-            "interpersonalStyle": person_data.get("interpersonalStyle", ""),
-            "powerDynamics": person_data.get("powerDynamics", {}),
-            "loyalties": person_data.get("loyalties", [])
-        },
-        "valueSystem": {
-            "coreValues": person_data.get("coreValues", []),
-            "ethicalFramework": person_data.get("ethicalFramework", "")
-        },
-        "psychologicalDevelopment": person_data.get("psychologicalDevelopment", []),
+        "personalityTraits": personality_traits,
+        "cognitiveStyle": cognitive_style,
+        "emotionalProfile": emotional_profile,
+        "relationalDynamics": relational_dynamics,
+        "valueSystem": value_system,
+        "psychologicalDevelopment": psychological_development,
         "metaAttributes": person_data.get("metaAttributes", {}),
         "modelConfidence": person_data.get("modelConfidence", 0.0),
         "evidenceStrength": person_data.get("evidenceStrength", 0.0)
     }
-
-    # Convert the entire person details object to JSON for storage
-    person_details_json = json.dumps(person_details)
     
-    # Update the person entity with the details
+    # Convert specific nested objects to JSON strings for storage
+    personality_traits_json = json.dumps(personality_traits)
+    cognitive_style_json = json.dumps(cognitive_style)
+    emotional_profile_json = json.dumps(emotional_profile)
+    relational_dynamics_json = json.dumps(relational_dynamics)
+    value_system_json = json.dumps(value_system)
+    psychological_development_json = json.dumps(psychological_development)
+    
+    # Extract emotional disposition and interpersonal style for direct properties
+    emotional_disposition = ""
+    if emotional_profile and "emotionalDisposition" in emotional_profile:
+        emotional_disposition = emotional_profile["emotionalDisposition"]
+    
+    interpersonal_style = ""
+    if relational_dynamics and "interpersonalStyle" in relational_dynamics:
+        interpersonal_style = relational_dynamics["interpersonalStyle"]
+    
+    # Extract decision making style for direct property
+    decision_making = ""
+    if cognitive_style and "decisionMaking" in cognitive_style:
+        decision_making = cognitive_style["decisionMaking"]
+    
+    # Extract ethical framework for direct property
+    ethical_framework = ""
+    if value_system and "ethicalFramework" in value_system:
+        ethical_framework = value_system["ethicalFramework"]
+    
+    # Get a list of traits for summary
+    trait_names = []
+    if personality_traits:
+        for trait_data in personality_traits:
+            if isinstance(trait_data, dict) and "trait" in trait_data:
+                trait_names.append(trait_data["trait"])
+    
+    # Combine traits into a summary string
+    personality_summary = "; ".join(trait_names)
+    
+    # Convert observations to comma-separated string if it's a list
+    observations = person_data.get("observations", [])
+    if isinstance(observations, list):
+        observations_str = "; ".join(observations)
+    else:
+        observations_str = str(observations)
+        
+    # Same for key contributions
+    key_contributions = person_data.get("keyContributions", [])
+    if isinstance(key_contributions, list):
+        key_contributions_str = "; ".join(key_contributions)
+    else:
+        key_contributions_str = str(key_contributions)
+    
+    # Create or update the Person entity with all properties
     query = """
-    MATCH (p:Entity {name: $name})
-    SET p.biography = $biography,
-        p.personDetails = $personDetails
+    MERGE (p:Entity {name: $name})
+    SET p.nodeType = 'Entity',
+        p.subType = 'Person',
+        p.description = $description,
+        p.biography = $biography,
+        p.keyContributions = $keyContributions,
+        p.observations = $observations,
+        p.emotionalValence = $emotionalValence,
+        p.emotionalArousal = $emotionalArousal,
+        p.personalityTraits = $personalityTraits,
+        p.personalitySummary = $personalitySummary,
+        p.cognitiveStyle = $cognitiveStyle,
+        p.decisionMaking = $decisionMaking,
+        p.emotionalProfile = $emotionalProfile,
+        p.emotionalDisposition = $emotionalDisposition,
+        p.relationalDynamics = $relationalDynamics,
+        p.interpersonalStyle = $interpersonalStyle,
+        p.valueSystem = $valueSystem,
+        p.ethicalFramework = $ethicalFramework,
+        p.psychologicalDevelopment = $psychologicalDevelopment,
+        p.source = $source,
+        p.confidence = $confidence
+    RETURN p
     """
     
-    tx.run(query,
-           name=person_data.get("name", ""),
+    result = tx.run(query,
+           name=name,
+           description=person_data.get("description", person_data.get("biography", "")),
            biography=person_data.get("biography", ""),
-           personDetails=person_details_json)
+           keyContributions=key_contributions_str,
+           observations=observations_str,
+           emotionalValence=person_data.get("emotionalValence", 0.5),
+           emotionalArousal=person_data.get("emotionalArousal", 0.5),
+           personalityTraits=personality_traits_json,
+           personalitySummary=personality_summary,
+           cognitiveStyle=cognitive_style_json,
+           decisionMaking=decision_making,
+           emotionalProfile=emotional_profile_json,
+           emotionalDisposition=emotional_disposition,
+           relationalDynamics=relational_dynamics_json,
+           interpersonalStyle=interpersonal_style,
+           valueSystem=value_system_json,
+           ethicalFramework=ethical_framework,
+           psychologicalDevelopment=psychological_development_json,
+           source=person_data.get("source", ""),
+           confidence=person_data.get("confidence", 0.8))
+    
+    summary = result.consume()
+    logging.info(f"Person entity created/updated: {name}")
     
     # Create individual personality trait nodes and connect them
-    if "personalityTraits" in person_data and isinstance(person_data["personalityTraits"], list):
-        for trait_data in person_data["personalityTraits"]:
+    if personality_traits:
+        for trait_data in personality_traits:
             if isinstance(trait_data, dict) and "trait" in trait_data:
                 trait_name = trait_data["trait"]
                 # Create a trait node if it doesn't exist
@@ -290,7 +413,7 @@ def process_person_entity(tx, person_data):
                 MERGE (p)-[r:EXHIBITS_TRAIT]->(t)
                 SET r.confidence = $confidence
                 """
-                tx.run(rel_query, personName=person_data.get("name", ""), traitName=trait_name, confidence=confidence)
+                tx.run(rel_query, personName=name, traitName=trait_name, confidence=confidence)
     
     return True
 

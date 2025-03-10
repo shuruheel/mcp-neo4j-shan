@@ -30,9 +30,10 @@ logging.getLogger("openai").setLevel(logging.WARNING)
 async def main():
     """Main execution function"""
     try:
-        # Check for diagnostic mode
+        # Check for command-line flags
         diagnostic_mode = "--diagnostic" in sys.argv
-
+        skip_extraction = "-skip-extraction" in sys.argv or "--skip-extraction" in sys.argv
+        
         # Check if OpenAI API key is set
         OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
         if not OPENAI_API_KEY:
@@ -66,44 +67,66 @@ async def main():
                     logging.error(f"Neo4j write permission test failed: {str(e)}")
                     raise
         
-        # Stage 1: Load and process documents
-        logging.info("Stage 1: Loading and processing documents")
+        # Stage 1: Extract knowledge from data
+        logging.info("Stage 1: Starting knowledge extraction")
         
-        # Load documents from the specified directory
-        loader = DirectoryLoader("./data", glob="**/*.txt", loader_cls=TextLoader)
-        documents = loader.load()
-        logging.info(f"Loaded {len(documents)} documents")
-        
-        # Split documents into chunks
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
-        chunks = text_splitter.split_documents(documents)
-        logging.info(f"Split into {len(chunks)} chunks")
-        
-        # Check for existing checkpoint to resume processing
-        if os.path.exists('checkpoint_latest.json'):
-            with open('checkpoint_latest.json', 'r') as f:
+        # Skip extraction if requested
+        if skip_extraction:
+            logging.info("Skipping extraction and using existing extracted_data.json file")
+            if not os.path.exists('extracted_data.json'):
+                raise FileNotFoundError("extracted_data.json file not found. Cannot skip extraction.")
+            
+            with open('extracted_data.json', 'r') as f:
                 extracted_data = json.load(f)
-                logging.info(f"Loaded {len(extracted_data)} previously extracted items from checkpoint")
+            logging.info(f"Loaded {len(extracted_data)} previously extracted items")
         else:
-            # Get model parameters from environment variables or use defaults
-            extraction_model = os.getenv("EXTRACTION_MODEL", "gpt-4o")
-            extraction_temperature = float(os.getenv("EXTRACTION_TEMPERATURE", "0.0"))
-            advanced_extraction_model = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4.5-preview-2025-02-27")
-            
-            # Process chunks and extract knowledge
-            extracted_data = await process_chunks(
-                chunks, 
-                batch_size=5, 
-                checkpoint_frequency=5,
-                model_name=extraction_model,
-                temperature=extraction_temperature,
-                advanced_model_name=advanced_extraction_model
+            # Normal extraction flow
+            # Load text files from the data directory
+            logging.info("Loading document files from data directory")
+            loader = DirectoryLoader(
+                "./data", 
+                glob="**/*.txt", 
+                loader_cls=TextLoader,
+                show_progress=True
             )
+            documents = loader.load()
+            logging.info(f"Loaded {len(documents)} documents")
             
-            # Save final results
-            with open('extracted_data.json', 'w') as f:
-                json.dump(extracted_data, f)
-            logging.info(f"Saved {len(extracted_data)} extracted items")
+            # Split documents into chunks
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=10000,
+                chunk_overlap=1000,
+                length_function=len,
+                is_separator_regex=False,
+            )
+            chunks = text_splitter.split_documents(documents)
+            logging.info(f"Split into {len(chunks)} chunks")
+            
+            # Check for existing checkpoint to resume processing
+            if os.path.exists('checkpoint_latest.json'):
+                with open('checkpoint_latest.json', 'r') as f:
+                    extracted_data = json.load(f)
+                    logging.info(f"Loaded {len(extracted_data)} previously extracted items from checkpoint")
+            else:
+                # Get model parameters from environment variables or use defaults
+                extraction_model = os.getenv("EXTRACTION_MODEL", "gpt-4o")
+                extraction_temperature = float(os.getenv("EXTRACTION_TEMPERATURE", "0.0"))
+                advanced_extraction_model = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4.5-preview-2025-02-27")
+                
+                # Process chunks and extract knowledge
+                extracted_data = await process_chunks(
+                    chunks, 
+                    batch_size=5, 
+                    checkpoint_frequency=5,
+                    model_name=extraction_model,
+                    temperature=extraction_temperature,
+                    advanced_model_name=advanced_extraction_model
+                )
+                
+                # Save final results
+                with open('extracted_data.json', 'w') as f:
+                    json.dump(extracted_data, f)
+                logging.info(f"Saved {len(extracted_data)} extracted items")
         
         # Stage 2: Aggregate and generate comprehensive profiles
         logging.info("Stage 2: Starting profile aggregation and generation")

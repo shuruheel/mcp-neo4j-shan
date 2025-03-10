@@ -86,7 +86,7 @@ class KnowledgeExtractor:
             "propositions": [], "emotions": [], "agents": [], "thoughts": [],
             "scientificInsights": [], "laws": [], "reasoningChains": [],
             "reasoningSteps": [], "locations": [], "relationships": [],
-            "personDetails": {}, "locationDetails": {}, "personObservations": {}
+            "personObservations": {}
         }
         
         try:
@@ -124,8 +124,6 @@ class KnowledgeExtractor:
                     # Store person observations in the result
                     if person_observations:
                         result["personObservations"] = person_observations
-                        # Also store these observations as personDetails for backward compatibility
-                        result["personDetails"] = person_observations
                         logging.info(f"Person observations extraction complete for {len(person_observations)} persons")
             
             # Extract location details if location entities are found
@@ -574,8 +572,8 @@ class KnowledgeExtractor:
                 rel_model = ChatOpenAI(
                     model_name=self.model.model_name,
                     temperature=0.0,  # Use lower temperature for more deterministic output
-                    max_tokens=2000,  # Increased from 1000 to allow for more relationships
-                    timeout=180,      # Increased from 120 to 180 seconds (3 minutes)
+                    max_tokens=10000,  # Increased from 1000 to allow for more relationships
+                    timeout=300,      # Increased from 120 to 180 seconds (3 minutes)
                     model_kwargs={
                         "response_format": {"type": "json_object"}
                     }
@@ -711,7 +709,7 @@ async def process_chunks(chunks, batch_size=5, checkpoint_frequency=5, model_nam
     total_chunks = len(chunks)
     
     # Set a timeout for individual extract tasks
-    task_timeout = 180  # 3 minutes (increased from 5 minutes to reflect the more efficient relationship extraction)
+    task_timeout = 300  # 3 minutes (increased from 5 minutes to reflect the more efficient relationship extraction)
     
     for i in tqdm(range(0, total_chunks, batch_size), desc="Processing batches"):
         batch = chunks[i:i+batch_size]
