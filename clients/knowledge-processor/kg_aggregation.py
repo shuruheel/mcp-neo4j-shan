@@ -249,132 +249,39 @@ class EntityAggregator:
             if observations and isinstance(observations, list):
                 self.person_observations[person_std].extend(observations)
                 
-        # Process person details (for backward compatibility)
-        person_details = data.get('personDetails', {})
-        for person_name, details in person_details.items():
-            if not details or not isinstance(details, dict):
-                continue
-                
-            person_std = standardize_entity(person_name)
-            
-            # Ensure person exists in the persons dictionary
+            # Ensure person exists in the persons dictionary with proper structure
             if person_std not in self.persons:
-                self.persons[person_std] = {'mentions': 1}
-            
-            # Create structured fields if they don't exist
-            for field in ["personalityTraits", "cognitiveStyle", "emotionalProfile", 
-                         "relationalDynamics", "valueSystem", "psychologicalDevelopment", 
-                         "metaAttributes", "aliases"]:
-                if field not in self.persons[person_std]:
-                    if field in ["personalityTraits", "psychologicalDevelopment", "aliases"]:
-                        self.persons[person_std][field] = []
-                    else:
-                        self.persons[person_std][field] = {}
-            
-            # Handle each field appropriately based on type
-            for key, value in details.items():
-                # Skip name as it's already the key
-                if key == "name":
-                    continue
-                    
-                # Handle simple scalar fields
-                if key in ["biography", "modelConfidence", "evidenceStrength", 
-                          "emotionalDisposition", "interpersonalStyle", "ethicalFramework"]:
-                    self.persons[person_std][key] = value
+                self.persons[person_std] = {
+                    'mentions': 1, 
+                    'name': person_std, 
+                    'nodeType': 'Entity',
+                    'subType': 'Person',
+                    'personalityTraits': [],
+                    'cognitiveStyle': {},
+                    'emotionalProfile': {},
+                    'relationalDynamics': {},
+                    'valueSystem': {},
+                    'psychologicalDevelopment': [],
+                    'metaAttributes': {},
+                    'aliases': []
+                }
+            else:
+                # Increment mentions counter for existing person
+                self.persons[person_std]['mentions'] = self.persons[person_std].get('mentions', 0) + 1
                 
-                # Handle array fields
-                elif key in ["aliases", "personalityTraits", "psychologicalDevelopment"]:
-                    if not isinstance(value, list):
-                        continue
-                        
-                    # Get existing items
-                    existing = self.persons[person_std].get(key, [])
-                    if not isinstance(existing, list):
-                        existing = []
-                    
-                    # Identify existing items by primary key
-                    if key == "personalityTraits":
-                        existing_names = [item.get('trait') for item in existing if isinstance(item, dict) and 'trait' in item]
-                        for item in value:
-                            if isinstance(item, dict) and 'trait' in item and item['trait'] not in existing_names:
-                                existing.append(item)
-                                existing_names.append(item['trait'])
-                    elif key == "psychologicalDevelopment":
-                        existing_periods = [item.get('period') for item in existing if isinstance(item, dict) and 'period' in item]
-                        for item in value:
-                            if isinstance(item, dict) and 'period' in item and item['period'] not in existing_periods:
-                                existing.append(item)
-                                existing_periods.append(item['period'])
-                    elif key == "aliases":
-                        for alias in value:
-                            if alias not in existing:
-                                existing.append(alias)
-                    
-                    # Update the field
-                    self.persons[person_std][key] = existing
+                # Ensure all required fields exist
+                for field in ["personalityTraits", "cognitiveStyle", "emotionalProfile", 
+                             "relationalDynamics", "valueSystem", "psychologicalDevelopment", 
+                             "metaAttributes", "aliases"]:
+                    if field not in self.persons[person_std]:
+                        if field in ["personalityTraits", "psychologicalDevelopment", "aliases"]:
+                            self.persons[person_std][field] = []
+                        else:
+                            self.persons[person_std][field] = {}
                 
-                # Handle nested objects
-                elif key in ["cognitiveStyle", "emotionalProfile", "relationalDynamics", "valueSystem", "metaAttributes"]:
-                    if not isinstance(value, dict):
-                        continue
-                        
-                    # Get existing object
-                    existing = self.persons[person_std].get(key, {})
-                    if not isinstance(existing, dict):
-                        existing = {}
-                    
-                    # Handle special nested cases
-                    if key == "emotionalProfile" and "emotionalTriggers" in value:
-                        # Handle emotionalTriggers array within emotionalProfile
-                        if "emotionalTriggers" not in existing:
-                            existing["emotionalTriggers"] = []
-                            
-                        existing_triggers = [t.get('trigger') for t in existing.get("emotionalTriggers", []) 
-                                          if isinstance(t, dict) and 'trigger' in t]
-                                          
-                        for trigger in value.get("emotionalTriggers", []):
-                            if isinstance(trigger, dict) and 'trigger' in trigger and trigger['trigger'] not in existing_triggers:
-                                existing["emotionalTriggers"].append(trigger)
-                                existing_triggers.append(trigger['trigger'])
-                    
-                    if key == "relationalDynamics":
-                        # Handle loyalties array within relationalDynamics
-                        if "loyalties" in value:
-                            if "loyalties" not in existing:
-                                existing["loyalties"] = []
-                                
-                            existing_targets = [l.get('target') for l in existing.get("loyalties", []) 
-                                             if isinstance(l, dict) and 'target' in l]
-                                             
-                            for loyalty in value.get("loyalties", []):
-                                if isinstance(loyalty, dict) and 'target' in loyalty and loyalty['target'] not in existing_targets:
-                                    existing["loyalties"].append(loyalty)
-                                    existing_targets.append(loyalty['target'])
-                    
-                    if key == "valueSystem":
-                        # Handle coreValues array within valueSystem
-                        if "coreValues" in value:
-                            if "coreValues" not in existing:
-                                existing["coreValues"] = []
-                                
-                            existing_values = [v.get('value') for v in existing.get("coreValues", []) 
-                                            if isinstance(v, dict) and 'value' in v]
-                                            
-                            for core_value in value.get("coreValues", []):
-                                if isinstance(core_value, dict) and 'value' in core_value and core_value['value'] not in existing_values:
-                                    existing["coreValues"].append(core_value)
-                                    existing_values.append(core_value['value'])
-                    
-                    # Merge scalar properties
-                    for prop_key, prop_value in value.items():
-                        if not isinstance(prop_value, (list, dict)) and prop_key not in existing:
-                            existing[prop_key] = prop_value
-                    
-                    # Update the field
-                    self.persons[person_std][key] = existing
-            
-            # Increment mentions counter
-            self.persons[person_std]['mentions'] = self.persons[person_std].get('mentions', 0) + 1
+                # Ensure nodeType and subType are properly set
+                self.persons[person_std]['nodeType'] = 'Entity'
+                self.persons[person_std]['subType'] = 'Person'
         
         # Process location details
         for loc_name, details in data.get('locationDetails', {}).items():
@@ -480,18 +387,33 @@ class EntityAggregator:
             'relationships': self.relationships  # Add relationships to profiles
         }
         
+        # Count eligible persons for psychological profiling (those with 3+ observations)
+        eligible_persons = [name for name, person in self.persons.items() 
+                          if person.get('mentions', 0) > 1 and 
+                          name in self.person_observations and 
+                          len(self.person_observations[name]) >= 3]
+        
+        logging.info(f"Generating psychological profiles for {len(eligible_persons)} persons with sufficient observations")
+        
         # Process persons with multiple mentions
+        person_count = 0
+        total_eligible = len(eligible_persons)
+        
         for name, person in self.persons.items():
             if person.get('mentions', 0) > 1:  # Only process persons with multiple mentions
                 # If we have observations for this person, use them to generate a comprehensive profile
                 if name in self.person_observations and len(self.person_observations[name]) >= 3:
                     try:
+                        person_count += 1
+                        logging.info(f"Generating psychological profile for {name} ({person_count}/{total_eligible})")
+                        
                         synthesized_profile = await self.synthesize_psychological_profile(name, self.person_observations[name], model)
                         if synthesized_profile:
                             # Merge the synthesized profile with existing data
                             merged_person = self.merge_person_data(person, synthesized_profile)
                             merged_person['name'] = name
                             profiles['persons'].append(merged_person)
+                            logging.info(f"✓ Successfully generated psychological profile for {name}")
                             continue
                     except Exception as e:
                         logging.error(f"Error synthesizing profile for {name}: {str(e)}")
@@ -499,6 +421,8 @@ class EntityAggregator:
                 # Fall back to existing data if synthesis fails
                 person['name'] = name
                 profiles['persons'].append(person)
+        
+        logging.info(f"Completed generation of {person_count} psychological profiles")
         
         # Process locations with multiple mentions
         for name, location in self.locations.items():
@@ -630,6 +554,8 @@ class EntityAggregator:
         if not observations:
             return {}
         
+        logging.info(f"Starting psychological profile synthesis for {person_name} with {len(observations)} observations")
+        
         # Create the prompt for synthesizing a psychological profile
         prompt = f"""
         Synthesize a comprehensive psychological profile for {person_name} based on these observations:
@@ -653,8 +579,10 @@ class EntityAggregator:
         
         try:
             # Get response from the model
+            logging.info(f"Sending prompt to model for {person_name}'s psychological profile")
             response = await model.ainvoke(prompt)
             content = response.content
+            logging.info(f"Received response from model for {person_name}'s profile, parsing JSON...")
             
             # Extract JSON object from the response
             json_pattern = r'```(?:json)?\s*(.*?)\s*```'
@@ -663,17 +591,24 @@ class EntityAggregator:
             if json_matches:
                 try:
                     # Parse the JSON
-                    return json.loads(json_matches[0])
-                except json.JSONDecodeError:
-                    pass
+                    profile_data = json.loads(json_matches[0])
+                    traits_count = len(profile_data.get('personalityTraits', []))
+                    logging.info(f"Successfully parsed JSON for {person_name} - found {traits_count} personality traits")
+                    return profile_data
+                except json.JSONDecodeError as e:
+                    logging.warning(f"JSON parsing error for {person_name}: {str(e)}")
             
             # Try to extract JSON from the entire response
             try:
+                logging.info(f"Attempting alternative JSON extraction for {person_name}")
                 potential_json = self._extract_json_from_text(content)
                 if potential_json:
-                    return json.loads(potential_json)
-            except json.JSONDecodeError:
-                pass
+                    profile_data = json.loads(potential_json)
+                    traits_count = len(profile_data.get('personalityTraits', []))
+                    logging.info(f"Successfully parsed JSON with alternative method for {person_name} - found {traits_count} personality traits")
+                    return profile_data
+            except json.JSONDecodeError as e:
+                logging.warning(f"Alternative JSON parsing error for {person_name}: {str(e)}")
             
             logging.error(f"Failed to parse JSON response for psychological profile of {person_name}")
             return {}

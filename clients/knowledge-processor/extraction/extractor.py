@@ -86,7 +86,7 @@ class KnowledgeExtractor:
             "propositions": [], "emotions": [], "agents": [], "thoughts": [],
             "scientificInsights": [], "laws": [], "reasoningChains": [],
             "reasoningSteps": [], "locations": [], "relationships": [],
-            "personDetails": {}, "locationDetails": {}, "personObservations": {}
+            "personObservations": {}
         }
         
         try:
@@ -124,8 +124,6 @@ class KnowledgeExtractor:
                     # Store person observations in the result
                     if person_observations:
                         result["personObservations"] = person_observations
-                        # Also store these observations as personDetails for backward compatibility
-                        result["personDetails"] = person_observations
                         logging.info(f"Person observations extraction complete for {len(person_observations)} persons")
             
             # Extract location details if location entities are found
@@ -410,15 +408,16 @@ class KnowledgeExtractor:
         props = [p for p in extracted_nodes.get("propositions", []) if isinstance(p, dict) and "name" in p]
         thoughts = [t for t in extracted_nodes.get("thoughts", []) if isinstance(t, dict) and "name" in t]
         reasoning_chains = [r for r in extracted_nodes.get("reasoningChains", []) if isinstance(r, dict) and "name" in r]
+        reasoning_steps = [s for s in extracted_nodes.get("reasoningSteps", []) if isinstance(s, dict) and "name" in s]  # Added reasoning steps
         
         # Skip if too few nodes to form relationships
-        if len(entities) + len(concepts) + len(events) + len(locations) + len(props) < 2:
+        if len(entities) + len(concepts) + len(events) + len(locations) + len(props) + len(reasoning_chains) + len(reasoning_steps) < 2:
             logging.info("Too few nodes extracted to form meaningful relationships")
             return []
         
-        # OPTIMIZATION: Limit the number of nodes to prevent huge prompts
-        # For each type, keep only the first 5 nodes to keep prompt size manageable
-        MAX_NODES_PER_TYPE = 5
+        # OPTIMIZATION: Limit the number of nodes per type to prevent extremely large prompts
+        # For each type, keep only the first 10 nodes (increased from 5)
+        MAX_NODES_PER_TYPE = 10
         if len(entities) > MAX_NODES_PER_TYPE:
             entities = entities[:MAX_NODES_PER_TYPE]
             logging.info(f"Limited entities to {MAX_NODES_PER_TYPE} for relationship extraction")
@@ -434,6 +433,15 @@ class KnowledgeExtractor:
         if len(props) > MAX_NODES_PER_TYPE:
             props = props[:MAX_NODES_PER_TYPE]
             logging.info(f"Limited propositions to {MAX_NODES_PER_TYPE} for relationship extraction")
+        if len(thoughts) > MAX_NODES_PER_TYPE:
+            thoughts = thoughts[:MAX_NODES_PER_TYPE]
+            logging.info(f"Limited thoughts to {MAX_NODES_PER_TYPE} for relationship extraction")
+        if len(reasoning_chains) > MAX_NODES_PER_TYPE:
+            reasoning_chains = reasoning_chains[:MAX_NODES_PER_TYPE]
+            logging.info(f"Limited reasoning chains to {MAX_NODES_PER_TYPE} for relationship extraction")
+        if len(reasoning_steps) > MAX_NODES_PER_TYPE:
+            reasoning_steps = reasoning_steps[:MAX_NODES_PER_TYPE]
+            logging.info(f"Limited reasoning steps to {MAX_NODES_PER_TYPE} for relationship extraction")
         
         # Prepare simplified node lists for the prompt (just names and types to keep prompt size manageable)
         simplified_nodes = {
@@ -443,7 +451,8 @@ class KnowledgeExtractor:
             "locations": [{"name": l.get("name")} for l in locations],
             "propositions": [{"name": p.get("name")} for p in props],
             "thoughts": [{"name": t.get("name")} for t in thoughts],
-            "reasoningChains": [{"name": r.get("name")} for r in reasoning_chains]
+            "reasoningChains": [{"name": r.get("name")} for r in reasoning_chains],
+            "reasoningSteps": [{"name": s.get("name")} for s in reasoning_steps]  # Added reasoning steps
         }
         
         # Get relationship template from the relationship extractor
@@ -454,28 +463,45 @@ class KnowledgeExtractor:
         logging.info(f"Starting relationship extraction with {total_node_count} available nodes")
         
         # OPTIMIZATION: If too many nodes, extract relationships in batches
-        if total_node_count > 15:
-            logging.info(f"Large number of nodes ({total_node_count}), limiting to first 15 for relationship extraction")
+        # Increased max nodes from 15 to 30
+        MAX_TOTAL_NODES = 30
+        if total_node_count > MAX_TOTAL_NODES:
+            logging.info(f"Large number of nodes ({total_node_count}), limiting to {MAX_TOTAL_NODES} for relationship extraction")
             # Prioritize entities and concepts, which are most likely to have relationships
-            prioritized_nodes = {"entities": [], "concepts": [], "others": []}
+            prioritized_nodes = {"entities": [], "concepts": [], "chains_steps": [], "others": []}
             
-            # Add the most important nodes first (up to 15 total)
-            remaining = 15
+            # Add the most important nodes first (up to MAX_TOTAL_NODES total)
+            remaining = MAX_TOTAL_NODES
             
-            # First add entities (up to 5)
-            entity_count = min(len(simplified_nodes["entities"]), 5, remaining)
+            # First add entities (up to 10)
+            entity_count = min(len(simplified_nodes["entities"]), 10, remaining)
             prioritized_nodes["entities"] = simplified_nodes["entities"][:entity_count]
             remaining -= entity_count
             
-            # Then add concepts (up to 5)
+            # Then add concepts (up to 8)
             if remaining > 0:
-                concept_count = min(len(simplified_nodes["concepts"]), 5, remaining)
+                concept_count = min(len(simplified_nodes["concepts"]), 8, remaining)
                 prioritized_nodes["concepts"] = simplified_nodes["concepts"][:concept_count]
                 remaining -= concept_count
             
+            # Then add reasoning chains and steps (up to 6)
+            if remaining > 0:
+                # Prioritize reasoning chains and steps to ensure they're included
+                chains_count = min(len(simplified_nodes["reasoningChains"]), 3, remaining)
+                prioritized_nodes["chains_steps"].extend(
+                    [{"name": node["name"], "type": "reasoningChain"} for node in simplified_nodes["reasoningChains"][:chains_count]]
+                )
+                remaining -= chains_count
+                
+                steps_count = min(len(simplified_nodes["reasoningSteps"]), 3, remaining)
+                prioritized_nodes["chains_steps"].extend(
+                    [{"name": node["name"], "type": "reasoningStep"} for node in simplified_nodes["reasoningSteps"][:steps_count]]
+                )
+                remaining -= steps_count
+            
             # Then add a mix of other node types
             if remaining > 0:
-                for node_type in ["events", "propositions", "thoughts", "reasoningChains", "locations"]:
+                for node_type in ["events", "propositions", "thoughts", "locations"]:
                     if node_type in simplified_nodes and simplified_nodes[node_type] and remaining > 0:
                         count = min(len(simplified_nodes[node_type]), remaining)
                         prioritized_nodes["others"].extend(
@@ -487,6 +513,7 @@ class KnowledgeExtractor:
             simplified_nodes = {
                 "entities": prioritized_nodes["entities"],
                 "concepts": prioritized_nodes["concepts"],
+                "reasoning_nodes": prioritized_nodes["chains_steps"],
                 "other_nodes": prioritized_nodes["others"]
             }
             
@@ -516,12 +543,17 @@ class KnowledgeExtractor:
             - HAS_PROPERTY: Entity to Attribute connections
             - BELIEVES, VALUES: Person relationships to concepts/propositions
             - RELATED_TO, ASSOCIATED_WITH: General connections
+            - PART_OF_CHAIN: ReasoningStep to ReasoningChain
+            - SUPPORTS, CONTRADICTS: ReasoningStep to Proposition/Concept
+            - REFERENCES: ReasoningStep to Entity/Event
+            - NEXT, PREVIOUS: Sequential ReasoningSteps
 
             INSTRUCTIONS:
             1. Only create relationships between the exact nodes listed above
-            2. Return 3-5 strong relationships rather than many weak ones
-            3. Return your response as a JSON object with a "relationships" array
-            4. Each relationship must include source, target, type, and properties
+            2. Extract all meaningful relationships supported by the text, prioritizing high-confidence relationships (confidence > 0.7)
+            3. For each relationship, include a confidence score (0.0-1.0) based on how clearly it's supported by the text
+            4. Return your response as a JSON object with a "relationships" array
+            5. Each relationship must include source, target, type, and properties
 
             RESPONSE FORMAT:
             {{
@@ -540,217 +572,35 @@ class KnowledgeExtractor:
                 rel_model = ChatOpenAI(
                     model_name=self.model.model_name,
                     temperature=0.0,  # Use lower temperature for more deterministic output
-                    max_tokens=1000,  # Limit token generation to prevent timeouts
-                    timeout=120,      # Set a 2-minute timeout
+                    max_tokens=10000,  # Increased from 1000 to allow for more relationships
+                    timeout=300,      # Increased from 120 to 180 seconds (3 minutes)
                     model_kwargs={
                         "response_format": {"type": "json_object"}
                     }
                 )
                 
                 response = await rel_model.ainvoke(prompt)
-                end_time = time.time()
-                
-                logging.debug(f"Relationship extraction LLM call completed in {end_time - start_time:.2f} seconds")
+
+                # Process the response
                 content = response.content
-                
-                # Extract and parse relationships from the response
-                relationships = []
+                elapsed = time.time() - start_time
+                logging.debug(f"LLM response received in {elapsed:.2f} seconds")
                 
                 try:
-                    # First, try parsing the entire response as a JSON object
-                    parsed_response = json.loads(content)
+                    # Parse the JSON response
+                    result = json.loads(content)
+                    relationships = result.get("relationships", [])
                     
-                    # Check for relationships array
-                    if isinstance(parsed_response, dict) and "relationships" in parsed_response:
-                        if isinstance(parsed_response["relationships"], list):
-                            relationships = parsed_response["relationships"]
-                    # If it's a direct array of relationships
-                    elif isinstance(parsed_response, list):
-                        relationships = parsed_response
-                except json.JSONDecodeError:
-                    # If parsing the whole response fails, try extracting JSON
-                    
-                    # Try to extract JSON from code blocks first
-                    json_pattern = r'```(?:json)?\s*(.*?)\s*```'
-                    json_matches = re.findall(json_pattern, content, re.DOTALL)
-                    
-                    if json_matches:
-                        for match in json_matches:
-                            try:
-                                # Clean up the JSON string - handle potential formatting issues
-                                match = match.strip()
-                                # Ensure proper JSON format
-                                if not match.startswith('[') and not match.startswith('{'):
-                                    continue
-                                    
-                                # Remove trailing commas before closing brackets
-                                match = re.sub(r',\s*]', ']', match)
-                                match = re.sub(r',\s*}', '}', match)
-                                
-                                parsed = json.loads(match)
-                                if isinstance(parsed, dict) and "relationships" in parsed:
-                                    if isinstance(parsed["relationships"], list):
-                                        relationships = parsed["relationships"]
-                                        break
-                                elif isinstance(parsed, list):
-                                    relationships = parsed
-                                    break
-                            except json.JSONDecodeError:
-                                continue
-                    
-                    # If no relationships found via code blocks, try to extract JSON from the text
-                    if not relationships:
-                        # Look for JSON object with relationships array
-                        rel_obj_pattern = r'\{[^{]*"relationships"\s*:\s*\[[^\]]*\][^}]*\}'
-                        rel_obj_match = re.search(rel_obj_pattern, content, re.DOTALL)
-                        
-                        if rel_obj_match:
-                            try:
-                                # Extract and clean the match
-                                rel_obj = rel_obj_match.group(0)
-                                # Remove trailing commas before closing brackets
-                                rel_obj = re.sub(r',\s*]', ']', rel_obj)
-                                rel_obj = re.sub(r',\s*}', '}', rel_obj)
-                                
-                                parsed = json.loads(rel_obj)
-                                if "relationships" in parsed and isinstance(parsed["relationships"], list):
-                                    relationships = parsed["relationships"]
-                            except json.JSONDecodeError:
-                                pass
-                        
-                        # If that doesn't work, look for a JSON array directly
-                        if not relationships:
-                            rel_array_pattern = r'\[\s*\{[^{]*"source"[^}]*\}[^]]*\]'
-                            rel_array_match = re.search(rel_array_pattern, content, re.DOTALL)
-                            
-                            if rel_array_match:
-                                try:
-                                    # Extract and clean the match
-                                    rel_array = rel_array_match.group(0)
-                                    # Remove trailing commas before closing brackets
-                                    rel_array = re.sub(r',\s*]', ']', rel_array)
-                                    rel_array = re.sub(r',\s*}', '}', rel_array)
-                                    
-                                    parsed = json.loads(rel_array)
-                                    if isinstance(parsed, list):
-                                        relationships = parsed
-                                except json.JSONDecodeError:
-                                    pass
-                
-                # Validate relationships - only include those between extracted nodes
-                valid_relationships = []
-                all_node_names = set()
-                for node_list in simplified_nodes.values():
-                    all_node_names.update(node.get("name") for node in node_list)
-                
-                logging.debug(f"Validating {len(relationships)} extracted relationships against {len(all_node_names)} node names")
-                
-                for rel in relationships:
-                    if not isinstance(rel, dict):
-                        logging.warning(f"Skipping non-dictionary relationship: {rel}")
-                        continue
-                        
-                    # Handle both formats for backward compatibility
-                    if "source" in rel and "target" in rel:
-                        # Modern format with source and target objects
-                        if isinstance(rel.get("source"), dict):
-                            source = rel.get("source", {}).get("name", "")
-                            # Set default type if missing
-                            if "type" not in rel["source"]:
-                                rel["source"]["type"] = "Entity"
-                        else:
-                            # Convert string to dict
-                            source = rel.get("source", "")
-                            rel["source"] = {"name": source, "type": "Entity"}
-                            
-                        if isinstance(rel.get("target"), dict):
-                            target = rel.get("target", {}).get("name", "")
-                            # Set default type if missing
-                            if "type" not in rel["target"]:
-                                rel["target"]["type"] = "Entity"
-                        else:
-                            # Convert string to dict
-                            target = rel.get("target", "")
-                            rel["target"] = {"name": target, "type": "Entity"}
-                    elif "fromNode" in rel and "toNode" in rel:
-                        # Legacy format with fromNode and toNode fields
-                        source = rel.get("fromNode", "")
-                        target = rel.get("toNode", "")
-                        
-                        # Convert to modern format
-                        rel["source"] = {"name": source, "type": "Entity"}
-                        rel["target"] = {"name": target, "type": "Entity"}
-                        
-                        # Move relationshipType to type if needed
-                        if "relationshipType" in rel and "type" not in rel:
-                            rel["type"] = rel.pop("relationshipType")
-                        
-                        # Remove old fields but keep them for validation
-                        source_name = source
-                        target_name = target
-                    else:
-                        # Skip malformed relationships
-                        logging.warning(f"Skipping malformed relationship missing source/target: {rel}")
-                        continue
-                    
-                    # Extract source and target names for validation
-                    source_name = rel["source"]["name"] if isinstance(rel["source"], dict) else ""
-                    target_name = rel["target"]["name"] if isinstance(rel["target"], dict) else ""
-                    
-                    # Ensure type is present
-                    if "type" not in rel:
-                        logging.warning(f"Adding default RELATED_TO type to relationship: {source_name} -> {target_name}")
-                        rel["type"] = "RELATED_TO"
-                    
-                    # Check if both nodes exist in our extracted nodes
-                    if source_name in all_node_names and target_name in all_node_names:
-                        # Ensure properties object exists
-                        if "properties" not in rel:
-                            rel["properties"] = {}
-                        
-                        # Move confidence to properties if it exists outside
-                        if "confidence" in rel:
-                            rel["properties"]["confidenceScore"] = rel.pop("confidence")
-                        elif "confidenceScore" in rel:
-                            rel["properties"]["confidenceScore"] = rel.pop("confidenceScore")
-                        else:
-                            rel["properties"]["confidenceScore"] = 0.7
-                            
-                        # Add context if missing
-                        if "context" not in rel["properties"]:
-                            # Check if context exists at the top level
-                            if "context" in rel:
-                                rel["properties"]["context"] = rel.pop("context")
-                            else:
-                                rel["properties"]["context"] = ""
-                            
-                        # Move category to properties if it exists outside
-                        if "category" in rel:
-                            rel["properties"]["relationshipCategory"] = rel.pop("category")
-                        elif "relationshipCategory" in rel:
-                            rel["properties"]["relationshipCategory"] = rel.pop("relationshipCategory")
-                        
-                        # Add to valid relationships
-                        valid_relationships.append(rel)
-                        
-                        # Log for debugging
-                        logging.debug(f"Valid relationship: {source_name} -[{rel['type']}]-> {target_name}")
-                    else:
-                        if source_name not in all_node_names:
-                            logging.warning(f"Skipping relationship with invalid source node: '{source_name}'")
-                        if target_name not in all_node_names:
-                            logging.warning(f"Skipping relationship with invalid target node: '{target_name}'")
-                
-                logging.info(f"Relationship extraction complete: {len(valid_relationships)} relationships extracted")
-                return valid_relationships
-                
+                    logging.info(f"Extracted {len(relationships)} relationships in {elapsed:.2f} seconds")
+                    return relationships
+                except json.JSONDecodeError as e:
+                    logging.error(f"Error parsing relationship extraction response: {str(e)}")
+                    return []
             except Exception as e:
-                logging.error(f"Error parsing relationships: {str(e)}")
-                logging.error(f"Response content: {content[:500]}...")  # Log first 500 chars of response
+                logging.error(f"Error during relationship LLM call: {str(e)}")
                 return []
-        
         except Exception as e:
-            logging.error(f"Error during relationship extraction: {str(e)}")
+            logging.error(f"Error in relationship extraction: {str(e)}")
             return []
 
     def _normalize_person_names(self, entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -829,12 +679,37 @@ async def process_chunks(chunks, batch_size=5, checkpoint_frequency=5, model_nam
     logging.info(f"  - Advanced model for psychological observations: {advanced_model_name}")
     logging.info("Using optimized group-based extraction approach")
     
+    # Setup signal handlers to save checkpoint on termination
+    import signal
+    import os
+    
+    # Store results in a container that can be accessed by the signal handler
+    result_container = {"results": []}
+    
+    # Define signal handler function
+    def signal_handler(sig, frame):
+        logging.warning(f"Received termination signal ({sig}). Saving checkpoint before exiting...")
+        try:
+            checkpoint_file = 'checkpoint_latest.json'
+            with open(checkpoint_file, 'w') as f:
+                json.dump(result_container["results"], f)
+            logging.info(f"Saved emergency checkpoint with {len(result_container['results'])} processed chunks")
+        except Exception as e:
+            logging.error(f"Failed to save emergency checkpoint: {str(e)}")
+        finally:
+            # Exit with non-zero code to indicate abnormal termination
+            os._exit(1)
+    
+    # Register signal handlers for common termination signals
+    signal.signal(signal.SIGINT, signal_handler)  # Handle Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Handle termination request
+    
     extractor = KnowledgeExtractor(model_name=model_name, temperature=temperature, advanced_model_name=advanced_model_name)
-    results = []
+    results = result_container["results"]  # Use the container's results list
     total_chunks = len(chunks)
     
     # Set a timeout for individual extract tasks
-    task_timeout = 180  # 3 minutes (increased from 5 minutes to reflect the more efficient relationship extraction)
+    task_timeout = 300  # 3 minutes (increased from 5 minutes to reflect the more efficient relationship extraction)
     
     for i in tqdm(range(0, total_chunks, batch_size), desc="Processing batches"):
         batch = chunks[i:i+batch_size]
@@ -886,20 +761,37 @@ async def process_chunks(chunks, batch_size=5, checkpoint_frequency=5, model_nam
             logging.info(f"Processed batch {i//batch_size + 1}/{(total_chunks + batch_size - 1)//batch_size}: "
                          f"{len(batch)} chunks, {batch_nodes} nodes, {batch_relationships} relationships")
             
-            # Save checkpoint
-            if (i + batch_size) % (batch_size * checkpoint_frequency) == 0 or (i + batch_size) >= total_chunks:
-                try:
-                    checkpoint_file = f'checkpoint_latest.json'
-                    with open(checkpoint_file, 'w') as f:
+            # Save checkpoint after each batch, not just at checkpoint_frequency intervals
+            # This ensures we always have the most recent data
+            try:
+                checkpoint_file = f'checkpoint_latest.json'
+                with open(checkpoint_file, 'w') as f:
+                    json.dump(results, f)
+                logging.info(f"Saved checkpoint after batch {i//batch_size + 1}")
+                
+                # Also save numbered checkpoint at regular intervals
+                if (i + batch_size) % (batch_size * checkpoint_frequency) == 0 or (i + batch_size) >= total_chunks:
+                    numbered_checkpoint = f'checkpoint_{i//batch_size + 1}.json'
+                    with open(numbered_checkpoint, 'w') as f:
                         json.dump(results, f)
-                    logging.info(f"Saved checkpoint at batch {i//batch_size + 1}")
-                except Exception as e:
-                    logging.warning(f"Failed to save checkpoint: {str(e)}")
+                    logging.info(f"Saved numbered checkpoint: {numbered_checkpoint}")
+            except Exception as e:
+                logging.warning(f"Failed to save checkpoint: {str(e)}")
         except Exception as e:
             logging.error(f"Error processing batch starting at index {i}: {str(e)}")
             logging.error(f"Details: {type(e).__name__}")
             import traceback
             logging.error(traceback.format_exc())
+            
+            # Try to save checkpoint even when batch fails
+            try:
+                checkpoint_file = f'checkpoint_latest.json'
+                with open(checkpoint_file, 'w') as f:
+                    json.dump(results, f)
+                logging.info(f"Saved checkpoint after batch error at index {i}")
+            except Exception as checkpoint_err:
+                logging.error(f"Failed to save checkpoint after batch error: {str(checkpoint_err)}")
+                
             # Continue with next batch instead of failing the entire process
             continue
     
@@ -919,5 +811,9 @@ async def process_chunks(chunks, batch_size=5, checkpoint_frequency=5, model_nam
     total_relationships = sum(len(res.get("relationships", [])) for res in results)
     
     logging.info(f"Completed processing {len(results)} chunks with {total_nodes} nodes and {total_relationships} relationships")
+    
+    # Unregister signal handlers before returning
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     
     return results 
