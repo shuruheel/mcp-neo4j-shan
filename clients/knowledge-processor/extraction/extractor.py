@@ -487,9 +487,11 @@ class KnowledgeExtractor:
 
             {{
               "task": "Extract relationships between nodes",
-              "nodes": {json.dumps(simplified_nodes, indent=2)},
-              "text": "{text.replace('"', '\\"')}"
+              "nodes": {json.dumps(simplified_nodes, indent=2)}
             }}
+
+            Text context:
+            {text}
 
             RELATIONSHIP TYPES:
             - IS_A, INSTANCE_OF: Entity to Concept
