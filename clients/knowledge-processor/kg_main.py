@@ -13,7 +13,7 @@ import sys
 import re
 
 from kg_db import Neo4jConnection, setup_neo4j_constraints, add_to_neo4j, add_relationship_to_neo4j
-from kg_extraction import process_chunks
+from extraction import process_chunks
 from kg_aggregation import EntityAggregator
 from kg_utils import standardize_entity, cleanup_temp_files
 
@@ -85,8 +85,23 @@ async def main():
                 extracted_data = json.load(f)
                 logging.info(f"Loaded {len(extracted_data)} previously extracted items from checkpoint")
         else:
+            # Get model parameters from environment variables or use defaults
+            extraction_model = os.getenv("EXTRACTION_MODEL", "gpt-4o")
+            extraction_temperature = float(os.getenv("EXTRACTION_TEMPERATURE", "0.0"))
+            advanced_extraction_model = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4-turbo")
+            logging.info(f"Using tiered extraction approach:")
+            logging.info(f"  - Primary model: {extraction_model}")
+            logging.info(f"  - Advanced model for person observations: {advanced_extraction_model}")
+            
             # Process chunks and extract knowledge
-            extracted_data = await process_chunks(chunks, batch_size=5, checkpoint_frequency=5)
+            extracted_data = await process_chunks(
+                chunks, 
+                batch_size=5, 
+                checkpoint_frequency=5,
+                model_name=extraction_model,
+                temperature=extraction_temperature,
+                advanced_model_name=advanced_extraction_model
+            )
             
             # Save final results
             with open('extracted_data.json', 'w') as f:
@@ -132,7 +147,10 @@ async def main():
             logging.warning("No entities or persons were found to store in the database")
         
         # Generate comprehensive profiles
-        comprehensive_model = ChatOpenAI(model_name="gpt-4o", temperature=0.2)
+        # Use the advanced model for profile generation to capture psychological nuances better
+        advanced_model_name = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4-turbo")
+        logging.info(f"Using advanced model ({advanced_model_name}) for comprehensive profile generation")
+        comprehensive_model = ChatOpenAI(model_name=advanced_model_name, temperature=0.2)
         comprehensive_profiles = await aggregator.generate_comprehensive_profiles(comprehensive_model)
         
         # Save comprehensive profiles

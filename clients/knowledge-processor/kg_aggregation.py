@@ -4,6 +4,10 @@ import logging
 from collections import defaultdict
 import re
 from kg_utils import standardize_entity
+import json
+from typing import List, Dict, Any
+from copy import deepcopy
+from .kg_schema import PERSON_TEMPLATE
 
 class EntityAggregator:
     """Aggregates entity information from extraction results"""
@@ -25,6 +29,8 @@ class EntityAggregator:
         self.laws = defaultdict(dict)
         self.reasoning_chains = defaultdict(dict)
         self.reasoning_steps = defaultdict(dict)
+        # Add collection for person observations
+        self.person_observations = defaultdict(list)
     
     def add_extraction_result(self, data):
         """Add an extraction result to the aggregator"""
@@ -236,9 +242,19 @@ class EntityAggregator:
                     if step_name not in self.reasoning_chains[chain_name]['steps']:
                         self.reasoning_chains[chain_name]['steps'].append(step_name)
         
-        # Process person details
-        for person_name, details in data.get('personDetails', {}).items():
-            # Standardize person name
+        # Process person observations
+        person_observations = data.get('personObservations', {})
+        for person_name, observations in person_observations.items():
+            person_std = standardize_entity(person_name)
+            if observations and isinstance(observations, list):
+                self.person_observations[person_std].extend(observations)
+                
+        # Process person details (for backward compatibility)
+        person_details = data.get('personDetails', {})
+        for person_name, details in person_details.items():
+            if not details or not isinstance(details, dict):
+                continue
+                
             person_std = standardize_entity(person_name)
             
             # Ensure person exists in the persons dictionary
@@ -467,6 +483,20 @@ class EntityAggregator:
         # Process persons with multiple mentions
         for name, person in self.persons.items():
             if person.get('mentions', 0) > 1:  # Only process persons with multiple mentions
+                # If we have observations for this person, use them to generate a comprehensive profile
+                if name in self.person_observations and len(self.person_observations[name]) >= 3:
+                    try:
+                        synthesized_profile = await self.synthesize_psychological_profile(name, self.person_observations[name], model)
+                        if synthesized_profile:
+                            # Merge the synthesized profile with existing data
+                            merged_person = self.merge_person_data(person, synthesized_profile)
+                            merged_person['name'] = name
+                            profiles['persons'].append(merged_person)
+                            continue
+                    except Exception as e:
+                        logging.error(f"Error synthesizing profile for {name}: {str(e)}")
+                
+                # Fall back to existing data if synthesis fails
                 person['name'] = name
                 profiles['persons'].append(person)
         
@@ -594,3 +624,169 @@ class EntityAggregator:
                 profiles['entities'].append(entity)
         
         return profiles 
+
+    async def synthesize_psychological_profile(self, person_name: str, observations: List[Dict[str, Any]], model) -> Dict[str, Any]:
+        """Synthesize a comprehensive psychological profile from observations."""
+        if not observations:
+            return {}
+        
+        # Create the prompt for synthesizing a psychological profile
+        prompt = f"""
+        Synthesize a comprehensive psychological profile for {person_name} based on these observations:
+        
+        Observations:
+        {json.dumps(observations, indent=2)}
+        
+        Instructions:
+        1. Analyze all observations and synthesize a coherent psychological profile
+        2. Only include conclusions that are reasonably supported by the observations
+        3. Indicate confidence levels for different aspects of the profile
+        4. Note any contradictions or inconsistencies in the observations
+        5. Structure the profile according to this template:
+        
+        {PERSON_TEMPLATE}
+        
+        Do not invent details not supported by the observations. If there's insufficient data
+        for any section of the template, include placeholder text indicating "Insufficient data"
+        rather than making up information.
+        """
+        
+        try:
+            # Get response from the model
+            response = await model.ainvoke(prompt)
+            content = response.content
+            
+            # Extract JSON object from the response
+            json_pattern = r'```(?:json)?\s*(.*?)\s*```'
+            json_matches = re.findall(json_pattern, content, re.DOTALL)
+            
+            if json_matches:
+                try:
+                    # Parse the JSON
+                    return json.loads(json_matches[0])
+                except json.JSONDecodeError:
+                    pass
+            
+            # Try to extract JSON from the entire response
+            try:
+                potential_json = self._extract_json_from_text(content)
+                if potential_json:
+                    return json.loads(potential_json)
+            except json.JSONDecodeError:
+                pass
+            
+            logging.error(f"Failed to parse JSON response for psychological profile of {person_name}")
+            return {}
+        except Exception as e:
+            logging.error(f"Error synthesizing psychological profile for {person_name}: {str(e)}")
+            return {}
+            
+    def merge_person_data(self, existing_data: Dict[str, Any], new_profile: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge existing person data with a newly synthesized psychological profile.
+        
+        Args:
+            existing_data: Existing person data
+            new_profile: Newly synthesized psychological profile
+            
+        Returns:
+            Dict containing the merged data
+        """
+        result = deepcopy(existing_data)
+        
+        # If new_profile includes personDetails, ensure it's properly integrated
+        if 'personDetails' in new_profile:
+            for key, value in new_profile['personDetails'].items():
+                if key not in result:
+                    result[key] = value
+                elif isinstance(value, list) and isinstance(result[key], list):
+                    # Merge lists (e.g., personalityTraits)
+                    existing_items = set(str(item) for item in result[key])
+                    for item in value:
+                        if str(item) not in existing_items:
+                            result[key].append(item)
+                            existing_items.add(str(item))
+                elif isinstance(value, dict) and isinstance(result[key], dict):
+                    # Recursively merge nested dicts
+                    result[key] = self._merge_dicts(result[key], value)
+                else:
+                    # For scalar values, prefer new profile if existing is empty/None
+                    if not result[key] and value:
+                        result[key] = value
+            return result
+            
+        # Direct merge for profiles without personDetails wrapper
+        for key, value in new_profile.items():
+            if key == 'name':
+                continue
+                
+            if key not in result:
+                result[key] = value
+            elif isinstance(value, list) and isinstance(result[key], list):
+                # Merge lists
+                existing_items = set(str(item) for item in result[key])
+                for item in value:
+                    if str(item) not in existing_items:
+                        result[key].append(item)
+                        existing_items.add(str(item))
+            elif isinstance(value, dict) and isinstance(result[key], dict):
+                # Recursively merge nested dicts
+                result[key] = self._merge_dicts(result[key], value)
+            else:
+                # For scalar values, prefer new profile if existing is empty/None
+                if not result[key] and value:
+                    result[key] = value
+                    
+        return result
+        
+    def _merge_dicts(self, dict1: Dict[str, Any], dict2: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively merge two dictionaries.
+        
+        Args:
+            dict1: First dictionary
+            dict2: Second dictionary
+            
+        Returns:
+            Dict containing the merged data
+        """
+        result = deepcopy(dict1)
+        for key, value in dict2.items():
+            if key not in result:
+                result[key] = value
+            elif isinstance(value, list) and isinstance(result[key], list):
+                # Merge lists
+                existing_items = set(str(item) for item in result[key])
+                for item in value:
+                    if str(item) not in existing_items:
+                        result[key].append(item)
+                        existing_items.add(str(item))
+            elif isinstance(value, dict) and isinstance(result[key], dict):
+                # Recursively merge nested dicts
+                result[key] = self._merge_dicts(result[key], value)
+            else:
+                # For scalar values, prefer dict2 if dict1 is empty/None
+                if not result[key] and value:
+                    result[key] = value
+        return result
+        
+    def _extract_json_from_text(self, text: str) -> str:
+        """Extract a JSON object from text.
+        
+        Args:
+            text: Text containing a JSON object
+            
+        Returns:
+            String containing the JSON object
+        """
+        # First, try to find JSON within code blocks
+        json_pattern = r'```(?:json)?\s*(.*?)\s*```'
+        json_matches = re.findall(json_pattern, text, re.DOTALL)
+        if json_matches:
+            return json_matches[0]
+            
+        # Next, try to find JSON within curly braces
+        brace_pattern = r'\{.*\}'
+        brace_matches = re.findall(brace_pattern, text, re.DOTALL)
+        if brace_matches:
+            return brace_matches[0]
+            
+        return "" 
