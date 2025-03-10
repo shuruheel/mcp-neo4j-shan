@@ -24,12 +24,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class KnowledgeExtractor:
     """Main class for extracting knowledge from text chunks."""
     
-    def __init__(self, model_name: str = "gpt-4o", temperature: float = 0.0):
+    def __init__(self, model_name: str = "gpt-4o", temperature: float = 0.0, advanced_model_name: str = "gpt-4.5-preview-2025-02-27"):
         """Initialize the knowledge extractor with specified LLM.
         
         Args:
             model_name: Name of the language model to use for general extraction
             temperature: Temperature setting for the language model
+            advanced_model_name: Name of the advanced model for person observations
         """
         # Initialize the primary model for general extraction
         self.model = ChatOpenAI(
@@ -43,7 +44,7 @@ class KnowledgeExtractor:
         # Initialize a more advanced model specifically for person observations
         # This captures psychological, social, and emotional traits better
         self.advanced_model = ChatOpenAI(
-            model_name="gpt-4-turbo",  # Using gpt-4-turbo for more advanced reasoning
+            model_name=advanced_model_name,  # Using the specified advanced model
             temperature=temperature,
             model_kwargs={
                 "response_format": {"type": "json_object"}
@@ -90,9 +91,11 @@ class KnowledgeExtractor:
         
         try:
             # Group 1 extraction: Entities, Attributes, Events, Emotions
+            logging.info("Starting Group 1 extraction: Entities, Attributes, Events, Emotions, Locations")
             group1_result = await self._extract_group1(text)
             
             # Group 2 extraction: Concepts, Propositions, Reasoning Chains, Reasoning Steps
+            logging.info("Starting Group 2 extraction: Concepts, Propositions, Reasoning Chains, Reasoning Steps, etc.")
             group2_result = await self._extract_group2(text)
             
             # Merge group results
@@ -101,6 +104,9 @@ class KnowledgeExtractor:
                 
             for key, items in group2_result.items():
                 result[key] = items
+            
+            # Post-process entities to normalize person names
+            result["entities"] = self._normalize_person_names(result["entities"])
             
             # Extract relationships WITH NODE CONTEXT
             result["relationships"] = await self._extract_relationships_with_context(text, result)
@@ -112,7 +118,7 @@ class KnowledgeExtractor:
             if person_entities:
                 person_names = [e.get("name") for e in person_entities if e.get("name")]
                 if person_names:
-                    logging.info(f"Starting extraction of observations for {len(person_names)} persons using advanced model (gpt-4-turbo)")
+                    logging.info(f"Starting extraction of observations for {len(person_names)} persons using advanced model (gpt-4.5-preview-2025-02-27)")
                     person_observations = await self._extract_person_observations(text, person_names)
                     
                     # Store person observations in the result
@@ -166,6 +172,11 @@ class KnowledgeExtractor:
         5. Locations (physical places, areas, regions)
         
         For each type, use the corresponding JSON template.
+        
+        IMPORTANT INSTRUCTION FOR PERSON ENTITIES:
+        When extracting people, ALWAYS use their full name (first and last name) if available in the text.
+        Never use only last names like "Adenauer" - always use complete names like "Konrad Adenauer".
+        If the text only mentions a last name but you know or can infer the full name, use the complete name.
         
         Text:
         {text}
@@ -346,7 +357,7 @@ class KnowledgeExtractor:
     async def _extract_person_observations(self, text: str, person_names: List[str]) -> Dict[str, List[Dict[str, Any]]]:
         """Extract psychological observations for person entities from text.
         
-        Uses the advanced model (gpt-4-turbo) for better psychological, social and 
+        Uses the advanced model for better psychological, social and 
         emotional trait detection.
         
         Args:
@@ -359,6 +370,9 @@ class KnowledgeExtractor:
         try:
             # Get the person extractor but use our advanced model for the extraction
             person_extractor = EntityExtractor(self.advanced_model)
+            
+            # Log which model we're using
+            logging.info(f"Using advanced model ({self.advanced_model.model_name}) for person observations extraction")
             
             # Use the entity extractor's method but with our advanced model
             result = await person_extractor.extract_person_observations(text, person_names)
@@ -739,7 +753,64 @@ class KnowledgeExtractor:
             logging.error(f"Error during relationship extraction: {str(e)}")
             return []
 
-async def process_chunks(chunks, batch_size=5, checkpoint_frequency=5, model_name="gpt-4o", temperature=0.0, advanced_model_name="gpt-4-turbo"):
+    def _normalize_person_names(self, entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Normalize person entity names to ensure full names are used consistently.
+        
+        This helps with cases where the same person appears as both "Last Name" and "First Last".
+        
+        Args:
+            entities: List of entity dictionaries
+            
+        Returns:
+            List of normalized entity dictionaries
+        """
+        # First, build a map of last names to full names
+        last_name_to_full_name = {}
+        
+        # Find all Person entities with full names
+        for entity in entities:
+            if entity.get("subType") == "Person":
+                name = entity.get("name", "")
+                name_parts = name.split()
+                
+                # If it has at least two parts (first name and last name)
+                if len(name_parts) >= 2:
+                    # Add the last name -> full name mapping
+                    last_name = name_parts[-1]
+                    last_name_to_full_name[last_name] = name
+        
+        # Now normalize entities with just last names
+        normalized_entities = []
+        for entity in entities:
+            # Process only Person entities
+            if entity.get("subType") == "Person":
+                name = entity.get("name", "")
+                name_parts = name.split()
+                
+                # If it's just a single word name (likely just last name)
+                if len(name_parts) == 1 and name_parts[0] in last_name_to_full_name:
+                    # Update to full name
+                    full_name = last_name_to_full_name[name_parts[0]]
+                    
+                    # Log the normalization
+                    logging.info(f"Normalizing Person entity: {name} -> {full_name}")
+                    
+                    # Add a note about the normalization
+                    if "observations" not in entity or not isinstance(entity["observations"], list):
+                        entity["observations"] = []
+                    entity["observations"].append(f"Originally referred to as '{name}' in the text")
+                    
+                    # Update the name
+                    entity["name"] = full_name
+                    
+                normalized_entities.append(entity)
+            else:
+                # Keep non-Person entities as is
+                normalized_entities.append(entity)
+        
+        return normalized_entities
+
+async def process_chunks(chunks, batch_size=5, checkpoint_frequency=5, model_name="gpt-4o", temperature=0.0, advanced_model_name="gpt-4.5-preview-2025-02-27"):
     """Process text chunks in batches with checkpointing.
     
     Args:
@@ -758,7 +829,7 @@ async def process_chunks(chunks, batch_size=5, checkpoint_frequency=5, model_nam
     logging.info(f"  - Advanced model for psychological observations: {advanced_model_name}")
     logging.info("Using optimized group-based extraction approach")
     
-    extractor = KnowledgeExtractor(model_name=model_name, temperature=temperature)
+    extractor = KnowledgeExtractor(model_name=model_name, temperature=temperature, advanced_model_name=advanced_model_name)
     results = []
     total_chunks = len(chunks)
     

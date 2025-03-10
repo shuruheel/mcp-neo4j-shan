@@ -34,10 +34,13 @@ class EntityExtractor(BaseExtractor):
         1. Identify all significant entities in the text.
         2. For each entity, fill out the JSON template with all available information.
         3. Specify the entity name and subType (Person, Organization, Location, Artifact, Animal, Concept).
-        4. Include factual observations about the entity.
-        5. Provide a description and, if applicable, biographical information.
-        6. Note any key contributions or significance.
-        7. Return a list of entity objects in JSON format.
+        4. IMPORTANT: For Person entities, ALWAYS use the full name (first and last name) if available in the text.
+           Never use only last names like "Einstein" - always use "Albert Einstein". If only the last name is 
+           available, make a note of this in the observations.
+        5. Include factual observations about the entity.
+        6. Provide a description and, if applicable, biographical information.
+        7. Note any key contributions or significance.
+        8. Return a list of entity objects in JSON format.
         
         Return your response as a list of JSON objects, each following the template format.
         """

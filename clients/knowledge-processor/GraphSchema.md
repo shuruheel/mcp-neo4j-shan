@@ -216,37 +216,6 @@ Nodes representing emotional states and feelings.
 - `subcategory` (string, optional): More specific emotion category
 - `description` (string, optional): Description of the emotional experience
 
-### Agent
-
-Nodes representing cognitive entities capable of action or belief.
-
-**Core Attributes:**
-- `name` (string, required): Unique identifier for the agent
-- `nodeType` (string, required): Always "Agent"
-- `agentType` (string, required): Type of agent ("human", "ai", "organization", "other")
-- `description` (string, optional): Description of the agent
-- `capabilities` (string[], required): What the agent can do
-
-**AI-Specific Attributes (when agentType is "ai"):**
-- `modelName` (string, required): Name/version of AI model (e.g., GPT-4-turbo)
-- `provider` (string, optional): Organization providing the AI model (e.g., OpenAI, Anthropic)
-- `apiEndpoint` (string, optional): Endpoint for interaction with the agent
-- `trainingData` (string[], optional): Data or sources used for training
-- `operationalConstraints` (string[], optional): Operational limits and constraints
-- `performanceMetrics` (object, optional):
-  - `accuracy` (number, optional): Model accuracy (0.0-1.0)
-  - `precision` (number, optional): Precision metric (0.0-1.0)
-- `version` (string, optional): Version of the AI agent
-- `operationalStatus` (string, optional): Current status ("active", "deprecated", "experimental")
-- `ownership` (string, optional): Responsible entity or individual
-- `interactionHistory` (string[], optional): Links to related Thoughts, Events, or Propositions
-
-**General Agent Attributes:**
-- `beliefs` (string[], optional): References to proposition nodes this agent believes
-- `knowledge` (string[], optional): References to knowledge nodes this agent knows
-- `preferences` (string[], optional): Agent's preferences
-- `emotionalState` (string, optional): Reference to current emotional state
-
 ### Thought
 
 Nodes representing subjective analyses, interpretations, reflections, opinions, or perspectives about other nodes in the graph. Unlike Propositions, Thoughts are inherently subjective and represent a viewpoint or interpretation rather than an objectively verifiable fact.

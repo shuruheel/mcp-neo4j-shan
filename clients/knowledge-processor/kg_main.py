@@ -88,10 +88,7 @@ async def main():
             # Get model parameters from environment variables or use defaults
             extraction_model = os.getenv("EXTRACTION_MODEL", "gpt-4o")
             extraction_temperature = float(os.getenv("EXTRACTION_TEMPERATURE", "0.0"))
-            advanced_extraction_model = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4-turbo")
-            logging.info(f"Using tiered extraction approach:")
-            logging.info(f"  - Primary model: {extraction_model}")
-            logging.info(f"  - Advanced model for person observations: {advanced_extraction_model}")
+            advanced_extraction_model = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4.5-preview-2025-02-27")
             
             # Process chunks and extract knowledge
             extracted_data = await process_chunks(
@@ -148,7 +145,7 @@ async def main():
         
         # Generate comprehensive profiles
         # Use the advanced model for profile generation to capture psychological nuances better
-        advanced_model_name = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4-turbo")
+        advanced_model_name = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4.5-preview-2025-02-27")
         logging.info(f"Using advanced model ({advanced_model_name}) for comprehensive profile generation")
         comprehensive_model = ChatOpenAI(model_name=advanced_model_name, temperature=0.2)
         comprehensive_profiles = await aggregator.generate_comprehensive_profiles(comprehensive_model)
