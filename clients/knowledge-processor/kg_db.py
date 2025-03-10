@@ -936,18 +936,6 @@ def add_relationship_to_neo4j(tx, relationship_data):
     
     properties['relationshipCategory'] = rel_category
     
-    # Create source and target nodes if they don't exist
-    create_source_query = f"""
-    MERGE (s:{source_type} {{name: $source_name}})
-    """
-    
-    create_target_query = f"""
-    MERGE (t:{target_type} {{name: $target_name}})
-    """
-    
-    tx.run(create_source_query, source_name=source_name)
-    tx.run(create_target_query, target_name=target_name)
-    
     # Build property string for relationship
     property_clauses = []
     for key, value in properties.items():
