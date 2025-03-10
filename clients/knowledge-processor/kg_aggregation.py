@@ -810,6 +810,19 @@ class EntityAggregator:
                     step['formalNotation'] = ""
                 if 'propositions' not in step:
                     step['propositions'] = []
+                
+                # Make sure the step has a chainName property that matches the 'chain' property
+                if 'chain' in step and step['chain']:
+                    step['chainName'] = step['chain']
+                elif 'chainName' not in step:
+                    # If there's no chain reference, we should try to find one
+                    # Look through reasoning chains to see if this step is part of any chain
+                    for chain_name, chain in self.reasoning_chains.items():
+                        if 'steps' in chain and name in chain.get('steps', []):
+                            step['chain'] = chain_name
+                            step['chainName'] = chain_name
+                            logging.info(f"Found chain {chain_name} for step {name}")
+                            break
                     
                 profiles['reasoningSteps'].append(step)
         
