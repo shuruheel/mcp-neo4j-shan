@@ -6,7 +6,7 @@ import logging
 from typing import Dict, List, Any, Optional
 from abc import ABC, abstractmethod
 from langchain_openai import ChatOpenAI
-from ..kg_schema import EXTRACTION_PROMPT_TEMPLATE
+from kg_schema import EXTRACTION_PROMPT_TEMPLATE
 
 class BaseExtractor(ABC):
     """Base class for all knowledge element extractors."""

@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any
 from ..base_extractor import BaseExtractor
-from ...kg_schema import EVENT_TEMPLATE
+from kg_schema import EVENT_TEMPLATE
 
 class EventExtractor(BaseExtractor):
     """Extractor for Event nodes."""

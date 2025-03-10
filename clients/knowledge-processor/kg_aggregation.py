@@ -7,7 +7,7 @@ from kg_utils import standardize_entity
 import json
 from typing import List, Dict, Any
 from copy import deepcopy
-from .kg_schema import PERSON_TEMPLATE
+from kg_schema import PERSON_TEMPLATE
 
 class EntityAggregator:
     """Aggregates entity information from extraction results"""

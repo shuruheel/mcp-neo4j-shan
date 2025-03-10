@@ -4,7 +4,7 @@ from typing import Dict, List, Any, Optional
 import json
 import re
 from ..base_extractor import BaseExtractor
-from ...kg_schema import LOCATION_TEMPLATE
+from kg_schema import LOCATION_TEMPLATE
 
 class LocationExtractor(BaseExtractor):
     """Extractor for Location nodes."""

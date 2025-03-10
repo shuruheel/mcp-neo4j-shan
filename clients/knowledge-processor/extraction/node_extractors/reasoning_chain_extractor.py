@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any, Optional
 from ..base_extractor import BaseExtractor
-from ...kg_schema import REASONING_CHAIN_TEMPLATE
+from kg_schema import REASONING_CHAIN_TEMPLATE
 
 class ReasoningChainExtractor(BaseExtractor):
     """Extractor for ReasoningChain nodes."""

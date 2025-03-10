@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any
 from ..base_extractor import BaseExtractor
-from ...kg_schema import AGENT_TEMPLATE
+from kg_schema import AGENT_TEMPLATE
 
 class AgentExtractor(BaseExtractor):
     """Extractor for Agent nodes."""

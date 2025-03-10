@@ -5,7 +5,7 @@ import re
 import logging
 from typing import Dict, List, Any, Optional
 from langchain_openai import ChatOpenAI
-from ..kg_schema import RELATIONSHIP_TYPES, RELATIONSHIP_CATEGORIES
+from kg_schema import RELATIONSHIP_TYPES, RELATIONSHIP_CATEGORIES
 
 class RelationshipExtractor:
     """Extractor for relationships between knowledge graph nodes."""
@@ -17,6 +17,33 @@ class RelationshipExtractor:
             model: The language model to use for extraction
         """
         self.model = model
+    
+    def _get_template(self) -> str:
+        """Return the template for relationship extraction.
+        
+        Returns:
+            str: JSON template for relationships that aligns with kg_db.py
+        """
+        return """
+        ```json
+        {
+            "source": {
+                "name": "SourceNodeName",
+                "type": "SourceNodeType"
+            },
+            "target": {
+                "name": "TargetNodeName",
+                "type": "TargetNodeType"
+            },
+            "type": "RELATIONSHIP_TYPE",
+            "properties": {
+                "confidenceScore": 0.9,
+                "notes": "Additional information about the relationship",
+                "source": "Context where this relationship was found"
+            }
+        }
+        ```
+        """
     
     async def extract(self, text: str) -> List[Dict[str, Any]]:
         """Extract relationships from text.
@@ -66,25 +93,33 @@ class RelationshipExtractor:
         Instructions:
         1. Identify all meaningful relationships in the text.
         2. For each relationship, specify:
-           - fromNode: The source entity/concept/event name
-           - relationshipType: One of the valid relationship types
-           - toNode: The target entity/concept/event name
-           - context: A brief explanation of the relationship
-           - confidenceScore: A number between 0.0 and 1.0 indicating confidence
-           - relationshipCategory: One of the relationship categories
+           - source: An object with "name" (entity/concept/event name) and "type" (Entity/Concept/Event)
+           - target: An object with "name" (entity/concept/event name) and "type" (Entity/Concept/Event)
+           - type: One of the valid relationship types
+           - properties: An object containing:
+             - confidenceScore: A number between 0.0 and 1.0 indicating confidence
+             - context: A brief explanation of the relationship
+             - relationshipCategory: One of the relationship categories (optional)
         3. Return a list of relationships in JSON format.
         
         Response format:
         ```json
         [
           {{
-            "fromNode": "Entity/Concept/Event Name",
-            "relationshipType": "RELATIONSHIP_TYPE",
-            "toNode": "Entity/Concept/Event Name",
-            "context": "Explanatory context for the relationship",
-            "confidenceScore": 0.8,
-            "weight": 0.75,
-            "relationshipCategory": "category"
+            "source": {{
+                "name": "SourceNodeName",
+                "type": "SourceNodeType"
+            }},
+            "target": {{
+                "name": "TargetNodeName",
+                "type": "TargetNodeType"
+            }},
+            "type": "RELATIONSHIP_TYPE",
+            "properties": {{
+                "confidenceScore": 0.8,
+                "context": "Explanatory context for the relationship",
+                "relationshipCategory": "category"
+            }}
           }},
           ...
         ]
@@ -154,11 +189,18 @@ class RelationshipExtractor:
         Returns:
             bool: True if the relationship is valid
         """
-        required_fields = ["fromNode", "relationshipType", "toNode"]
-        return all(field in relationship for field in required_fields)
+        # Check for modern format (source/target/type)
+        if all(field in relationship for field in ["source", "target", "type"]):
+            return True
+            
+        # Check for legacy format (fromNode/toNode/relationshipType)
+        if all(field in relationship for field in ["fromNode", "toNode", "relationshipType"]):
+            return True
+            
+        return False
     
     def _normalize_relationship(self, relationship: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize a relationship by ensuring all fields are present.
+        """Normalize a relationship by ensuring all fields are present in the modern format.
         
         Args:
             relationship: The relationship to normalize
@@ -167,23 +209,76 @@ class RelationshipExtractor:
             Dict[str, Any]: The normalized relationship
         """
         # Create a normalized relationship with default values
-        normalized = {
-            "fromNode": relationship.get("fromNode", ""),
-            "relationshipType": relationship.get("relationshipType", "RELATED_TO"),
-            "toNode": relationship.get("toNode", ""),
-            "context": relationship.get("context", ""),
-            "confidenceScore": relationship.get("confidenceScore", 0.5),
-            "weight": relationship.get("weight", 0.5),
-            "relationshipCategory": relationship.get("relationshipCategory", "associative")
-        }
+        normalized = {}
+        
+        # Handle legacy format conversion to modern format
+        if "fromNode" in relationship and "toNode" in relationship:
+            # Convert from legacy format
+            source_name = relationship.get("fromNode", "")
+            target_name = relationship.get("toNode", "")
+            rel_type = relationship.get("relationshipType", "RELATED_TO")
+            
+            # Map to modern format
+            normalized["source"] = {"name": source_name, "type": "Entity"}
+            normalized["target"] = {"name": target_name, "type": "Entity"}
+            normalized["type"] = rel_type
+            
+            # Create properties object
+            normalized["properties"] = {
+                "confidenceScore": relationship.get("confidenceScore", 0.5),
+                "context": relationship.get("context", ""),
+                "relationshipCategory": relationship.get("relationshipCategory", "associative")
+            }
+            
+            # Add weight if present
+            if "weight" in relationship:
+                normalized["properties"]["weight"] = relationship.get("weight")
+                
+        else:
+            # Already in modern format, ensure fields are complete
+            normalized["source"] = relationship.get("source", {"name": "", "type": "Entity"})
+            normalized["target"] = relationship.get("target", {"name": "", "type": "Entity"})
+            normalized["type"] = relationship.get("type", "RELATED_TO")
+            
+            # Convert string values to objects if needed
+            if not isinstance(normalized["source"], dict):
+                normalized["source"] = {"name": str(normalized["source"]), "type": "Entity"}
+            if not isinstance(normalized["target"], dict):
+                normalized["target"] = {"name": str(normalized["target"]), "type": "Entity"}
+                
+            # Ensure source and target have name and type
+            if "name" not in normalized["source"]:
+                normalized["source"]["name"] = ""
+            if "type" not in normalized["source"]:
+                normalized["source"]["type"] = "Entity"
+            if "name" not in normalized["target"]:
+                normalized["target"]["name"] = ""
+            if "type" not in normalized["target"]:
+                normalized["target"]["type"] = "Entity"
+                
+            # Create or normalize properties
+            if "properties" not in normalized:
+                normalized["properties"] = {}
+                
+            props = normalized["properties"]
+            props["confidenceScore"] = props.get("confidenceScore", 0.5)
+            props["context"] = props.get("context", "")
+            
+            # Move legacy attributes into properties if present
+            if "context" in relationship and "context" not in props:
+                props["context"] = relationship.get("context")
+            if "confidenceScore" in relationship and "confidenceScore" not in props:
+                props["confidenceScore"] = relationship.get("confidenceScore")
+            if "relationshipCategory" in relationship and "relationshipCategory" not in props:
+                props["relationshipCategory"] = relationship.get("relationshipCategory")
         
         # Ensure relationship type is valid
-        if normalized["relationshipType"] not in RELATIONSHIP_TYPES:
-            normalized["relationshipType"] = "RELATED_TO"
+        if normalized["type"] not in RELATIONSHIP_TYPES:
+            normalized["type"] = "RELATED_TO"
         
         # Ensure relationship category is valid
-        if normalized["relationshipCategory"] not in RELATIONSHIP_CATEGORIES:
-            normalized["relationshipCategory"] = "lateral"
+        if "relationshipCategory" in normalized["properties"] and normalized["properties"]["relationshipCategory"] not in RELATIONSHIP_CATEGORIES:
+            normalized["properties"]["relationshipCategory"] = "associative"
         
         return normalized
     

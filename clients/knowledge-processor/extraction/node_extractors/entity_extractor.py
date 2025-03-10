@@ -5,7 +5,7 @@ import re
 import logging
 from typing import Dict, List, Any, Optional
 from ..base_extractor import BaseExtractor
-from ...kg_schema import ENTITY_TEMPLATE, PERSON_TEMPLATE
+from kg_schema import ENTITY_TEMPLATE, PERSON_TEMPLATE
 
 class EntityExtractor(BaseExtractor):
     """Extractor for Entity nodes."""
