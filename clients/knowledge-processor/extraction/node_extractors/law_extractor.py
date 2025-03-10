@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any, Optional
 from ..base_extractor import BaseExtractor
-from ...kg_schema import LAW_TEMPLATE
+from kg_schema import LAW_TEMPLATE
 
 class LawExtractor(BaseExtractor):
     """Extractor for Law nodes."""

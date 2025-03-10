@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any, Optional
 from ..base_extractor import BaseExtractor
-from ...kg_schema import SCIENTIFIC_INSIGHT_TEMPLATE
+from kg_schema import SCIENTIFIC_INSIGHT_TEMPLATE
 
 class ScientificInsightExtractor(BaseExtractor):
     """Extractor for ScientificInsight nodes."""

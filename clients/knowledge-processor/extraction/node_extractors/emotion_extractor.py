@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any
 from ..base_extractor import BaseExtractor
-from ...kg_schema import EMOTION_TEMPLATE
+from kg_schema import EMOTION_TEMPLATE
 
 class EmotionExtractor(BaseExtractor):
     """Extractor for Emotion nodes."""

@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any
 from ..base_extractor import BaseExtractor
-from ...kg_schema import THOUGHT_TEMPLATE
+from kg_schema import THOUGHT_TEMPLATE
 
 class ThoughtExtractor(BaseExtractor):
     """Extractor for Thought nodes."""

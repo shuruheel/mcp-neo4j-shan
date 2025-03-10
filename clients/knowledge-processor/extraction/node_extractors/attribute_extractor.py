@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any
 from ..base_extractor import BaseExtractor
-from ...kg_schema import ATTRIBUTE_TEMPLATE
+from kg_schema import ATTRIBUTE_TEMPLATE
 
 class AttributeExtractor(BaseExtractor):
     """Extractor for Attribute nodes."""

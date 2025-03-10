@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any
 from ..base_extractor import BaseExtractor
-from ...kg_schema import PROPOSITION_TEMPLATE
+from kg_schema import PROPOSITION_TEMPLATE
 
 class PropositionExtractor(BaseExtractor):
     """Extractor for Proposition nodes."""

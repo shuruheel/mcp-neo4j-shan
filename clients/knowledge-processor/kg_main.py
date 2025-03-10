@@ -88,10 +88,7 @@ async def main():
             # Get model parameters from environment variables or use defaults
             extraction_model = os.getenv("EXTRACTION_MODEL", "gpt-4o")
             extraction_temperature = float(os.getenv("EXTRACTION_TEMPERATURE", "0.0"))
-            advanced_extraction_model = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4-turbo")
-            logging.info(f"Using tiered extraction approach:")
-            logging.info(f"  - Primary model: {extraction_model}")
-            logging.info(f"  - Advanced model for person observations: {advanced_extraction_model}")
+            advanced_extraction_model = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4.5-preview-2025-02-27")
             
             # Process chunks and extract knowledge
             extracted_data = await process_chunks(
@@ -148,7 +145,7 @@ async def main():
         
         # Generate comprehensive profiles
         # Use the advanced model for profile generation to capture psychological nuances better
-        advanced_model_name = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4-turbo")
+        advanced_model_name = os.getenv("ADVANCED_EXTRACTION_MODEL", "gpt-4.5-preview-2025-02-27")
         logging.info(f"Using advanced model ({advanced_model_name}) for comprehensive profile generation")
         comprehensive_model = ChatOpenAI(model_name=advanced_model_name, temperature=0.2)
         comprehensive_profiles = await aggregator.generate_comprehensive_profiles(comprehensive_model)
@@ -281,16 +278,27 @@ async def main():
             if relationship_count > 0:
                 for data in extracted_data[:2]:  # Just check first two data items
                     for rel in data.get('relationships', [])[:3]:  # Log up to 3 relationships
-                        logging.info(f"Sample relationship: {rel}")
+                        logging.info(f"Sample relationship: {json.dumps(rel, indent=2)}")
             else:
                 logging.warning("No relationships found in extracted data. Check the extraction prompt and output.")
 
             # Track relationship processing success
             successful_relationships = 0
-
-            # Store relationships after all entities exist
-            for data in tqdm(extracted_data, desc="Storing relationships"):
+            failed_relationships = 0
+            
+            # Log the unique types of relationships found
+            relationship_types = set()
+            for data in extracted_data:
                 for rel in data.get('relationships', []):
+                    if isinstance(rel, dict) and 'type' in rel:
+                        relationship_types.add(rel['type'])
+            
+            if relationship_types:
+                logging.info(f"Found these relationship types: {', '.join(sorted(relationship_types))}")
+            
+            # Store relationships after all entities exist
+            for data_idx, data in enumerate(tqdm(extracted_data, desc="Storing relationships")):
+                for rel_idx, rel in enumerate(data.get('relationships', [])):
                     try:
                         if isinstance(rel, str):
                             # Parse relationship format: [Entity1] --RELATIONSHIP_TYPE--> [Entity2]
@@ -319,7 +327,8 @@ async def main():
                                     lambda tx: add_relationship_to_neo4j(tx, rel_data)
                                 )
                                 successful_relationships += 1
-                                logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
+                                if successful_relationships % 10 == 0:  # Log every 10th relationship
+                                    logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
                             
                             # Try alternate format: SourceEntity(Type) -> [RELATIONSHIP_TYPE] TargetEntity(Type)
                             else:
@@ -360,41 +369,91 @@ async def main():
                                         lambda tx: add_relationship_to_neo4j(tx, rel_data)
                                     )
                                     successful_relationships += 1
-                                    logging.info(f"Added relationship: {source_name} --{rel_type}--> {target_name}")
+                                    if successful_relationships % 10 == 0:  # Log every 10th relationship
+                                        logging.info(f"Added relationship: {source_name} --{rel_type}--> {target_name}")
+                                else:
+                                    logging.warning(f"Could not parse relationship string: {rel}")
+                                    failed_relationships += 1
                                     
                         elif isinstance(rel, dict) and 'source' in rel and 'target' in rel and 'type' in rel:
                             # Handle dictionary format relationship
-                            source = rel['source']['name'] if isinstance(rel['source'], dict) else rel['source']
-                            target = rel['target']['name'] if isinstance(rel['target'], dict) else rel['target']
+                            # Validate source and target
+                            if not isinstance(rel['source'], dict) or 'name' not in rel['source']:
+                                logging.warning(f"Invalid source in relationship at index {data_idx}:{rel_idx}: {rel.get('source')}")
+                                failed_relationships += 1
+                                continue
+                                
+                            if not isinstance(rel['target'], dict) or 'name' not in rel['target']:
+                                logging.warning(f"Invalid target in relationship at index {data_idx}:{rel_idx}: {rel.get('target')}")
+                                failed_relationships += 1
+                                continue
+                                
+                            source = rel['source']['name']
+                            target = rel['target']['name']
                             rel_type = rel['type']
+                            
+                            # Skip if source or target is empty
+                            if not source or not target:
+                                logging.warning(f"Empty source or target in relationship: {source} -> {target}")
+                                failed_relationships += 1
+                                continue
                             
                             # Extract properties if available
                             rel_props = rel.get('properties', {})
+                            if not isinstance(rel_props, dict):
+                                logging.warning(f"Properties is not a dict: {rel_props}, setting to empty dict")
+                                rel_props = {}
+                                
                             if 'confidenceScore' not in rel_props:
                                 rel_props['confidenceScore'] = 0.8
                             
                             # Create relationship data structure
                             rel_data = {
-                                'source': {'name': source, 'type': rel.get('source', {}).get('type', 'Entity') if isinstance(rel.get('source'), dict) else 'Entity'},
-                                'target': {'name': target, 'type': rel.get('target', {}).get('type', 'Entity') if isinstance(rel.get('target'), dict) else 'Entity'},
+                                'source': {
+                                    'name': source, 
+                                    'type': rel['source'].get('type', 'Entity')
+                                },
+                                'target': {
+                                    'name': target, 
+                                    'type': rel['target'].get('type', 'Entity')
+                                },
                                 'type': rel_type,
                                 'properties': rel_props
                             }
                             
-                            # Add relationship
-                            session.execute_write(
-                                lambda tx: add_relationship_to_neo4j(tx, rel_data)
-                            )
-                            successful_relationships += 1
-                            logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
+                            try:
+                                # Add relationship
+                                session.execute_write(
+                                    lambda tx: add_relationship_to_neo4j(tx, rel_data)
+                                )
+                                successful_relationships += 1
+                                if successful_relationships % 10 == 0:  # Log every 10th relationship
+                                    logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
+                            except Exception as e:
+                                logging.error(f"Neo4j error adding relationship {source} --{rel_type}--> {target}: {str(e)}")
+                                failed_relationships += 1
+                        else:
+                            logging.warning(f"Invalid relationship format at index {data_idx}:{rel_idx}: {rel}")
+                            failed_relationships += 1
                     except Exception as e:
                         rel_description = rel.get('description', 'unknown') if isinstance(rel, dict) else rel
                         logging.error(f"Error storing relationship {rel_description}: {str(e)}")
+                        logging.error(f"Relationship data: {json.dumps(rel)[:500]}")
+                        failed_relationships += 1
             
             # Log relationship processing summary
             logging.info(f"Successfully stored {successful_relationships} relationships out of {relationship_count} found")
+            logging.info(f"Failed to store {failed_relationships} relationships")
             if successful_relationships == 0 and relationship_count > 0:
                 logging.warning("No relationships were successfully stored. Check formats and database constraints.")
+                # Dump a sample of relationships that failed to help debugging
+                sample_count = 0
+                for data in extracted_data:
+                    for rel in data.get('relationships', [])[:5]:  # Look at up to 5 per chunk
+                        if sample_count >= 10:  # Maximum 10 samples
+                            break
+                        logging.warning(f"Sample failed relationship: {json.dumps(rel, indent=2)}")
+                        sample_count += 1
             
             # Store comprehensive person profiles
             if comprehensive_profiles.get('persons'):

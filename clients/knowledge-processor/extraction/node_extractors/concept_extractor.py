@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any
 from ..base_extractor import BaseExtractor
-from ...kg_schema import CONCEPT_TEMPLATE
+from kg_schema import CONCEPT_TEMPLATE
 
 class ConceptExtractor(BaseExtractor):
     """Extractor for Concept nodes."""
