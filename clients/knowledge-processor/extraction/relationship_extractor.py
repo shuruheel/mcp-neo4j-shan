@@ -189,15 +189,8 @@ class RelationshipExtractor:
         Returns:
             bool: True if the relationship is valid
         """
-        # Check for modern format (source/target/type)
-        if all(field in relationship for field in ["source", "target", "type"]):
-            return True
-            
-        # Check for legacy format (fromNode/toNode/relationshipType)
-        if all(field in relationship for field in ["fromNode", "toNode", "relationshipType"]):
-            return True
-            
-        return False
+        # Check for required fields in modern format
+        return all(field in relationship for field in ["source", "target", "type"])
     
     def _normalize_relationship(self, relationship: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize a relationship by ensuring all fields are present in the modern format.
@@ -211,66 +204,34 @@ class RelationshipExtractor:
         # Create a normalized relationship with default values
         normalized = {}
         
-        # Handle legacy format conversion to modern format
-        if "fromNode" in relationship and "toNode" in relationship:
-            # Convert from legacy format
-            source_name = relationship.get("fromNode", "")
-            target_name = relationship.get("toNode", "")
-            rel_type = relationship.get("relationshipType", "RELATED_TO")
+        # Ensure fields are complete in modern format
+        normalized["source"] = relationship.get("source", {"name": "", "type": "Entity"})
+        normalized["target"] = relationship.get("target", {"name": "", "type": "Entity"})
+        normalized["type"] = relationship.get("type", "RELATED_TO")
+        
+        # Convert string values to objects if needed
+        if not isinstance(normalized["source"], dict):
+            normalized["source"] = {"name": str(normalized["source"]), "type": "Entity"}
+        if not isinstance(normalized["target"], dict):
+            normalized["target"] = {"name": str(normalized["target"]), "type": "Entity"}
             
-            # Map to modern format
-            normalized["source"] = {"name": source_name, "type": "Entity"}
-            normalized["target"] = {"name": target_name, "type": "Entity"}
-            normalized["type"] = rel_type
+        # Ensure source and target have name and type
+        if "name" not in normalized["source"]:
+            normalized["source"]["name"] = ""
+        if "type" not in normalized["source"]:
+            normalized["source"]["type"] = "Entity"
+        if "name" not in normalized["target"]:
+            normalized["target"]["name"] = ""
+        if "type" not in normalized["target"]:
+            normalized["target"]["type"] = "Entity"
             
-            # Create properties object
-            normalized["properties"] = {
-                "confidenceScore": relationship.get("confidenceScore", 0.5),
-                "context": relationship.get("context", ""),
-                "relationshipCategory": relationship.get("relationshipCategory", "associative")
-            }
+        # Create or normalize properties
+        if "properties" not in normalized:
+            normalized["properties"] = {}
             
-            # Add weight if present
-            if "weight" in relationship:
-                normalized["properties"]["weight"] = relationship.get("weight")
-                
-        else:
-            # Already in modern format, ensure fields are complete
-            normalized["source"] = relationship.get("source", {"name": "", "type": "Entity"})
-            normalized["target"] = relationship.get("target", {"name": "", "type": "Entity"})
-            normalized["type"] = relationship.get("type", "RELATED_TO")
-            
-            # Convert string values to objects if needed
-            if not isinstance(normalized["source"], dict):
-                normalized["source"] = {"name": str(normalized["source"]), "type": "Entity"}
-            if not isinstance(normalized["target"], dict):
-                normalized["target"] = {"name": str(normalized["target"]), "type": "Entity"}
-                
-            # Ensure source and target have name and type
-            if "name" not in normalized["source"]:
-                normalized["source"]["name"] = ""
-            if "type" not in normalized["source"]:
-                normalized["source"]["type"] = "Entity"
-            if "name" not in normalized["target"]:
-                normalized["target"]["name"] = ""
-            if "type" not in normalized["target"]:
-                normalized["target"]["type"] = "Entity"
-                
-            # Create or normalize properties
-            if "properties" not in normalized:
-                normalized["properties"] = {}
-                
-            props = normalized["properties"]
-            props["confidenceScore"] = props.get("confidenceScore", 0.5)
-            props["context"] = props.get("context", "")
-            
-            # Move legacy attributes into properties if present
-            if "context" in relationship and "context" not in props:
-                props["context"] = relationship.get("context")
-            if "confidenceScore" in relationship and "confidenceScore" not in props:
-                props["confidenceScore"] = relationship.get("confidenceScore")
-            if "relationshipCategory" in relationship and "relationshipCategory" not in props:
-                props["relationshipCategory"] = relationship.get("relationshipCategory")
+        props = normalized["properties"]
+        props["confidenceScore"] = props.get("confidenceScore", 0.5)
+        props["context"] = props.get("context", "")
         
         # Ensure relationship type is valid
         if normalized["type"] not in RELATIONSHIP_TYPES:
