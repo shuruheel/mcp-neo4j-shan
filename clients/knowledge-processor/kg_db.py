@@ -872,11 +872,11 @@ def add_relationship_to_neo4j(tx, relationship_data):
     # Extract source, target, and relationship type
     source_data = relationship_data.get('source', {})
     target_data = relationship_data.get('target', {})
-    rel_type = relationship_data.get('type', 'RELATED_TO')
+    rel_type = relationship_data.get('type')
     
     # Skip if missing critical data
-    if not source_data or not target_data:
-        logging.warning(f"Incomplete relationship data: {relationship_data}")
+    if not source_data or not target_data or not rel_type:
+        logging.warning(f"Incomplete relationship data (missing source, target, or relationship type): {relationship_data}")
         return False
     
     source_name = source_data.get('name', '')
@@ -913,9 +913,9 @@ def add_relationship_to_neo4j(tx, relationship_data):
     source_type_normalized = LABEL_CASE_MAP.get(source_type.lower(), source_type)
     target_type_normalized = LABEL_CASE_MAP.get(target_type.lower(), target_type)
     
-    # Validate relationship type against schema
+    # Log non-standard relationship types but still allow them
     if rel_type not in RELATIONSHIP_TYPES:
-        logging.warning(f"Non-standard relationship type: {rel_type}, will create it anyway")
+        logging.info(f"Creating non-standard relationship type: {rel_type} between {source_name} and {target_name}")
     
     # Extract properties
     properties = relationship_data.get('properties', {})

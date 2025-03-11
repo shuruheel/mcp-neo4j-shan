@@ -588,248 +588,235 @@ class EntityAggregator:
         
         logging.info(f"Completed generation of {person_count} psychological profiles")
         
-        # Process locations with multiple mentions
+        # Process all locations regardless of mention count
         for name, location in self.locations.items():
-            if location.get('mentions', 0) > 1:  # Only process locations with multiple mentions
-                location['name'] = name
-                profiles['locations'].append(location)
+            location['name'] = name
+            profiles['locations'].append(location)
         
-        # Process important concepts
+        # Process all concepts regardless of mention count
         for name, concept in self.concepts.items():
-            if concept.get('mentions', 0) > 1:  # Only process concepts with multiple mentions
-                concept['name'] = name
-                profiles['concepts'].append(concept)
+            concept['name'] = name
+            profiles['concepts'].append(concept)
         
-        # Process important events
+        # Process all events regardless of mention count
         for name, event in self.events.items():
-            if event.get('mentions', 0) > 1:  # Only process events with multiple mentions
-                event['name'] = name
-                profiles['events'].append(event)
+            event['name'] = name
+            profiles['events'].append(event)
         
-        # Process important attributes
+        # Process all attributes regardless of mention count
         for name, attribute in self.attributes.items():
-            if attribute.get('mentions', 0) > 1:  # Only process attributes with multiple mentions
-                attribute['name'] = name
-                profiles['attributes'].append(attribute)
+            attribute['name'] = name
+            profiles['attributes'].append(attribute)
         
-        # Process important propositions
+        # Process all propositions regardless of mention count
         for name, proposition in self.propositions.items():
-            if proposition.get('mentions', 0) > 1:  # Only process propositions with multiple mentions
-                proposition['name'] = name
-                # Ensure all required fields exist
-                if 'nodeType' not in proposition:
-                    proposition['nodeType'] = 'Proposition'
-                if 'statement' not in proposition or not proposition['statement']:
-                    proposition['statement'] = f"Proposition about {name}"
-                if 'status' not in proposition:
-                    proposition['status'] = 'claim'
-                if 'confidence' not in proposition:
-                    proposition['confidence'] = 0.7
-                if 'sources' not in proposition:
-                    proposition['sources'] = []
-                if 'domain' not in proposition:
-                    proposition['domain'] = ''
-                if 'emotionalValence' not in proposition:
-                    proposition['emotionalValence'] = 0.5
-                if 'emotionalArousal' not in proposition:
-                    proposition['emotionalArousal'] = 0.5
-                if 'evidenceStrength' not in proposition:
-                    proposition['evidenceStrength'] = 0.5
-                if 'counterEvidence' not in proposition:
-                    proposition['counterEvidence'] = []
-                    
-                profiles['propositions'].append(proposition)
+            proposition['name'] = name
+            # Ensure all required fields exist
+            if 'nodeType' not in proposition:
+                proposition['nodeType'] = 'Proposition'
+            if 'statement' not in proposition or not proposition['statement']:
+                proposition['statement'] = f"Proposition about {name}"
+            if 'status' not in proposition:
+                proposition['status'] = 'claim'
+            if 'confidence' not in proposition:
+                proposition['confidence'] = 0.7
+            if 'sources' not in proposition:
+                proposition['sources'] = []
+            if 'domain' not in proposition:
+                proposition['domain'] = ''
+            if 'emotionalValence' not in proposition:
+                proposition['emotionalValence'] = 0.5
+            if 'emotionalArousal' not in proposition:
+                proposition['emotionalArousal'] = 0.5
+            if 'evidenceStrength' not in proposition:
+                proposition['evidenceStrength'] = 0.5
+            if 'counterEvidence' not in proposition:
+                proposition['counterEvidence'] = []
+                
+            profiles['propositions'].append(proposition)
         
-        # Process important emotions
+        # Process all emotions regardless of mention count
         for name, emotion in self.emotions.items():
-            if emotion.get('mentions', 0) > 1:  # Only process emotions with multiple mentions
-                emotion['name'] = name
-                profiles['emotions'].append(emotion)
+            emotion['name'] = name
+            profiles['emotions'].append(emotion)
         
-        # Process important agents
+        # Process all agents regardless of mention count
         for name, agent in self.agents.items():
-            if agent.get('mentions', 0) > 1:  # Only process agents with multiple mentions
-                agent['name'] = name
-                profiles['agents'].append(agent)
+            agent['name'] = name
+            profiles['agents'].append(agent)
         
-        # Process important thoughts
+        # Process all thoughts regardless of mention count
         for name, thought in self.thoughts.items():
-            if thought.get('mentions', 0) > 1:  # Only process thoughts with multiple mentions
-                thought['name'] = name
-                # Ensure all required fields exist
-                if 'nodeType' not in thought:
-                    thought['nodeType'] = 'Thought'
-                if 'thoughtContent' not in thought or not thought['thoughtContent']:
-                    thought['thoughtContent'] = f"Thought about {name}"
-                if 'references' not in thought:
-                    thought['references'] = []
-                if 'confidence' not in thought:
-                    thought['confidence'] = 0.7
-                if 'source' not in thought:
-                    thought['source'] = ''
-                if 'createdBy' not in thought:
-                    thought['createdBy'] = ''
-                if 'tags' not in thought:
-                    thought['tags'] = []
-                if 'impact' not in thought:
-                    thought['impact'] = ''
-                if 'emotionalValence' not in thought:
-                    thought['emotionalValence'] = 0.5
-                if 'emotionalArousal' not in thought:
-                    thought['emotionalArousal'] = 0.5
-                if 'evidentialBasis' not in thought:
-                    thought['evidentialBasis'] = []
-                if 'thoughtCounterarguments' not in thought:
-                    thought['thoughtCounterarguments'] = []
-                if 'implications' not in thought:
-                    thought['implications'] = []
-                if 'thoughtConfidenceScore' not in thought:
-                    thought['thoughtConfidenceScore'] = 0.7
-                if 'reasoningChains' not in thought:
-                    thought['reasoningChains'] = []
-                    
-                profiles['thoughts'].append(thought)
+            thought['name'] = name
+            # Ensure all required fields exist
+            if 'nodeType' not in thought:
+                thought['nodeType'] = 'Thought'
+            if 'thoughtContent' not in thought or not thought['thoughtContent']:
+                thought['thoughtContent'] = f"Thought about {name}"
+            if 'references' not in thought:
+                thought['references'] = []
+            if 'confidence' not in thought:
+                thought['confidence'] = 0.7
+            if 'source' not in thought:
+                thought['source'] = ''
+            if 'createdBy' not in thought:
+                thought['createdBy'] = ''
+            if 'tags' not in thought:
+                thought['tags'] = []
+            if 'impact' not in thought:
+                thought['impact'] = ''
+            if 'emotionalValence' not in thought:
+                thought['emotionalValence'] = 0.5
+            if 'emotionalArousal' not in thought:
+                thought['emotionalArousal'] = 0.5
+            if 'evidentialBasis' not in thought:
+                thought['evidentialBasis'] = []
+            if 'thoughtCounterarguments' not in thought:
+                thought['thoughtCounterarguments'] = []
+            if 'implications' not in thought:
+                thought['implications'] = []
+            if 'thoughtConfidenceScore' not in thought:
+                thought['thoughtConfidenceScore'] = 0.7
+            if 'reasoningChains' not in thought:
+                thought['reasoningChains'] = []
+                
+            profiles['thoughts'].append(thought)
         
-        # Process important scientific insights
+        # Process all scientific insights regardless of mention count
         for name, insight in self.scientific_insights.items():
-            if insight.get('mentions', 0) > 1:  # Only process insights with multiple mentions
-                insight['name'] = name
-                profiles['scientificInsights'].append(insight)
+            insight['name'] = name
+            profiles['scientificInsights'].append(insight)
         
-        # Process important laws
+        # Process all laws regardless of mention count
         for name, law in self.laws.items():
-            if law.get('mentions', 0) > 1:  # Only process laws with multiple mentions
-                law['name'] = name
-                profiles['laws'].append(law)
+            law['name'] = name
+            profiles['laws'].append(law)
         
-        # Process important reasoning chains
+        # Process all reasoning chains regardless of mention count
         for name, chain in self.reasoning_chains.items():
-            if chain.get('mentions', 0) > 1:  # Only process chains with multiple mentions
-                chain['name'] = name
-                
-                # Ensure chain has all required attributes according to schema
-                if 'nodeType' not in chain:
-                    chain['nodeType'] = 'ReasoningChain'
-                if 'description' not in chain or not chain['description']:
-                    chain['description'] = f"Reasoning process about {name}"
-                if 'conclusion' not in chain or not chain['conclusion']:
-                    chain['conclusion'] = "Unknown conclusion"  
-                if 'confidenceScore' not in chain:
-                    chain['confidenceScore'] = 0.7
-                if 'creator' not in chain:
-                    chain['creator'] = "AI System"
-                if 'methodology' not in chain:
-                    chain['methodology'] = "mixed"
-                if 'domain' not in chain:
-                    chain['domain'] = ""
-                if 'tags' not in chain:
-                    chain['tags'] = []
-                if 'sourceThought' not in chain:
-                    chain['sourceThought'] = ""
-                if 'numberOfSteps' not in chain:
-                    chain['numberOfSteps'] = 0
-                if 'alternativeConclusionsConsidered' not in chain:
-                    chain['alternativeConclusionsConsidered'] = []
-                if 'relatedPropositions' not in chain:
-                    chain['relatedPropositions'] = []
-                
-                # Include steps information if available
-                if 'steps' in chain and chain['steps']:
-                    # Collect step details
-                    step_details = []
-                    for step_name in chain['steps']:
-                        if step_name in self.reasoning_steps:
-                            step_info = self.reasoning_steps[step_name].copy()
-                            step_info['name'] = step_name
+            chain['name'] = name
+            
+            # Ensure chain has all required attributes according to schema
+            if 'nodeType' not in chain:
+                chain['nodeType'] = 'ReasoningChain'
+            if 'description' not in chain or not chain['description']:
+                chain['description'] = f"Reasoning process about {name}"
+            if 'conclusion' not in chain or not chain['conclusion']:
+                chain['conclusion'] = "Unknown conclusion"  
+            if 'confidenceScore' not in chain:
+                chain['confidenceScore'] = 0.7
+            if 'creator' not in chain:
+                chain['creator'] = "AI System"
+            if 'methodology' not in chain:
+                chain['methodology'] = "mixed"
+            if 'domain' not in chain:
+                chain['domain'] = ""
+            if 'tags' not in chain:
+                chain['tags'] = []
+            if 'sourceThought' not in chain:
+                chain['sourceThought'] = ""
+            if 'numberOfSteps' not in chain:
+                chain['numberOfSteps'] = 0
+            if 'alternativeConclusionsConsidered' not in chain:
+                chain['alternativeConclusionsConsidered'] = []
+            if 'relatedPropositions' not in chain:
+                chain['relatedPropositions'] = []
+            
+            # Include steps information if available
+            if 'steps' in chain and chain['steps']:
+                # Collect step details
+                step_details = []
+                for step_name in chain['steps']:
+                    if step_name in self.reasoning_steps:
+                        step_info = self.reasoning_steps[step_name].copy()
+                        step_info['name'] = step_name
+                        
+                        # Ensure step has a link back to its chain
+                        step_info['chain'] = name
+                        
+                        # Ensure step has required attributes according to schema
+                        if 'nodeType' not in step_info:
+                            step_info['nodeType'] = 'ReasoningStep'
+                        if 'content' not in step_info or not step_info['content']:
+                            step_info['content'] = f"Step in {name}"
+                        if 'stepType' not in step_info:
+                            step_info['stepType'] = "inference"
+                        if 'confidence' not in step_info:
+                            step_info['confidence'] = 0.7
+                        if 'evidenceType' not in step_info:
+                            step_info['evidenceType'] = "assumption"
+                        if 'supportingReferences' not in step_info:
+                            step_info['supportingReferences'] = []
+                        if 'alternatives' not in step_info:
+                            step_info['alternatives'] = []
+                        if 'counterarguments' not in step_info:
+                            step_info['counterarguments'] = []
+                        if 'assumptions' not in step_info:
+                            step_info['assumptions'] = []
+                        if 'formalNotation' not in step_info:
+                            step_info['formalNotation'] = ""
+                        if 'propositions' not in step_info:
+                            step_info['propositions'] = []
                             
-                            # Ensure step has a link back to its chain
-                            step_info['chain'] = name
-                            
-                            # Ensure step has required attributes according to schema
-                            if 'nodeType' not in step_info:
-                                step_info['nodeType'] = 'ReasoningStep'
-                            if 'content' not in step_info or not step_info['content']:
-                                step_info['content'] = f"Step in {name}"
-                            if 'stepType' not in step_info:
-                                step_info['stepType'] = "inference"
-                            if 'confidence' not in step_info:
-                                step_info['confidence'] = 0.7
-                            if 'evidenceType' not in step_info:
-                                step_info['evidenceType'] = "assumption"
-                            if 'supportingReferences' not in step_info:
-                                step_info['supportingReferences'] = []
-                            if 'alternatives' not in step_info:
-                                step_info['alternatives'] = []
-                            if 'counterarguments' not in step_info:
-                                step_info['counterarguments'] = []
-                            if 'assumptions' not in step_info:
-                                step_info['assumptions'] = []
-                            if 'formalNotation' not in step_info:
-                                step_info['formalNotation'] = ""
-                            if 'propositions' not in step_info:
-                                step_info['propositions'] = []
-                                
-                            step_details.append(step_info)
-                    
-                    # Sort steps if they have order information
-                    step_details.sort(key=lambda x: x.get('order', 0))
-                    
-                    # Add steps to chain profile
-                    chain['stepDetails'] = step_details
-                    
-                    # Update numberOfSteps attribute
-                    chain['numberOfSteps'] = len(step_details)
-                    
-                profiles['reasoningChains'].append(chain)
+                        step_details.append(step_info)
+                
+                # Sort steps if they have order information
+                step_details.sort(key=lambda x: x.get('order', 0))
+                
+                # Add steps to chain profile
+                chain['stepDetails'] = step_details
+                
+                # Update numberOfSteps attribute
+                chain['numberOfSteps'] = len(step_details)
+                
+            profiles['reasoningChains'].append(chain)
         
-        # Process important reasoning steps
+        # Process all reasoning steps regardless of mention count
         for name, step in self.reasoning_steps.items():
-            if step.get('mentions', 0) > 1:  # Only process steps with multiple mentions
-                step['name'] = name
+            step['name'] = name
+            
+            # Ensure step has all required attributes
+            if 'nodeType' not in step:
+                step['nodeType'] = 'ReasoningStep'
+            if 'content' not in step or not step['content']:
+                step['content'] = f"Reasoning step: {name}"
+            if 'stepType' not in step:
+                step['stepType'] = "inference"
+            if 'evidenceType' not in step:
+                step['evidenceType'] = "assumption"
+            if 'supportingReferences' not in step:
+                step['supportingReferences'] = []
+            if 'confidence' not in step:
+                step['confidence'] = 0.7
+            if 'alternatives' not in step:
+                step['alternatives'] = []
+            if 'counterarguments' not in step:
+                step['counterarguments'] = []
+            if 'assumptions' not in step:
+                step['assumptions'] = []
+            if 'formalNotation' not in step:
+                step['formalNotation'] = ""
+            if 'propositions' not in step:
+                step['propositions'] = []
+            
+            # Make sure the step has a chainName property that matches the 'chain' property
+            if 'chain' in step and step['chain']:
+                step['chainName'] = step['chain']
+            elif 'chainName' not in step:
+                # If there's no chain reference, we should try to find one
+                # Look through reasoning chains to see if this step is part of any chain
+                for chain_name, chain in self.reasoning_chains.items():
+                    if 'steps' in chain and name in chain.get('steps', []):
+                        step['chain'] = chain_name
+                        step['chainName'] = chain_name
+                        logging.info(f"Found chain {chain_name} for step {name}")
+                        break
                 
-                # Ensure step has all required attributes
-                if 'nodeType' not in step:
-                    step['nodeType'] = 'ReasoningStep'
-                if 'content' not in step or not step['content']:
-                    step['content'] = f"Reasoning step: {name}"
-                if 'stepType' not in step:
-                    step['stepType'] = "inference"
-                if 'evidenceType' not in step:
-                    step['evidenceType'] = "assumption"
-                if 'supportingReferences' not in step:
-                    step['supportingReferences'] = []
-                if 'confidence' not in step:
-                    step['confidence'] = 0.7
-                if 'alternatives' not in step:
-                    step['alternatives'] = []
-                if 'counterarguments' not in step:
-                    step['counterarguments'] = []
-                if 'assumptions' not in step:
-                    step['assumptions'] = []
-                if 'formalNotation' not in step:
-                    step['formalNotation'] = ""
-                if 'propositions' not in step:
-                    step['propositions'] = []
-                
-                # Make sure the step has a chainName property that matches the 'chain' property
-                if 'chain' in step and step['chain']:
-                    step['chainName'] = step['chain']
-                elif 'chainName' not in step:
-                    # If there's no chain reference, we should try to find one
-                    # Look through reasoning chains to see if this step is part of any chain
-                    for chain_name, chain in self.reasoning_chains.items():
-                        if 'steps' in chain and name in chain.get('steps', []):
-                            step['chain'] = chain_name
-                            step['chainName'] = chain_name
-                            logging.info(f"Found chain {chain_name} for step {name}")
-                            break
-                    
-                profiles['reasoningSteps'].append(step)
+            profiles['reasoningSteps'].append(step)
         
-        # Process generic entities (that aren't persons or locations)
+        # Process all generic entities (that aren't persons or locations) regardless of mention count
         for name, entity in self.entities.items():
-            if (name not in self.persons and name not in self.locations and 
-                entity.get('mentions', 0) > 1):
+            if name not in self.persons and name not in self.locations:
                 entity['name'] = name
                 profiles['entities'].append(entity)
         
