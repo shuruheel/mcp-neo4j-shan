@@ -4,6 +4,7 @@ import re
 import logging
 import numpy as np
 from datetime import datetime
+import json
 import spacy
 from rapidfuzz import fuzz
 
@@ -133,6 +134,47 @@ def standardize_entity(entity):
             standardized.append(word.lower())
     
     return ' '.join(standardized)
+
+def list_to_string(value, separator="; ", default=None):
+    """Convert a value to string, joining with separator if it's a list
+    
+    Args:
+        value: Value to convert (list or scalar)
+        separator: Separator to use for joining list items
+        default: Default value if None
+        
+    Returns:
+        str: Formatted string
+    """
+    if value is None and default is not None:
+        value = default
+        
+    if isinstance(value, list):
+        return separator.join(str(item) for item in value)
+    return str(value)
+
+def extract_safely(data, field, entity_name, expected_type=None, default=None):
+    """Safely extract a field from data with error handling
+    
+    Args:
+        data: Dict containing the field
+        field: Field name to extract
+        entity_name: Entity name for logging
+        expected_type: Optional type check (list, dict, etc.)
+        default: Default value if extraction fails
+        
+    Returns:
+        The extracted value or default
+    """
+    result = default
+    try:
+        if field in data:
+            value = data[field]
+            if expected_type is None or isinstance(value, expected_type):
+                result = value
+    except Exception as e:
+        logging.warning(f"Error processing {field} for {entity_name}: {str(e)}")
+    return result
 
 def cleanup_temp_files():
     """Remove temporary checkpoint files after successful processing"""

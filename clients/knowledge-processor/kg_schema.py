@@ -72,7 +72,7 @@ RELATIONSHIP_TYPES = [
 # Node type definitions
 NODE_TYPES = [
     "Entity", "Event", "Concept", "Attribute", "Proposition", 
-    "Emotion", "Agent", "Thought", "ScientificInsight", "Law",
+    "Emotion", "Thought", "ScientificInsight", "Law",
     "ReasoningChain", "ReasoningStep", "Location"
 ]
 

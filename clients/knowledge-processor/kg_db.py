@@ -5,7 +5,7 @@ import logging
 import json
 from neo4j import GraphDatabase
 from kg_schema import RELATIONSHIP_TYPES, RELATIONSHIP_CATEGORIES
-from kg_utils import standardize_entity
+from kg_utils import standardize_entity, list_to_string, extract_safely
 
 class Neo4jConnection:
     """Singleton class for managing Neo4j connections"""
@@ -126,6 +126,59 @@ def setup_neo4j_constraints(session):
         logging.error(f"Failed to create Neo4j constraints: {str(e)}")
         # Continue execution rather than failing
 
+def add_node_to_neo4j(tx, node_data, node_type, label_field="name", special_handling=None):
+    """Generic function to add any node type to Neo4j
+    
+    Args:
+        tx: Neo4j transaction
+        node_data: Dict containing node data
+        node_type: Type of node (Entity, Location, etc.)
+        label_field: Field to use as the unique identifier (default: name)
+        special_handling: Optional function for custom field processing
+        
+    Returns:
+        bool: Success status
+    """
+    # Skip if there's no identifier
+    if not node_data.get(label_field):
+        logging.warning(f"Skipping {node_type} with no {label_field}: {node_data}")
+        return False
+    
+    # Skip if the name appears to be an attribute (specific to Entity nodes)
+    if node_type == "Entity":
+        name = node_data.get(label_field, "")
+        if name.lower().startswith("observations:") or name.lower().startswith("keycontributions:"):
+            logging.warning(f"Skipping entity that appears to be an attribute: {name}")
+            return False
+    
+    # Process data with special handling if provided
+    processed_data = node_data.copy()
+    if special_handling:
+        processed_data = special_handling(processed_data)
+    
+    # Process list fields to strings
+    for key, value in processed_data.items():
+        if isinstance(value, list) and not key.endswith("_json"):
+            processed_data[key] = list_to_string(value)
+    
+    # Start building the query
+    query = f"""
+    MERGE (n:{node_type} {{{label_field}: ${label_field}}})
+    SET n.nodeType = '{node_type}'
+    """
+    
+    # Add all properties from processed_data
+    for key in processed_data:
+        if key != label_field:  # Skip the label field as it's already in the MERGE clause
+            query += f", n.{key} = ${key}\n"
+    
+    query += "RETURN n"
+    
+    # Run the query
+    result = tx.run(query, **processed_data)
+    summary = result.consume()
+    return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
+
 def add_to_neo4j(tx, data):
     """Add an entity to Neo4j based on type"""
     if "entity" in data:
@@ -161,61 +214,20 @@ def add_to_neo4j(tx, data):
 
 def add_entity_to_neo4j(tx, entity_data):
     """Add a basic entity to Neo4j"""
-    # Skip if there's no name or if it's just an attribute
-    if not entity_data.get("name"):
-        logging.warning(f"Skipping entity with no name: {entity_data}")
-        return False
-        
-    # Skip if the name appears to be an attribute
-    name = entity_data.get("name", "")
-    if name.lower().startswith("observations:") or name.lower().startswith("keycontributions:"):
-        logging.warning(f"Skipping entity that appears to be an attribute: {name}")
-        return False
-        
-    # Convert observations to comma-separated string if it's a list
-    observations = entity_data.get("observations", [])
-    if isinstance(observations, list):
-        observations_str = "; ".join(observations)
-    else:
-        observations_str = str(observations)
-        
-    # Same for key contributions
-    key_contributions = entity_data.get("keyContributions", [])
-    if isinstance(key_contributions, list):
-        key_contributions_str = "; ".join(key_contributions)
-    else:
-        key_contributions_str = str(key_contributions)
+    # Use the generic node function with entity-specific processing
+    def process_entity_data(data):
+        processed = data.copy()
+        processed["nodeType"] = data.get("nodeType", "Entity")
+        processed["subType"] = data.get("subType", "")
+        processed["description"] = data.get("description", "")
+        processed["confidence"] = data.get("confidence", 0.0)
+        processed["source"] = data.get("source", "")
+        processed["biography"] = data.get("biography", "")
+        processed["emotionalValence"] = data.get("emotionalValence", 0.0)
+        processed["emotionalArousal"] = data.get("emotionalArousal", 0.0)
+        return processed
     
-    query = """
-    MERGE (e:Entity {name: $name})
-    SET e.nodeType = $nodeType,
-        e.subType = $subType,
-        e.description = $description,
-        e.confidence = $confidence,
-        e.source = $source,
-        e.biography = $biography,
-        e.keyContributions = $keyContributions,
-        e.observations = $observations,
-        e.emotionalValence = $emotionalValence,
-        e.emotionalArousal = $emotionalArousal
-    RETURN e
-    """
-    
-    result = tx.run(query,
-           name=name,
-           nodeType=entity_data.get("nodeType", "Entity"),
-           subType=entity_data.get("subType", ""),
-           description=entity_data.get("description", ""),
-           confidence=entity_data.get("confidence", 0.0),
-           source=entity_data.get("source", ""),
-           biography=entity_data.get("biography", ""),
-           keyContributions=key_contributions_str,
-           observations=observations_str,
-           emotionalValence=entity_data.get("emotionalValence", 0.0),
-           emotionalArousal=entity_data.get("emotionalArousal", 0.0))
-    
-    summary = result.consume()
-    return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
+    return add_node_to_neo4j(tx, entity_data, "Entity", "name", process_entity_data)
 
 def process_person_entity(tx, person_data):
     """Process a person entity with extended psychological and emotional attributes"""
@@ -396,19 +408,21 @@ def process_person_entity(tx, person_data):
         for trait_data in personality_traits:
             if isinstance(trait_data, dict) and "trait" in trait_data:
                 trait_name = trait_data["trait"]
-                # Create a trait node if it doesn't exist
-                trait_query = """
-                MERGE (t:Trait {name: $traitName})
-                ON CREATE SET t.nodeType = 'Attribute'
+                # Create an Attribute node if it doesn't exist
+                attribute_query = """
+                MERGE (a:Attribute {name: $traitName})
+                ON CREATE SET a.nodeType = 'Attribute',
+                             a.valueType = 'trait',
+                             a.description = 'Personality trait'
                 """
-                tx.run(trait_query, traitName=trait_name)
+                tx.run(attribute_query, traitName=trait_name)
                 
-                # Connect the person to the trait with confidence if available
+                # Connect the person to the attribute with confidence if available
                 confidence = trait_data.get("confidence", 0.8)
                 rel_query = """
                 MATCH (p:Entity {name: $personName})
-                MATCH (t:Trait {name: $traitName})
-                MERGE (p)-[r:EXHIBITS_TRAIT]->(t)
+                MATCH (a:Attribute {name: $traitName})
+                MERGE (p)-[r:HAS_ATTRIBUTE]->(a)
                 SET r.confidence = $confidence
                 """
                 tx.run(rel_query, personName=name, traitName=trait_name, confidence=confidence)
@@ -533,27 +547,15 @@ def add_concept_to_neo4j(tx, concept_data):
 
 def add_attribute_to_neo4j(tx, attribute_data):
     """Add an attribute node to Neo4j"""
-    query = """
-    MERGE (a:Attribute {name: $name})
-    SET a.nodeType = 'Attribute',
-        a.value = $value,
-        a.unit = $unit,
-        a.valueType = $valueType,
-        a.possibleValues = $possibleValues,
-        a.description = $description
-    RETURN a
-    """
+    def process_attribute_data(data):
+        processed = data.copy()
+        processed["value"] = data.get("value", "")
+        processed["unit"] = data.get("unit", "")
+        processed["valueType"] = data.get("valueType", "")
+        processed["description"] = data.get("description", "")
+        return processed
     
-    result = tx.run(query,
-           name=attribute_data.get("name", ""),
-           value=attribute_data.get("value", ""),
-           unit=attribute_data.get("unit", ""),
-           valueType=attribute_data.get("valueType", ""),
-           possibleValues=attribute_data.get("possibleValues", []),
-           description=attribute_data.get("description", ""))
-    
-    summary = result.consume()
-    return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
+    return add_node_to_neo4j(tx, attribute_data, "Attribute", "name", process_attribute_data)
 
 def add_proposition_to_neo4j(tx, proposition_data):
     """Add a proposition node to Neo4j"""
@@ -606,27 +608,16 @@ def add_proposition_to_neo4j(tx, proposition_data):
 
 def add_emotion_to_neo4j(tx, emotion_data):
     """Add an emotion node to Neo4j"""
-    query = """
-    MERGE (e:Emotion {name: $name})
-    SET e.nodeType = 'Emotion',
-        e.intensity = $intensity,
-        e.valence = $valence,
-        e.category = $category,
-        e.subcategory = $subcategory,
-        e.description = $description
-    RETURN e
-    """
+    def process_emotion_data(data):
+        processed = data.copy()
+        processed["intensity"] = data.get("intensity", 0.0)
+        processed["valence"] = data.get("valence", 0.0)
+        processed["category"] = data.get("category", "")
+        processed["subcategory"] = data.get("subcategory", "")
+        processed["description"] = data.get("description", "")
+        return processed
     
-    result = tx.run(query,
-           name=emotion_data.get("name", ""),
-           intensity=emotion_data.get("intensity", 0.0),
-           valence=emotion_data.get("valence", 0.0),
-           category=emotion_data.get("category", ""),
-           subcategory=emotion_data.get("subcategory", ""),
-           description=emotion_data.get("description", ""))
-    
-    summary = result.consume()
-    return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
+    return add_node_to_neo4j(tx, emotion_data, "Emotion", "name", process_emotion_data)
 
 def add_agent_to_neo4j(tx, agent_data):
     """Add an agent node to Neo4j"""
@@ -779,164 +770,74 @@ def add_thought_to_neo4j(tx, thought_data):
 
 def add_scientific_insight_to_neo4j(tx, insight_data):
     """Add a scientific insight node to Neo4j"""
-    query = """
-    MERGE (s:ScientificInsight {name: $name})
-    SET s.nodeType = 'ScientificInsight',
-        s.hypothesis = $hypothesis,
-        s.evidence = $evidence,
-        s.methodology = $methodology,
-        s.confidence = $confidence,
-        s.field = $field,
-        s.publications = $publications,
-        s.emotionalValence = $emotionalValence,
-        s.emotionalArousal = $emotionalArousal,
-        s.evidenceStrength = $evidenceStrength,
-        s.scientificCounterarguments = $scientificCounterarguments,
-        s.applicationDomains = $applicationDomains,
-        s.replicationStatus = $replicationStatus,
-        s.surpriseValue = $surpriseValue
-    RETURN s
-    """
+    def process_insight_data(data):
+        processed = data.copy()
+        processed["hypothesis"] = data.get("hypothesis", "")
+        processed["methodology"] = data.get("methodology", "")
+        processed["confidence"] = data.get("confidence", 0.0)
+        processed["field"] = data.get("field", "")
+        processed["emotionalValence"] = data.get("emotionalValence", 0.0)
+        processed["emotionalArousal"] = data.get("emotionalArousal", 0.0)
+        processed["evidenceStrength"] = data.get("evidenceStrength", 0.0)
+        processed["replicationStatus"] = data.get("replicationStatus", "")
+        processed["surpriseValue"] = data.get("surpriseValue", 0.0)
+        return processed
     
-    result = tx.run(query,
-           name=insight_data.get("name", ""),
-           hypothesis=insight_data.get("hypothesis", ""),
-           evidence=insight_data.get("evidence", []),
-           methodology=insight_data.get("methodology", ""),
-           confidence=insight_data.get("confidence", 0.0),
-           field=insight_data.get("field", ""),
-           publications=insight_data.get("publications", []),
-           emotionalValence=insight_data.get("emotionalValence", 0.0),
-           emotionalArousal=insight_data.get("emotionalArousal", 0.0),
-           evidenceStrength=insight_data.get("evidenceStrength", 0.0),
-           scientificCounterarguments=insight_data.get("scientificCounterarguments", []),
-           applicationDomains=insight_data.get("applicationDomains", []),
-           replicationStatus=insight_data.get("replicationStatus", ""),
-           surpriseValue=insight_data.get("surpriseValue", 0.0))
-    
-    summary = result.consume()
-    return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
+    return add_node_to_neo4j(tx, insight_data, "ScientificInsight", "name", process_insight_data)
 
 def add_law_to_neo4j(tx, law_data):
     """Add a law node to Neo4j"""
-    query = """
-    MERGE (l:Law {name: $name})
-    SET l.nodeType = 'Law',
-        l.statement = $statement,
-        l.conditions = $conditions,
-        l.exceptions = $exceptions,
-        l.domain = $domain,
-        l.proofs = $proofs,
-        l.emotionalValence = $emotionalValence,
-        l.emotionalArousal = $emotionalArousal,
-        l.domainConstraints = $domainConstraints,
-        l.historicalPrecedents = $historicalPrecedents,
-        l.counterexamples = $counterexamples,
-        l.formalRepresentation = $formalRepresentation
-    RETURN l
-    """
+    def process_law_data(data):
+        processed = data.copy()
+        processed["statement"] = data.get("statement", "")
+        processed["domain"] = data.get("domain", "")
+        processed["emotionalValence"] = data.get("emotionalValence", 0.0)
+        processed["emotionalArousal"] = data.get("emotionalArousal", 0.0)
+        processed["formalRepresentation"] = data.get("formalRepresentation", "")
+        return processed
     
-    result = tx.run(query,
-           name=law_data.get("name", ""),
-           statement=law_data.get("statement", ""),
-           conditions=law_data.get("conditions", []),
-           exceptions=law_data.get("exceptions", []),
-           domain=law_data.get("domain", ""),
-           proofs=law_data.get("proofs", []),
-           emotionalValence=law_data.get("emotionalValence", 0.0),
-           emotionalArousal=law_data.get("emotionalArousal", 0.0),
-           domainConstraints=law_data.get("domainConstraints", []),
-           historicalPrecedents=law_data.get("historicalPrecedents", []),
-           counterexamples=law_data.get("counterexamples", []),
-           formalRepresentation=law_data.get("formalRepresentation", ""))
-    
-    summary = result.consume()
-    return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
+    return add_node_to_neo4j(tx, law_data, "Law", "name", process_law_data)
 
 def add_reasoning_chain_to_neo4j(tx, chain_data):
     """Add a reasoning chain node to Neo4j"""
     chain_name = chain_data.get("name", "")
     logging.info(f"Creating ReasoningChain node: {chain_name}")
     
-    # First create the chain node
-    query = """
-    MERGE (r:ReasoningChain {name: $name})
-    SET r.nodeType = 'ReasoningChain',
-        r.description = $description,
-        r.conclusion = $conclusion,
-        r.confidenceScore = $confidenceScore,
-        r.creator = $creator,
-        r.methodology = $methodology,
-        r.domain = $domain,
-        r.tags = $tags,
-        r.sourceThought = $sourceThought,
-        r.numberOfSteps = $numberOfSteps,
-        r.alternativeConclusionsConsidered = $alternativeConclusionsConsidered,
-        r.relatedPropositions = $relatedPropositions
-    RETURN r
-    """
-    
-    result = tx.run(query,
-           name=chain_name,
-           description=chain_data.get("description", ""),
-           conclusion=chain_data.get("conclusion", ""),
-           confidenceScore=chain_data.get("confidenceScore", 0.0),
-           creator=chain_data.get("creator", ""),
-           methodology=chain_data.get("methodology", ""),
-           domain=chain_data.get("domain", ""),
-           tags=chain_data.get("tags", []),
-           sourceThought=chain_data.get("sourceThought", ""),
-           numberOfSteps=chain_data.get("numberOfSteps", 0),
-           alternativeConclusionsConsidered=chain_data.get("alternativeConclusionsConsidered", []),
-           relatedPropositions=chain_data.get("relatedPropositions", []))
+    def process_chain_data(data):
+        processed = data.copy()
+        processed["description"] = data.get("description", "")
+        processed["conclusion"] = data.get("conclusion", "")
+        processed["confidenceScore"] = data.get("confidenceScore", 0.0)
+        processed["creator"] = data.get("creator", "")
+        processed["methodology"] = data.get("methodology", "")
+        processed["domain"] = data.get("domain", "")
+        processed["sourceThought"] = data.get("sourceThought", "")
+        processed["numberOfSteps"] = data.get("numberOfSteps", 0)
+        return processed
     
     # DO NOT create relationships to steps - this will be done in the relationship phase
-    
     # DO NOT create relationships to related propositions - this will be done in the relationship phase
-    
     # DO NOT create relationship to source thought - this will be done in the relationship phase
     
-    summary = result.consume()
-    return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
+    return add_node_to_neo4j(tx, chain_data, "ReasoningChain", "name", process_chain_data)
 
 def add_reasoning_step_to_neo4j(tx, step_data):
     """Add a reasoning step node to Neo4j"""
     step_name = step_data.get("name", "")
     chain_name = step_data.get("chain", "") or step_data.get("chainName", "")
+        
+    def process_step_data(data):
+        processed = data.copy()
+        processed["content"] = data.get("content", "")
+        processed["stepType"] = data.get("stepType", "")
+        processed["evidenceType"] = data.get("evidenceType", "")
+        processed["confidence"] = data.get("confidence", 0.0)
+        processed["formalNotation"] = data.get("formalNotation", "")
+        processed["chainName"] = chain_name
+        return processed
     
-    logging.info(f"Creating ReasoningStep node: {step_name}, Chain: {chain_name}")
-    
-    # First create the step node
-    query = """
-    MERGE (s:ReasoningStep {name: $name})
-    SET s.nodeType = 'ReasoningStep',
-        s.content = $content,
-        s.stepType = $stepType,
-        s.evidenceType = $evidenceType,
-        s.supportingReferences = $supportingReferences,
-        s.confidence = $confidence,
-        s.alternatives = $alternatives,
-        s.counterarguments = $counterarguments,
-        s.assumptions = $assumptions,
-        s.formalNotation = $formalNotation,
-        s.propositions = $propositions,
-        s.chainName = $chainName
-    RETURN s
-    """
-    
-    result = tx.run(query,
-           name=step_name,
-           content=step_data.get("content", ""),
-           stepType=step_data.get("stepType", ""),
-           evidenceType=step_data.get("evidenceType", ""),
-           supportingReferences=step_data.get("supportingReferences", []),
-           confidence=step_data.get("confidence", 0.0),
-           alternatives=step_data.get("alternatives", []),
-           counterarguments=step_data.get("counterarguments", []),
-           assumptions=step_data.get("assumptions", []),
-           formalNotation=step_data.get("formalNotation", ""),
-           propositions=step_data.get("propositions", []),
-           chainName=chain_name)
+    # Create the step node
+    result = add_node_to_neo4j(tx, step_data, "ReasoningStep", "name", process_step_data)
     
     # Create relationships to propositions
     if "propositions" in step_data and isinstance(step_data["propositions"], list):
@@ -954,12 +855,12 @@ def add_reasoning_step_to_neo4j(tx, step_data):
                 prop_summary = prop_result.consume()
                 
                 if prop_summary.counters.relationships_created > 0:
-                    logging.info(f"Created USES relationship: {step_name} -[USES]-> {prop}")
+                    # logging.info(f"Created USES relationship: {step_name} -[USES]-> {prop}")
+                    pass
     
     # DO NOT create relationships to chain or check if chain exists - this will be done in the relationship phase
     
-    summary = result.consume()
-    return summary.counters.nodes_created > 0 or summary.counters.properties_set > 0
+    return result
 
 def add_relationship_to_neo4j(tx, relationship_data):
     """Add a structured relationship to Neo4j following best practices"""
@@ -1038,6 +939,8 @@ def add_relationship_to_neo4j(tx, relationship_data):
         rel_category = "lateral"
     
     properties['relationshipCategory'] = rel_category
+    properties['source_type'] = source_type_normalized 
+    properties['target_type'] = target_type_normalized
     
     # Build property string for relationship
     property_clauses = []
@@ -1113,14 +1016,27 @@ def add_relationship_to_neo4j(tx, relationship_data):
         # If the source node doesn't exist with the expected type, try to find it with any label
         if not source_exists:
             find_any_source_query = """
-            MATCH (source {name: $source_name})
+            MATCH (source)
+            WHERE toLower(source.name) = toLower($source_name)
             RETURN labels(source)[0] as label
             """
             any_source_result = tx.run(find_any_source_query, source_name=source_name).single()
             if any_source_result:
                 source_exists = True
                 source_label = any_source_result["label"]
-                logging.info(f"Found source node '{source_name}' with different label: {source_label} (expected: {source_type_normalized})")
+                # Only log if the label is actually different (case-insensitive comparison)
+                if source_label.lower() != source_type_normalized.lower():
+                    logging.info(f"Found source node '{source_name}' with different label: {source_label} (expected: {source_type_normalized})")
+                    # Log the actual node name to help identify case mismatches
+                    actual_name_query = """
+                    MATCH (n)
+                    WHERE toLower(n.name) = toLower($name)
+                    RETURN n.name as actual_name
+                    LIMIT 1
+                    """
+                    actual_name_result = tx.run(actual_name_query, name=source_name).single()
+                    if actual_name_result and actual_name_result["actual_name"] != source_name:
+                        logging.info(f"Case mismatch - Actual node name: '{actual_name_result['actual_name']}', Requested: '{source_name}'")
         
         # Try to find the target node
         target_result = tx.run(find_target_query, **target_params).single()
@@ -1130,14 +1046,27 @@ def add_relationship_to_neo4j(tx, relationship_data):
         # If the target node doesn't exist with the expected type, try to find it with any label
         if not target_exists:
             find_any_target_query = """
-            MATCH (target {name: $target_name})
+            MATCH (target)
+            WHERE toLower(target.name) = toLower($target_name)
             RETURN labels(target)[0] as label
             """
             any_target_result = tx.run(find_any_target_query, target_name=target_name).single()
             if any_target_result:
                 target_exists = True
                 target_label = any_target_result["label"]
-                logging.info(f"Found target node '{target_name}' with different label: {target_label} (expected: {target_type_normalized})")
+                # Only log if the label is actually different (case-insensitive comparison)
+                if target_label.lower() != target_type_normalized.lower():
+                    logging.info(f"Found target node '{target_name}' with different label: {target_label} (expected: {target_type_normalized})")
+                    # Log the actual node name to help identify case mismatches
+                    actual_name_query = """
+                    MATCH (n)
+                    WHERE toLower(n.name) = toLower($name)
+                    RETURN n.name as actual_name
+                    LIMIT 1
+                    """
+                    actual_name_result = tx.run(actual_name_query, name=target_name).single()
+                    if actual_name_result and actual_name_result["actual_name"] != target_name:
+                        logging.info(f"Case mismatch - Actual node name: '{actual_name_result['actual_name']}', Requested: '{target_name}'")
     except Exception as e:
         logging.warning(f"Error checking node existence: {str(e)}")
         # If query fails due to non-existent label, try with the original type
@@ -1145,30 +1074,32 @@ def add_relationship_to_neo4j(tx, relationship_data):
         source_exists = False
         target_exists = False
     
-    # If source node doesn't exist, try to create a placeholder
-    if not source_exists:
-        create_source = create_placeholder_node(tx, source_name, source_type_normalized)
-        if create_source:
-            source_exists = True
-            source_label = "Entity" if source_is_entity_subtype else source_type_normalized
-        else:
-            logging.warning(f"Source node '{source_name}' not found and couldn't create placeholder")
-            return False
-    
-    # If target node doesn't exist, try to create a placeholder
-    if not target_exists:
-        create_target = create_placeholder_node(tx, target_name, target_type_normalized)
-        if create_target:
-            target_exists = True
-            target_label = "Entity" if target_is_entity_subtype else target_type_normalized
-        else:
-            logging.warning(f"Target node '{target_name}' not found and couldn't create placeholder")
-            return False
+    # If either node doesn't exist, log the error and skip creating this relationship
+    if not source_exists or not target_exists:
+        # Record missing nodes for later reporting
+        
+        # Add to global missing nodes counter (these will be reported at the end)
+        global missing_source_nodes, missing_target_nodes
+        if not source_exists:
+            if 'missing_source_nodes' not in globals():
+                global missing_source_nodes
+                missing_source_nodes = set()
+            missing_source_nodes.add((source_name, source_type_normalized))
+        
+        if not target_exists:
+            if 'missing_target_nodes' not in globals():
+                global missing_target_nodes
+                missing_target_nodes = set()
+            missing_target_nodes.add((target_name, target_type_normalized))
+        
+        return False
     
     # Create the relationship using the actual labels of the nodes
     relationship_query = f"""
-    MATCH (s:{source_label} {{name: $source_name}})
-    MATCH (t:{target_label} {{name: $target_name}})
+    MATCH (s:{source_label})
+    WHERE toLower(s.name) = toLower($source_name)
+    MATCH (t:{target_label})
+    WHERE toLower(t.name) = toLower($target_name)
     MERGE (s)-[r:{rel_type}]->(t)
     SET {property_string}
     RETURN r
@@ -1193,8 +1124,10 @@ def add_relationship_to_neo4j(tx, relationship_data):
         # If there's still an error, try one last approach - create without specifying labels
         try:
             fallback_query = f"""
-            MATCH (s {{name: $source_name}})
-            MATCH (t {{name: $target_name}})
+            MATCH (s)
+            WHERE toLower(s.name) = toLower($source_name)
+            MATCH (t)
+            WHERE toLower(t.name) = toLower($target_name)
             MERGE (s)-[r:{rel_type}]->(t)
             SET {property_string}
             RETURN r
@@ -1213,32 +1146,43 @@ def add_relationship_to_neo4j(tx, relationship_data):
 def process_relationships(session, relationships):
     """Process a list of relationships and add them to Neo4j"""
     success_count = 0
+    skipped_count = 0
+    
+    # Initialize global tracking of missing nodes
+    global missing_source_nodes, missing_target_nodes
+    if 'missing_source_nodes' not in globals():
+        missing_source_nodes = set()
+    if 'missing_target_nodes' not in globals():
+        missing_target_nodes = set()
     
     for relationship in relationships:
         try:
             with session.begin_transaction() as tx:
                 if add_relationship_to_neo4j(tx, relationship):
                     success_count += 1
+                else:
+                    skipped_count += 1
         except Exception as e:
             logging.error(f"Error adding relationship to Neo4j: {str(e)}")
+            skipped_count += 1
     
+    # Log relationship statistics
     logging.info(f"Added {success_count} relationships to Neo4j")
+    logging.info(f"Skipped {skipped_count} relationships due to errors or missing nodes")
+    
+    # Report missing nodes
+    if missing_source_nodes:
+        logging.warning(f"Missing source nodes prevented {len(missing_source_nodes)} relationships")
+        for name, node_type in sorted(missing_source_nodes):
+            logging.warning(f"  Missing source: {name} (type: {node_type})")
+    
+    if missing_target_nodes:
+        logging.warning(f"Missing target nodes prevented {len(missing_target_nodes)} relationships")
+        for name, node_type in sorted(missing_target_nodes):
+            logging.warning(f"  Missing target: {name} (type: {node_type})")
+    
     return success_count
 
-# Update the existing add_relationship_to_neo4j function to use the new one
-def add_relationship_to_neo4j_legacy(tx, subject, predicate, object_, props=None):
-    """Legacy function for backward compatibility"""
-    props = props or {}
-    
-    # Convert to new format
-    relationship_data = {
-        'source': {'name': subject, 'type': 'Entity'},
-        'target': {'name': object_, 'type': 'Entity'},
-        'type': predicate,
-        'properties': props
-    }
-    
-    return add_relationship_to_neo4j(tx, relationship_data)
 
 def create_placeholder_node(tx, name, node_type):
     """Create a minimal placeholder node of the specified type with just a name
