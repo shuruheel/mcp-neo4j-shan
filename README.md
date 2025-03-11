@@ -2,6 +2,7 @@
 
 This repository contains a collection of Servers and Client Tools that enable LLMs to build, maintain, and explore a comprehensive knowledge graph with cognitive neuroscience-inspired features.
 
+
 ## Clients
 
 ### `knowledge-processor`
@@ -74,6 +75,7 @@ A powerful Python-based tool for extracting rich semantic knowledge from large t
 - Enabling semantic search across large document collections
 - Discovering non-obvious connections between concepts and entities
 - Supporting reasoning and analysis with rich factual context
+=======
 
 ## Servers
 
