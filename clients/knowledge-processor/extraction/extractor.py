@@ -90,13 +90,11 @@ class KnowledgeExtractor:
         }
         
         try:
-            # Group 1 extraction: Entities, Attributes, Events, Emotions
-            logging.info("Starting Group 1 extraction: Entities, Attributes, Events, Emotions, Locations")
-            group1_result = await self._extract_group1(text)
-            
-            # Group 2 extraction: Concepts, Propositions, Reasoning Chains, Reasoning Steps
-            logging.info("Starting Group 2 extraction: Concepts, Propositions, Reasoning Chains, Reasoning Steps, etc.")
-            group2_result = await self._extract_group2(text)
+            # Run Group 1 and Group 2 extractions in parallel
+            logging.info("Starting parallel extraction of Group 1 and Group 2")
+            group1_task = self._extract_group1(text)
+            group2_task = self._extract_group2(text)
+            group1_result, group2_result = await asyncio.gather(group1_task, group2_task)
             
             # Merge group results
             for key, items in group1_result.items():
@@ -202,8 +200,6 @@ class KnowledgeExtractor:
         5. If none of a particular type is found, return an empty array for that key.
         """
         
-        logging.info("Starting Group 1 extraction: Entities, Attributes, Events, Emotions, Locations")
-        
         try:
             # Get response from the model
             response = await self.model.ainvoke(prompt)
@@ -295,8 +291,6 @@ class KnowledgeExtractor:
         5. If none of a particular type is found, return an empty array for that key.
         6. IMPORTANT: Connect reasoning steps to their parent chains by setting the chainName field.
         """
-        
-        logging.info("Starting Group 2 extraction: Concepts, Propositions, Reasoning Chains, Reasoning Steps, etc.")
         
         try:
             # Get response from the model
@@ -415,34 +409,6 @@ class KnowledgeExtractor:
             logging.info("Too few nodes extracted to form meaningful relationships")
             return []
         
-        # OPTIMIZATION: Limit the number of nodes per type to prevent extremely large prompts
-        # For each type, keep only the first 10 nodes (increased from 5)
-        MAX_NODES_PER_TYPE = 10
-        if len(entities) > MAX_NODES_PER_TYPE:
-            entities = entities[:MAX_NODES_PER_TYPE]
-            logging.info(f"Limited entities to {MAX_NODES_PER_TYPE} for relationship extraction")
-        if len(concepts) > MAX_NODES_PER_TYPE:
-            concepts = concepts[:MAX_NODES_PER_TYPE]
-            logging.info(f"Limited concepts to {MAX_NODES_PER_TYPE} for relationship extraction")
-        if len(events) > MAX_NODES_PER_TYPE:
-            events = events[:MAX_NODES_PER_TYPE]
-            logging.info(f"Limited events to {MAX_NODES_PER_TYPE} for relationship extraction")
-        if len(locations) > MAX_NODES_PER_TYPE:
-            locations = locations[:MAX_NODES_PER_TYPE]
-            logging.info(f"Limited locations to {MAX_NODES_PER_TYPE} for relationship extraction")
-        if len(props) > MAX_NODES_PER_TYPE:
-            props = props[:MAX_NODES_PER_TYPE]
-            logging.info(f"Limited propositions to {MAX_NODES_PER_TYPE} for relationship extraction")
-        if len(thoughts) > MAX_NODES_PER_TYPE:
-            thoughts = thoughts[:MAX_NODES_PER_TYPE]
-            logging.info(f"Limited thoughts to {MAX_NODES_PER_TYPE} for relationship extraction")
-        if len(reasoning_chains) > MAX_NODES_PER_TYPE:
-            reasoning_chains = reasoning_chains[:MAX_NODES_PER_TYPE]
-            logging.info(f"Limited reasoning chains to {MAX_NODES_PER_TYPE} for relationship extraction")
-        if len(reasoning_steps) > MAX_NODES_PER_TYPE:
-            reasoning_steps = reasoning_steps[:MAX_NODES_PER_TYPE]
-            logging.info(f"Limited reasoning steps to {MAX_NODES_PER_TYPE} for relationship extraction")
-        
         # Prepare simplified node lists for the prompt (just names and types to keep prompt size manageable)
         simplified_nodes = {
             "entities": [{"name": e.get("name"), "subType": e.get("subType", "General")} for e in entities],
@@ -461,65 +427,6 @@ class KnowledgeExtractor:
         # Count total available nodes
         total_node_count = sum(len(nodes) for nodes in simplified_nodes.values())
         logging.info(f"Starting relationship extraction with {total_node_count} available nodes")
-        
-        # OPTIMIZATION: If too many nodes, extract relationships in batches
-        # Increased max nodes from 15 to 30
-        MAX_TOTAL_NODES = 30
-        if total_node_count > MAX_TOTAL_NODES:
-            logging.info(f"Large number of nodes ({total_node_count}), limiting to {MAX_TOTAL_NODES} for relationship extraction")
-            # Prioritize entities and concepts, which are most likely to have relationships
-            prioritized_nodes = {"entities": [], "concepts": [], "chains_steps": [], "others": []}
-            
-            # Add the most important nodes first (up to MAX_TOTAL_NODES total)
-            remaining = MAX_TOTAL_NODES
-            
-            # First add entities (up to 10)
-            entity_count = min(len(simplified_nodes["entities"]), 10, remaining)
-            prioritized_nodes["entities"] = simplified_nodes["entities"][:entity_count]
-            remaining -= entity_count
-            
-            # Then add concepts (up to 8)
-            if remaining > 0:
-                concept_count = min(len(simplified_nodes["concepts"]), 8, remaining)
-                prioritized_nodes["concepts"] = simplified_nodes["concepts"][:concept_count]
-                remaining -= concept_count
-            
-            # Then add reasoning chains and steps (up to 6)
-            if remaining > 0:
-                # Prioritize reasoning chains and steps to ensure they're included
-                chains_count = min(len(simplified_nodes["reasoningChains"]), 3, remaining)
-                prioritized_nodes["chains_steps"].extend(
-                    [{"name": node["name"], "type": "reasoningChain"} for node in simplified_nodes["reasoningChains"][:chains_count]]
-                )
-                remaining -= chains_count
-                
-                steps_count = min(len(simplified_nodes["reasoningSteps"]), 3, remaining)
-                prioritized_nodes["chains_steps"].extend(
-                    [{"name": node["name"], "type": "reasoningStep"} for node in simplified_nodes["reasoningSteps"][:steps_count]]
-                )
-                remaining -= steps_count
-            
-            # Then add a mix of other node types
-            if remaining > 0:
-                for node_type in ["events", "propositions", "thoughts", "locations"]:
-                    if node_type in simplified_nodes and simplified_nodes[node_type] and remaining > 0:
-                        count = min(len(simplified_nodes[node_type]), remaining)
-                        prioritized_nodes["others"].extend(
-                            [{"name": node["name"], "type": node_type[:-1]} for node in simplified_nodes[node_type][:count]]
-                        )
-                        remaining -= count
-            
-            # Replace simplified_nodes with the prioritized subset
-            simplified_nodes = {
-                "entities": prioritized_nodes["entities"],
-                "concepts": prioritized_nodes["concepts"],
-                "reasoning_nodes": prioritized_nodes["chains_steps"],
-                "other_nodes": prioritized_nodes["others"]
-            }
-            
-            # Update node count
-            total_node_count = sum(len(nodes) for nodes in simplified_nodes.values())
-            logging.info(f"Limited to {total_node_count} nodes for relationship extraction")
         
         try:
             # Create a more concise prompt for relationship extraction
@@ -714,31 +621,29 @@ async def process_chunks(chunks, batch_size=5, checkpoint_frequency=5, model_nam
     for i in tqdm(range(0, total_chunks, batch_size), desc="Processing batches"):
         batch = chunks[i:i+batch_size]
         try:
-            # Process batch in parallel with timeout protection
+            # Create tasks with timeout protection for each chunk
             batch_tasks = []
             for chunk in batch:
-                task = extractor.extract_from_chunk(chunk)
-                # Wrap task with timeout
-                batch_tasks.append(asyncio.wait_for(task, timeout=task_timeout))
+                task = asyncio.create_task(asyncio.wait_for(extractor.extract_from_chunk(chunk), timeout=task_timeout))
+                batch_tasks.append(task)
             
-            # Process batch with error handling for individual tasks
+            # Process all tasks in parallel with asyncio.gather
+            # gather() will wait for all tasks to complete
+            # return_exceptions=True makes gather() return exceptions rather than raising them
+            logging.info(f"Processing batch {i//batch_size + 1}/{(total_chunks + batch_size - 1)//batch_size} with {len(batch_tasks)} chunks in parallel")
+            batch_results_or_exceptions = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            
+            # Process results and handle exceptions
             batch_results = []
-            for j, task in enumerate(batch_tasks):
-                try:
-                    result = await task
-                    batch_results.append(result)
-                except asyncio.TimeoutError:
-                    logging.error(f"Task for chunk {i+j} timed out after {task_timeout} seconds")
-                    # Add empty result for timed out chunk
-                    batch_results.append({
-                        "entities": [], "events": [], "concepts": [], "attributes": [],
-                        "propositions": [], "emotions": [], "agents": [], "thoughts": [],
-                        "scientificInsights": [], "laws": [], "reasoningChains": [],
-                        "reasoningSteps": [], "locations": [], "relationships": [],
-                        "personDetails": {}, "locationDetails": {}, "personObservations": {}
-                    })
-                except Exception as e:
-                    logging.error(f"Error processing chunk {i+j}: {str(e)}")
+            for j, result_or_exception in enumerate(batch_results_or_exceptions):
+                chunk_index = i + j
+                if isinstance(result_or_exception, Exception):
+                    # Handle exception for this chunk
+                    if isinstance(result_or_exception, asyncio.TimeoutError):
+                        logging.error(f"Task for chunk {chunk_index} timed out after {task_timeout} seconds")
+                    else:
+                        logging.error(f"Error processing chunk {chunk_index}: {str(result_or_exception)}")
+                    
                     # Add empty result for failed chunk
                     batch_results.append({
                         "entities": [], "events": [], "concepts": [], "attributes": [],
@@ -747,6 +652,9 @@ async def process_chunks(chunks, batch_size=5, checkpoint_frequency=5, model_nam
                         "reasoningSteps": [], "locations": [], "relationships": [],
                         "personDetails": {}, "locationDetails": {}, "personObservations": {}
                     })
+                else:
+                    # Successfully processed chunk
+                    batch_results.append(result_or_exception)
             
             results.extend(batch_results)
             

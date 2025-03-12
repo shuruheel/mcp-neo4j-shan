@@ -318,6 +318,10 @@ async def main():
             successful_relationships = 0
             failed_relationships = 0
             
+            # Initialize a set to track all relationships by their signature
+            # This will be used to avoid duplicates across all relationship creation sections
+            processed_rel_signatures = set()
+            
             # First, explicitly create PART_OF_CHAIN relationships between ReasoningSteps and ReasoningChains
             logging.info("Creating relationships between ReasoningSteps and ReasoningChains")
             if comprehensive_profiles.get('reasoningSteps'):
@@ -326,35 +330,34 @@ async def main():
                     if 'chain' in step or 'chainName' in step:
                         chain_name = step.get('chain', '') or step.get('chainName', '')
                         if chain_name:
-                            try:
-                                # Create PART_OF_CHAIN relationship
-                                session.execute_write(
-                                    lambda tx: add_relationship_to_neo4j(
-                                        tx, 
-                                        {
-                                            'source': {'name': step['name'], 'type': 'ReasoningStep'},
-                                            'target': {'name': chain_name, 'type': 'ReasoningChain'},
-                                            'type': 'PART_OF_CHAIN',
-                                            'properties': {'confidenceScore': 0.9}
-                                        }
+                            # Create a relationship signature
+                            step_name = step['name']
+                            rel_sig = f"{step_name.lower()}|PART_OF_CHAIN|{chain_name.lower()}"
+                            
+                            # Only create if not already processed
+                            if rel_sig not in processed_rel_signatures:
+                                try:
+                                    # Create PART_OF_CHAIN relationship
+                                    result = session.execute_write(
+                                        lambda tx: add_relationship_to_neo4j(
+                                            tx, 
+                                            {
+                                                'source': {'name': step_name, 'type': 'ReasoningStep'},
+                                                'target': {'name': chain_name, 'type': 'ReasoningChain'},
+                                                'type': 'PART_OF_CHAIN',
+                                                'properties': {'confidenceScore': 0.9}
+                                            }
+                                        )
                                     )
-                                )
-                                
-                                # Also create CONTAINS relationship (in the opposite direction)
-                                session.execute_write(
-                                    lambda tx: add_relationship_to_neo4j(
-                                        tx, 
-                                        {
-                                            'source': {'name': chain_name, 'type': 'ReasoningChain'},
-                                            'target': {'name': step['name'], 'type': 'ReasoningStep'},
-                                            'type': 'CONTAINS',
-                                            'properties': {'confidenceScore': 0.9}
-                                        }
-                                    )
-                                )
-                                chain_step_relations += 1
-                            except Exception as e:
-                                logging.error(f"Error creating step-chain relationship for {step['name']}: {str(e)}")
+                                    
+                                    # Only count and add to processed signatures if successful
+                                    if result is not None:
+                                        chain_step_relations += 1
+                                        processed_rel_signatures.add(rel_sig)
+                                    
+                                except Exception as e:
+                                    logging.error(f"Error creating PART_OF_CHAIN relationship for {step_name}: {str(e)}")
+                                    continue
                 
                 logging.info(f"Created {chain_step_relations} relationships between steps and chains")
             
@@ -382,6 +385,12 @@ async def main():
                                 rel_type = rel_match.group(2).strip()
                                 target = standardize_entity(rel_match.group(3))
                                 
+                                # Check if this relationship has already been processed
+                                rel_sig = f"{source.lower()}|{rel_type}|{target.lower()}"
+                                if rel_sig in processed_rel_signatures:
+                                    # Skip this relationship as it's a duplicate
+                                    continue
+                                
                                 # Extract context if available
                                 context = ""
                                 context_match = re.search(r'\(Context: (.+?)\)', rel)
@@ -397,12 +406,17 @@ async def main():
                                 }
                                 
                                 # Add relationship
-                                session.execute_write(
+                                result = session.execute_write(
                                     lambda tx: add_relationship_to_neo4j(tx, rel_data)
                                 )
-                                successful_relationships += 1
-                                if successful_relationships % 10 == 0:  # Log every 10th relationship
-                                    logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
+                                
+                                # Only count as successful and add to processed signatures if not None
+                                if result is not None:
+                                    # Add to processed set
+                                    processed_rel_signatures.add(rel_sig)
+                                    successful_relationships += 1
+                                else:
+                                    failed_relationships += 1
                             
                             # Try alternate format: SourceEntity(Type) -> [RELATIONSHIP_TYPE] TargetEntity(Type)
                             else:
@@ -413,6 +427,12 @@ async def main():
                                     rel_type = rel_match.group(3).strip()
                                     target_name = standardize_entity(rel_match.group(4).strip())
                                     target_type = rel_match.group(5).strip()
+                                    
+                                    # Check if this relationship has already been processed
+                                    rel_sig = f"{source_name.lower()}|{rel_type}|{target_name.lower()}"
+                                    if rel_sig in processed_rel_signatures:
+                                        # Skip this relationship as it's a duplicate
+                                        continue
                                     
                                     # Extract properties if available
                                     properties = {"confidenceScore": 0.8}
@@ -439,12 +459,17 @@ async def main():
                                     }
                                     
                                     # Add relationship
-                                    session.execute_write(
+                                    result = session.execute_write(
                                         lambda tx: add_relationship_to_neo4j(tx, rel_data)
                                     )
-                                    successful_relationships += 1
-                                    if successful_relationships % 10 == 0:  # Log every 10th relationship
-                                        logging.info(f"Added relationship: {source_name} --{rel_type}--> {target_name}")
+                                    
+                                    # Only count as successful and add to processed signatures if not None
+                                    if result is not None:
+                                        # Add to processed set
+                                        processed_rel_signatures.add(rel_sig)
+                                        successful_relationships += 1
+                                    else:
+                                        failed_relationships += 1
                                 else:
                                     logging.warning(f"Could not parse relationship string: {rel}")
                                     failed_relationships += 1
@@ -472,6 +497,12 @@ async def main():
                                 failed_relationships += 1
                                 continue
                             
+                            # Check if this relationship has already been processed
+                            rel_sig = f"{source.lower()}|{rel_type}|{target.lower()}"
+                            if rel_sig in processed_rel_signatures:
+                                # Skip this relationship as it's a duplicate
+                                continue
+                                
                             # Extract properties if available
                             rel_props = rel.get('properties', {})
                             if not isinstance(rel_props, dict):
@@ -497,12 +528,17 @@ async def main():
                             
                             try:
                                 # Add relationship
-                                session.execute_write(
+                                result = session.execute_write(
                                     lambda tx: add_relationship_to_neo4j(tx, rel_data)
                                 )
-                                successful_relationships += 1
-                                if successful_relationships % 10 == 0:  # Log every 10th relationship
-                                    logging.info(f"Added relationship: {source} --{rel_type}--> {target}")
+                                
+                                # Only count as successful and add to processed signatures if not None
+                                if result is not None:
+                                    # Add to processed set
+                                    processed_rel_signatures.add(rel_sig)
+                                    successful_relationships += 1
+                                else:
+                                    failed_relationships += 1
                             except Exception as e:
                                 logging.error(f"Neo4j error adding relationship {source} --{rel_type}--> {target}: {str(e)}")
                                 failed_relationships += 1
@@ -524,9 +560,44 @@ async def main():
                 logging.warning("No relationships were successfully stored. Check formats and database constraints.")
 
             # Process comprehensive profile relationships (if any)
+            # Note: These relationships are from the generated comprehensive profiles
+            # and are separate from the extraction data relationships processed above
             if comprehensive_profiles and 'relationships' in comprehensive_profiles:
-                logging.info(f"Processing {len(comprehensive_profiles['relationships'])} relationships from comprehensive profiles")
-                process_relationships(session, comprehensive_profiles['relationships'])
+                # We've already initialized processed_rel_signatures at the top of the relationship processing
+                # and added step-chain relationships to it, so we don't need to recreate it here
+                
+                # Extract relationship signatures from extraction data to avoid duplicates
+                for data in extracted_data:
+                    for rel in data.get('relationships', []):
+                        if isinstance(rel, dict) and 'source' in rel and 'target' in rel and 'type' in rel:
+                            source_name = rel['source'].get('name', '')
+                            target_name = rel['target'].get('name', '')
+                            rel_type = rel.get('type', '')
+                            if source_name and target_name and rel_type:
+                                # Create a signature for this relationship
+                                rel_sig = f"{source_name.lower()}|{rel_type}|{target_name.lower()}"
+                                processed_rel_signatures.add(rel_sig)
+                
+                # Filter out any relationships from comprehensive profiles that have already been processed
+                unique_relationships = []
+                for rel in comprehensive_profiles['relationships']:
+                    if isinstance(rel, dict) and 'source' in rel and 'target' in rel and 'type' in rel:
+                        source_name = rel['source'].get('name', '')
+                        target_name = rel['target'].get('name', '')
+                        rel_type = rel.get('type', '')
+                        if source_name and target_name and rel_type:
+                            # Create signature for this relationship
+                            rel_sig = f"{source_name.lower()}|{rel_type}|{target_name.lower()}"
+                            # Only add if not already processed
+                            if rel_sig not in processed_rel_signatures:
+                                unique_relationships.append(rel)
+                                processed_rel_signatures.add(rel_sig)  # Add to set to avoid duplicates within comprehensive profiles
+                
+                if unique_relationships:
+                    logging.info(f"Processing {len(unique_relationships)} unique relationships from comprehensive profiles")
+                    process_relationships(session, unique_relationships)
+                else:
+                    logging.info("No unique relationships found in comprehensive profiles - skipping")
         
         # Close connection at the end
         neo4j_conn.close()

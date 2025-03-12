@@ -128,6 +128,43 @@ class RelationshipExtractor:
         Only include relationships that are explicitly mentioned or strongly implied in the text.
         """
     
+    def _is_valid_relationship(self, relationship: Dict[str, Any]) -> bool:
+        """Check if a relationship is valid.
+        
+        Args:
+            relationship: The relationship to validate
+            
+        Returns:
+            bool: True if the relationship is valid
+        """
+        # Check for required fields
+        if not all(field in relationship for field in ["source", "target", "type"]):
+            return False
+            
+        # Validate source and target
+        for node in ["source", "target"]:
+            # Must be a dictionary with name and type
+            if not isinstance(relationship[node], dict):
+                return False
+            if not all(field in relationship[node] for field in ["name", "type"]):
+                return False
+            # Name must be non-empty
+            if not relationship[node].get("name"):
+                return False
+                
+        # Validate relationship type
+        if relationship["type"] not in RELATIONSHIP_TYPES:
+            return False
+            
+        # Validate properties if present
+        if "properties" in relationship:
+            props = relationship["properties"]
+            # If relationshipCategory is specified, it must be valid
+            if "relationshipCategory" in props and props["relationshipCategory"] not in RELATIONSHIP_CATEGORIES:
+                return False
+                
+        return True
+    
     def _extract_relationships_from_response(self, content: str) -> List[Dict[str, Any]]:
         """Extract relationship objects from the LLM response.
         
@@ -170,78 +207,10 @@ class RelationshipExtractor:
             except json.JSONDecodeError:
                 pass
         
-        # Validate and normalize relationships
-        valid_relationships = []
-        for rel in relationships:
-            if self._is_valid_relationship(rel):
-                # Ensure all required fields are present
-                normalized_rel = self._normalize_relationship(rel)
-                valid_relationships.append(normalized_rel)
+        # Filter to only valid relationships
+        valid_relationships = [rel for rel in relationships if self._is_valid_relationship(rel)]
         
         return valid_relationships
-    
-    def _is_valid_relationship(self, relationship: Dict[str, Any]) -> bool:
-        """Check if a relationship is valid.
-        
-        Args:
-            relationship: The relationship to validate
-            
-        Returns:
-            bool: True if the relationship is valid
-        """
-        # Check for required fields in modern format
-        return all(field in relationship for field in ["source", "target", "type"])
-    
-    def _normalize_relationship(self, relationship: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize a relationship by ensuring all fields are present in the modern format.
-        
-        Args:
-            relationship: The relationship to normalize
-            
-        Returns:
-            Dict[str, Any]: The normalized relationship
-        """
-        # Create a normalized relationship with default values
-        normalized = {}
-        
-        # Ensure fields are complete in modern format
-        normalized["source"] = relationship.get("source", {"name": "", "type": "Entity"})
-        normalized["target"] = relationship.get("target", {"name": "", "type": "Entity"})
-        normalized["type"] = relationship.get("type", "RELATED_TO")
-        
-        # Convert string values to objects if needed
-        if not isinstance(normalized["source"], dict):
-            normalized["source"] = {"name": str(normalized["source"]), "type": "Entity"}
-        if not isinstance(normalized["target"], dict):
-            normalized["target"] = {"name": str(normalized["target"]), "type": "Entity"}
-            
-        # Ensure source and target have name and type
-        if "name" not in normalized["source"]:
-            normalized["source"]["name"] = ""
-        if "type" not in normalized["source"]:
-            normalized["source"]["type"] = "Entity"
-        if "name" not in normalized["target"]:
-            normalized["target"]["name"] = ""
-        if "type" not in normalized["target"]:
-            normalized["target"]["type"] = "Entity"
-            
-        # Create or normalize properties
-        if "properties" not in normalized:
-            normalized["properties"] = {}
-            
-        props = normalized["properties"]
-        props["confidenceScore"] = props.get("confidenceScore", 0.5)
-        props["context"] = props.get("context", "")
-        
-        # Ensure relationship type is valid
-        if normalized["type"] not in RELATIONSHIP_TYPES:
-            normalized["type"] = "RELATED_TO"
-        
-        # Ensure relationship category is valid
-        if "relationshipCategory" in normalized["properties"] and normalized["properties"]["relationshipCategory"] not in RELATIONSHIP_CATEGORIES:
-            normalized["properties"]["relationshipCategory"] = "associative"
-        
-        return normalized
     
     def _clean_json_content(self, content: str) -> str:
         """Clean JSON content for parsing.

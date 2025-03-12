@@ -156,23 +156,31 @@ def add_node_to_neo4j(tx, node_data, node_type, label_field="name", special_hand
     if special_handling:
         processed_data = special_handling(processed_data)
     
+    # Standardize entity name if the label field is "name"
+    if label_field == "name" and processed_data.get(label_field):
+        processed_data[label_field] = standardize_entity(processed_data[label_field])
+    
     # Process list fields to strings
     for key, value in processed_data.items():
         if isinstance(value, list) and not key.endswith("_json"):
             processed_data[key] = list_to_string(value)
     
-    # Start building the query
+    # Simple merge approach - this creates or updates nodes but won't 
+    # create placeholders for relationships - that's handled separately
     query = f"""
-    MERGE (n:{node_type} {{{label_field}: ${label_field}}})
-    SET n.nodeType = '{node_type}'
+    MERGE (existing:{node_type} {{{label_field}: ${label_field}}})
+    ON CREATE 
+      SET existing.nodeType = '{node_type}'
+    ON MATCH 
+      SET existing.nodeType = '{node_type}'
     """
     
     # Add all properties from processed_data
     for key in processed_data:
-        if key != label_field:  # Skip the label field as it's already in the MERGE clause
-            query += f", n.{key} = ${key}\n"
+        if key != label_field:  # Skip the label field as it's already set
+            query += f"SET existing.{key} = ${key}\n"
     
-    query += "RETURN n"
+    query += "RETURN existing as n"
     
     # Run the query
     result = tx.run(query, **processed_data)
@@ -801,7 +809,6 @@ def add_law_to_neo4j(tx, law_data):
 def add_reasoning_chain_to_neo4j(tx, chain_data):
     """Add a reasoning chain node to Neo4j"""
     chain_name = chain_data.get("name", "")
-    logging.info(f"Creating ReasoningChain node: {chain_name}")
     
     def process_chain_data(data):
         processed = data.copy()
@@ -863,11 +870,22 @@ def add_reasoning_step_to_neo4j(tx, step_data):
     return result
 
 def add_relationship_to_neo4j(tx, relationship_data):
-    """Add a structured relationship to Neo4j following best practices"""
+    """Add a relationship between nodes in Neo4j - simplified implementation.
+    
+    This function creates a relationship between two existing nodes, handling
+    case-insensitive matching. No placeholder nodes are created.
+    
+    Args:
+        tx: Neo4j transaction
+        relationship_data: Dict containing relationship data, with source, target, and type fields
+        
+    Returns:
+        bool or None: True if relationship created, False if error, None if nodes missing
+    """
     # Skip if relationship data is incomplete
-    if not isinstance(relationship_data, dict) or 'needsProcessing' in relationship_data:
-        logging.warning("Skipping relationship that needs processing")
-        return False
+    if not isinstance(relationship_data, dict):
+        logging.warning("Skipping invalid relationship data (not a dict)")
+        return None
     
     # Extract source, target, and relationship type
     source_data = relationship_data.get('source', {})
@@ -876,270 +894,230 @@ def add_relationship_to_neo4j(tx, relationship_data):
     
     # Skip if missing critical data
     if not source_data or not target_data or not rel_type:
-        logging.warning(f"Incomplete relationship data (missing source, target, or relationship type): {relationship_data}")
-        return False
+        logging.warning(f"Incomplete relationship data (missing source, target, or relationship type)")
+        return None
     
-    source_name = source_data.get('name', '')
+    # Get names and types from source and target data
+    source_name = standardize_entity(source_data.get('name', ''))
     source_type = source_data.get('type', 'Entity')
-    target_name = target_data.get('name', '')
+    target_name = standardize_entity(target_data.get('name', ''))
     target_type = target_data.get('type', 'Entity')
     
     # Skip if missing names
     if not source_name or not target_name:
-        logging.warning(f"Missing source or target name in relationship: {relationship_data}")
-        return False
+        logging.warning(f"Missing source or target name in relationship")
+        return None
     
-    # Map for known label casing issues
-    # This maps lowercase labels to their proper cased version in the database
-    LABEL_CASE_MAP = {
-        "person": "Person",
-        "organization": "Organization",
-        "location": "Location",
-        "event": "Event",
-        "concept": "Concept",
-        "entity": "Entity",
-        "proposition": "Proposition",
-        "thought": "Thought",
-        "reasoningstep": "ReasoningStep",
-        "reasoningchain": "ReasoningChain",
-        "attribute": "Attribute",
-        "emotion": "Emotion",
-        "agent": "Agent",
-        "scientificinsight": "ScientificInsight",
-        "law": "Law"
-    }
-    
-    # Normalize source and target types for case-sensitivity
-    source_type_normalized = LABEL_CASE_MAP.get(source_type.lower(), source_type)
-    target_type_normalized = LABEL_CASE_MAP.get(target_type.lower(), target_type)
-    
-    # Log non-standard relationship types but still allow them
-    if rel_type not in RELATIONSHIP_TYPES:
-        logging.info(f"Creating non-standard relationship type: {rel_type} between {source_name} and {target_name}")
-    
-    # Extract properties
+    # Extract relationship properties
     properties = relationship_data.get('properties', {})
-    
-    # Add default confidence if not present
     if 'confidenceScore' not in properties:
         properties['confidenceScore'] = 0.7
     
-    # Determine relationship category
-    if rel_type in ["IS_A", "INSTANCE_OF", "SUB_CLASS_OF", "SUPER_CLASS_OF"]:
-        rel_category = "hierarchical"
-    elif rel_type in ["BEFORE", "AFTER", "DURING"]:
-        rel_category = "temporal"
-    elif rel_type in ["HAS_PART", "PART_OF", "PART_OF_CHAIN"]:
-        rel_category = "compositional"
-    elif rel_type in ["CAUSES", "CAUSED_BY", "INFLUENCES", "INFLUENCED_BY"]:
-        rel_category = "causal"
-    elif rel_type in ["HAS_PROPERTY", "PROPERTY_OF"]:
-        rel_category = "attributive"
-    else:
-        rel_category = "lateral"
-    
-    properties['relationshipCategory'] = rel_category
-    properties['source_type'] = source_type_normalized 
-    properties['target_type'] = target_type_normalized
-    
-    # Build property string for relationship
-    property_clauses = []
-    for key, value in properties.items():
-        property_clauses.append(f"r.{key} = ${key}")
-    
-    property_string = ", ".join(property_clauses) if property_clauses else "r.created = timestamp()"
-    
-    # Add source and target to properties for query
-    params = properties.copy()
-    params['source_name'] = source_name
-    params['target_name'] = target_name
-    
-    # Define known entity subtypes that should be handled as Entity nodes
+    # Define entity subtypes that should be handled as Entity nodes with subType
     ENTITY_SUBTYPES = ["Person", "Organization", "Location", "Artifact", "Animal"]
     
-    # Case-insensitive check for entity subtypes
-    source_is_entity_subtype = source_type_normalized in ENTITY_SUBTYPES or source_type_normalized.lower() in [x.lower() for x in ENTITY_SUBTYPES]
-    target_is_entity_subtype = target_type_normalized in ENTITY_SUBTYPES or target_type_normalized.lower() in [x.lower() for x in ENTITY_SUBTYPES]
+    # Check if source or target is an entity subtype (treated as Entity nodes with subType)
+    source_is_entity_subtype = source_type in ENTITY_SUBTYPES or source_type.lower() in [x.lower() for x in ENTITY_SUBTYPES]
+    target_is_entity_subtype = target_type in ENTITY_SUBTYPES or target_type.lower() in [x.lower() for x in ENTITY_SUBTYPES]
     
-    # First, check if the nodes exist with a case-insensitive approach
-    # For source node
-    if source_is_entity_subtype:
-        # Try to find the entity with the right subType (case insensitive)
-        find_source_query = """
-        MATCH (source:Entity)
-        WHERE source.name = $source_name 
-          AND toLower(source.subType) = toLower($subType)
-        RETURN true as source_exists, 'Entity' as label
+    # Build different queries for entity subtypes and normal nodes
+    if source_is_entity_subtype and target_is_entity_subtype:
+        # Both are entity subtypes
+        check_query = """
+        MATCH (s:Entity) 
+        WHERE toLower(s.name) = toLower($source_name) AND toLower(s.subType) = toLower($source_type)
+        RETURN s.name as node_name, 'Entity' as node_label, s.subType as node_subtype, 'source' as node_role
+        UNION
+        MATCH (t:Entity)
+        WHERE toLower(t.name) = toLower($target_name) AND toLower(t.subType) = toLower($target_type)
+        RETURN t.name as node_name, 'Entity' as node_label, t.subType as node_subtype, 'target' as node_role
         """
-        source_params = {'source_name': source_name, 'subType': source_type_normalized}
+    elif source_is_entity_subtype:
+        # Only source is entity subtype
+        check_query = """
+        MATCH (s:Entity) 
+        WHERE toLower(s.name) = toLower($source_name) AND toLower(s.subType) = toLower($source_type)
+        RETURN s.name as node_name, 'Entity' as node_label, s.subType as node_subtype, 'source' as node_role
+        UNION
+        MATCH (t)
+        WHERE toLower(t.name) = toLower($target_name)
+        RETURN t.name as node_name, labels(t)[0] as node_label, '' as node_subtype, 'target' as node_role
+        """
+    elif target_is_entity_subtype:
+        # Only target is entity subtype
+        check_query = """
+        MATCH (s) 
+        WHERE toLower(s.name) = toLower($source_name)
+        RETURN s.name as node_name, labels(s)[0] as node_label, '' as node_subtype, 'source' as node_role
+        UNION
+        MATCH (t:Entity)
+        WHERE toLower(t.name) = toLower($target_name) AND toLower(t.subType) = toLower($target_type)
+        RETURN t.name as node_name, 'Entity' as node_label, t.subType as node_subtype, 'target' as node_role
+        """
     else:
-        # Try to find the node with the label using custom casing check
-        find_source_query = """
-        CALL apoc.meta.nodeTypeProperties() YIELD nodeType
-        WITH collect(nodeType) AS nodeTypes
-        UNWIND nodeTypes AS type
-        WITH type WHERE toLower(type) = toLower($nodeType)
-        CALL apoc.cypher.run('MATCH (source:' + type + ' {name: $name}) RETURN true as exists', {name: $name}) YIELD value
-        RETURN value.exists as source_exists, type as label
+        # Neither is entity subtype - standard node lookup
+        check_query = """
+        MATCH (s) 
+        WHERE toLower(s.name) = toLower($source_name)
+        RETURN s.name as node_name, labels(s)[0] as node_label, '' as node_subtype, 'source' as node_role
+        UNION
+        MATCH (t)
+        WHERE toLower(t.name) = toLower($target_name)
+        RETURN t.name as node_name, labels(t)[0] as node_label, '' as node_subtype, 'target' as node_role
         """
-        source_params = {'nodeType': source_type_normalized, 'name': source_name}
     
-    # For target node
-    if target_is_entity_subtype:
-        # Try to find the entity with the right subType (case insensitive)
-        find_target_query = """
-        MATCH (target:Entity)
-        WHERE target.name = $target_name 
-          AND toLower(target.subType) = toLower($subType)
-        RETURN true as target_exists, 'Entity' as label
-        """
-        target_params = {'target_name': target_name, 'subType': target_type_normalized}
-    else:
-        # Try to find the node with the label using custom casing check
-        find_target_query = """
-        CALL apoc.meta.nodeTypeProperties() YIELD nodeType
-        WITH collect(nodeType) AS nodeTypes
-        UNWIND nodeTypes AS type
-        WITH type WHERE toLower(type) = toLower($nodeType)
-        CALL apoc.cypher.run('MATCH (target:' + type + ' {name: $name}) RETURN true as exists', {name: $name}) YIELD value
-        RETURN value.exists as target_exists, type as label
-        """
-        target_params = {'nodeType': target_type_normalized, 'name': target_name}
+    # Run the appropriate query
+    check_result = list(tx.run(check_query, 
+                              source_name=source_name, 
+                              target_name=target_name,
+                              source_type=source_type,
+                              target_type=target_type))
     
-    # Execute actual queries to check if nodes exist
+    # Parse check results
+    found_nodes = set()
+    exact_source_name = source_name
+    exact_target_name = target_name
+    source_label = None
+    target_label = None
+    
+    for record in check_result:
+        node_name = record.get("node_name")
+        node_label = record.get("node_label")
+        node_role = record.get("node_role")
+        
+        if node_name and node_label and node_role:
+            if node_role == "source":
+                found_nodes.add("source")
+                exact_source_name = node_name  # Use the exact case from database
+                source_label = node_label
+            elif node_role == "target":
+                found_nodes.add("target")
+                exact_target_name = node_name  # Use the exact case from database
+                target_label = node_label
+    
+    # Check if nodes exist
+    if "source" not in found_nodes:
+        return None
+    
+    if "target" not in found_nodes:
+        return None
+    
+    # If source and target nodes exist, create the relationship
     try:
-        # Try to find the source node
-        source_result = tx.run(find_source_query, **source_params).single()
-        source_exists = source_result and source_result["source_exists"]
-        source_label = source_result and source_result["label"]
+        # First check if relationship already exists
+        exists_query = f"""
+        MATCH (s)-[r:{rel_type}]->(t)
+        WHERE toLower(s.name) = toLower($source_name) AND toLower(t.name) = toLower($target_name)
+        RETURN count(r) > 0 as exists
+        """
         
-        # If the source node doesn't exist with the expected type, try to find it with any label
-        if not source_exists:
-            find_any_source_query = """
-            MATCH (source)
-            WHERE toLower(source.name) = toLower($source_name)
-            RETURN labels(source)[0] as label
-            """
-            any_source_result = tx.run(find_any_source_query, source_name=source_name).single()
-            if any_source_result:
-                source_exists = True
-                source_label = any_source_result["label"]
-                # Only log if the label is actually different (case-insensitive comparison)
-                if source_label.lower() != source_type_normalized.lower():
-                    logging.info(f"Found source node '{source_name}' with different label: {source_label} (expected: {source_type_normalized})")
-                    # Log the actual node name to help identify case mismatches
-                    actual_name_query = """
-                    MATCH (n)
-                    WHERE toLower(n.name) = toLower($name)
-                    RETURN n.name as actual_name
-                    LIMIT 1
-                    """
-                    actual_name_result = tx.run(actual_name_query, name=source_name).single()
-                    if actual_name_result and actual_name_result["actual_name"] != source_name:
-                        logging.info(f"Case mismatch - Actual node name: '{actual_name_result['actual_name']}', Requested: '{source_name}'")
+        exists_result = tx.run(exists_query, source_name=exact_source_name, target_name=exact_target_name).single()
+        if exists_result and exists_result["exists"]:
+            # Relationship already exists
+            return True
         
-        # Try to find the target node
-        target_result = tx.run(find_target_query, **target_params).single()
-        target_exists = target_result and target_result["target_exists"]
-        target_label = target_result and target_result["label"]
+        # Create relationship
+        properties_str = ", ".join(f"r.{key} = ${key}" for key in properties.keys())
+        if not properties_str:
+            properties_str = "r.created = timestamp()"
         
-        # If the target node doesn't exist with the expected type, try to find it with any label
-        if not target_exists:
-            find_any_target_query = """
-            MATCH (target)
-            WHERE toLower(target.name) = toLower($target_name)
-            RETURN labels(target)[0] as label
-            """
-            any_target_result = tx.run(find_any_target_query, target_name=target_name).single()
-            if any_target_result:
-                target_exists = True
-                target_label = any_target_result["label"]
-                # Only log if the label is actually different (case-insensitive comparison)
-                if target_label.lower() != target_type_normalized.lower():
-                    logging.info(f"Found target node '{target_name}' with different label: {target_label} (expected: {target_type_normalized})")
-                    # Log the actual node name to help identify case mismatches
-                    actual_name_query = """
-                    MATCH (n)
-                    WHERE toLower(n.name) = toLower($name)
-                    RETURN n.name as actual_name
-                    LIMIT 1
-                    """
-                    actual_name_result = tx.run(actual_name_query, name=target_name).single()
-                    if actual_name_result and actual_name_result["actual_name"] != target_name:
-                        logging.info(f"Case mismatch - Actual node name: '{actual_name_result['actual_name']}', Requested: '{target_name}'")
-    except Exception as e:
-        logging.warning(f"Error checking node existence: {str(e)}")
-        # If query fails due to non-existent label, try with the original type
-        # This is often due to the label not existing in the database yet
-        source_exists = False
-        target_exists = False
-    
-    # If either node doesn't exist, log the error and skip creating this relationship
-    if not source_exists or not target_exists:
-        # Record missing nodes for later reporting
+        create_query = f"""
+        MATCH (s)
+        WHERE toLower(s.name) = toLower($source_name)
+        MATCH (t)
+        WHERE toLower(t.name) = toLower($target_name)
+        CREATE (s)-[r:{rel_type}]->(t)
+        SET {properties_str}
+        RETURN r
+        """
         
-        # Add to global missing nodes counter (these will be reported at the end)
-        global missing_source_nodes, missing_target_nodes
-        if not source_exists:
-            if 'missing_source_nodes' not in globals():
-                global missing_source_nodes
-                missing_source_nodes = set()
-            missing_source_nodes.add((source_name, source_type_normalized))
-        
-        if not target_exists:
-            if 'missing_target_nodes' not in globals():
-                global missing_target_nodes
-                missing_target_nodes = set()
-            missing_target_nodes.add((target_name, target_type_normalized))
-        
-        return False
-    
-    # Create the relationship using the actual labels of the nodes
-    relationship_query = f"""
-    MATCH (s:{source_label})
-    WHERE toLower(s.name) = toLower($source_name)
-    MATCH (t:{target_label})
-    WHERE toLower(t.name) = toLower($target_name)
-    MERGE (s)-[r:{rel_type}]->(t)
-    SET {property_string}
-    RETURN r
-    """
-    
-    try:
-        result = tx.run(relationship_query, **params)
+        result = tx.run(create_query, source_name=exact_source_name, target_name=exact_target_name, **properties)
         summary = result.consume()
         
         if summary.counters.relationships_created > 0:
-            logging.info(f"Created relationship: {source_name} -[{rel_type}]-> {target_name}")
-            return True
-        elif summary.counters.properties_set > 0:
-            logging.info(f"Updated relationship properties: {source_name} -[{rel_type}]-> {target_name}")
             return True
         else:
-            logging.warning(f"No relationship created or updated: {source_name} -[{rel_type}]-> {target_name}")
+            logging.warning(f"Failed to create relationship: {exact_source_name} -[{rel_type}]-> {exact_target_name}")
             return False
+            
     except Exception as e:
-        logging.error(f"Error creating relationship {source_name} -[{rel_type}]-> {target_name}: {str(e)}")
+        logging.error(f"Error creating relationship: {str(e)}")
         
-        # If there's still an error, try one last approach - create without specifying labels
+        # Try a smarter fallback that respects entity subtypes
         try:
-            fallback_query = f"""
-            MATCH (s)
-            WHERE toLower(s.name) = toLower($source_name)
+            # First check if the nodes actually exist with any subtype/label
+            debug_query = """
+            MATCH (s) 
+            WHERE toLower(s.name) = toLower($source_name) 
+            RETURN s.name as name, labels(s) as labels, s.subType as subType, 'source' as type
+            UNION
             MATCH (t)
             WHERE toLower(t.name) = toLower($target_name)
-            MERGE (s)-[r:{rel_type}]->(t)
-            SET {property_string}
+            RETURN t.name as name, labels(t) as labels, t.subType as subType, 'target' as type
+            """
+            
+            debug_result = list(tx.run(debug_query, source_name=source_name, target_name=target_name))
+            
+            if debug_result:
+                # Log what was found to help diagnose the issue
+                for i, record in enumerate(debug_result):
+                    node_type = record.get("type")
+                    node_name = record.get("name")
+                    node_labels = record.get("labels")
+                    node_subtype = record.get("subType")
+                    logging.info(f"Found {node_type} node: '{node_name}' with labels={node_labels}, subType={node_subtype}")
+            
+            # Try both ways - first with Entity nodes that may have subType
+            if source_is_entity_subtype or target_is_entity_subtype:
+                # More specific query for entity subtypes
+                entity_fallback = f"""
+                OPTIONAL MATCH (s:Entity) 
+                WHERE toLower(s.name) = toLower($source_name) AND 
+                      (NOT $source_is_entity_subtype OR toLower(s.subType) = toLower($source_type))
+                OPTIONAL MATCH (t)
+                WHERE toLower(t.name) = toLower($target_name) AND
+                      (($target_is_entity_subtype AND t:Entity AND toLower(t.subType) = toLower($target_type)) OR
+                       (NOT $target_is_entity_subtype AND ($target_label is null OR $target_label in labels(t))))
+                WITH s, t
+                WHERE s IS NOT NULL AND t IS NOT NULL
+                CREATE (s)-[r:{rel_type}]->(t)
+                RETURN r
+                """
+                
+                fallback_params = {
+                    'source_name': exact_source_name, 
+                    'target_name': exact_target_name,
+                    'source_type': source_type,
+                    'target_type': target_type,
+                    'source_is_entity_subtype': source_is_entity_subtype,
+                    'target_is_entity_subtype': target_is_entity_subtype,
+                    'source_label': source_label,
+                    'target_label': target_label
+                }
+                
+                result = tx.run(entity_fallback, **fallback_params)
+                summary = result.consume()
+                
+                if summary.counters.relationships_created > 0:
+                    logging.info(f"Created relationship using entity-aware fallback: {exact_source_name} -[{rel_type}]-> {exact_target_name}")
+                    return True
+            
+            # Simplest possible fallback as a last resort
+            fallback_query = f"""
+            MATCH (s), (t)
+            WHERE toLower(s.name) = toLower($source_name) AND toLower(t.name) = toLower($target_name)
+            CREATE (s)-[r:{rel_type}]->(t)
             RETURN r
             """
-            result = tx.run(fallback_query, **params)
+            
+            result = tx.run(fallback_query, source_name=exact_source_name, target_name=exact_target_name)
             summary = result.consume()
             
-            if summary.counters.relationships_created > 0 or summary.counters.properties_set > 0:
-                logging.info(f"Added relationship using fallback: {source_name} --{rel_type}--> {target_name}")
+            if summary.counters.relationships_created > 0:
+                logging.info(f"Created relationship using simple fallback: {exact_source_name} -[{rel_type}]-> {exact_target_name}")
                 return True
         except Exception as e2:
-            logging.error(f"Fallback also failed: {str(e2)}")
+            logging.error(f"Fallback query also failed: {str(e2)}")
         
         return False
 
@@ -1147,111 +1125,52 @@ def process_relationships(session, relationships):
     """Process a list of relationships and add them to Neo4j"""
     success_count = 0
     skipped_count = 0
+    missing_count = 0
     
-    # Initialize global tracking of missing nodes
-    global missing_source_nodes, missing_target_nodes
-    if 'missing_source_nodes' not in globals():
-        missing_source_nodes = set()
-    if 'missing_target_nodes' not in globals():
-        missing_target_nodes = set()
+    # Track missing nodes for reporting
+    missing_sources = set()
+    missing_targets = set()
     
     for relationship in relationships:
         try:
             with session.begin_transaction() as tx:
-                if add_relationship_to_neo4j(tx, relationship):
+                result = add_relationship_to_neo4j(tx, relationship)
+                if result is True:
                     success_count += 1
+                elif result is None:
+                    # Node(s) missing - track which ones
+                    source = relationship.get('source', {}).get('name')
+                    source_type = relationship.get('source', {}).get('type', 'Entity')
+                    target = relationship.get('target', {}).get('name')
+                    target_type = relationship.get('target', {}).get('type', 'Entity')
+                    
+                    # Add to missing sets for later reporting
+                    if source:
+                        missing_sources.add((source, source_type))
+                    if target:
+                        missing_targets.add((target, target_type))
+                    
+                    missing_count += 1
                 else:
+                    # False means error occurred
                     skipped_count += 1
         except Exception as e:
             logging.error(f"Error adding relationship to Neo4j: {str(e)}")
             skipped_count += 1
     
     # Log relationship statistics
-    logging.info(f"Added {success_count} relationships to Neo4j")
-    logging.info(f"Skipped {skipped_count} relationships due to errors or missing nodes")
+    total_processed = success_count + skipped_count + missing_count
+    success_percentage = (success_count / total_processed) * 100 if total_processed > 0 else 0
     
-    # Report missing nodes
-    if missing_source_nodes:
-        logging.warning(f"Missing source nodes prevented {len(missing_source_nodes)} relationships")
-        for name, node_type in sorted(missing_source_nodes):
-            logging.warning(f"  Missing source: {name} (type: {node_type})")
+    logging.info(f"Successfully stored {success_count} out of {total_processed} relationships ({success_percentage:.1f}%)")
     
-    if missing_target_nodes:
-        logging.warning(f"Missing target nodes prevented {len(missing_target_nodes)} relationships")
-        for name, node_type in sorted(missing_target_nodes):
-            logging.warning(f"  Missing target: {name} (type: {node_type})")
+    if missing_count > 0:
+        logging.info(f"Missing node count: {missing_count} relationships skipped")
+        logging.info(f"Missing source nodes: {len(missing_sources)}")
+        logging.info(f"Missing target nodes: {len(missing_targets)}")
     
     return success_count
 
 
-def create_placeholder_node(tx, name, node_type):
-    """Create a minimal placeholder node of the specified type with just a name
-    
-    Args:
-        tx: Neo4j transaction
-        name: Name of the node to create
-        node_type: Type/label of the node (Entity, Person, Location, etc.)
-    
-    Returns:
-        bool: True if node was created, False otherwise
-    """
-    # Skip if name is empty
-    if not name:
-        return False
-    
-    # Define known entity subtypes that should be created as Entity nodes with subType
-    ENTITY_SUBTYPES = ["Person", "Organization", "Location", "Artifact", "Animal"]
-    
-    # Map for known label casing issues
-    # This maps lowercase labels to their proper cased version in the database
-    LABEL_CASE_MAP = {
-        "person": "Person",
-        "organization": "Organization",
-        "location": "Location",
-        "event": "Event",
-        "concept": "Concept",
-        "entity": "Entity",
-        "proposition": "Proposition",
-        "thought": "Thought",
-        "reasoningstep": "ReasoningStep",
-        "reasoningchain": "ReasoningChain",
-        "attribute": "Attribute",
-        "emotion": "Emotion",
-        "agent": "Agent",
-        "scientificinsight": "ScientificInsight",
-        "law": "Law"
-    }
-    
-    # Normalize the node type for case-sensitivity
-    node_type_normalized = LABEL_CASE_MAP.get(node_type.lower(), node_type)
-    
-    try:
-        if node_type_normalized in ENTITY_SUBTYPES:
-            # For entity subtypes, create an Entity node with appropriate subType
-            query = """
-            CREATE (e:Entity {name: $name, nodeType: 'Entity', subType: $subType, 
-                description: 'Placeholder node', 
-                source: 'Auto-created for relationship', 
-                isPlaceholder: true})
-            RETURN e
-            """
-            result = tx.run(query, name=name, subType=node_type_normalized)
-        else:
-            # For other node types, create with the specific label
-            query = f"""
-            CREATE (e:{node_type_normalized} {{name: $name, nodeType: $node_type, 
-                description: 'Placeholder node', 
-                source: 'Auto-created for relationship',
-                isPlaceholder: true}})
-            RETURN e
-            """
-            result = tx.run(query, name=name, node_type=node_type_normalized)
-        
-        summary = result.consume()
-        if summary.counters.nodes_created > 0:
-            logging.info(f"Created placeholder {node_type_normalized} node: '{name}'")
-            return True
-        return False
-    except Exception as e:
-        logging.error(f"Error creating placeholder node '{name}' of type {node_type_normalized}: {str(e)}")
-        return False 
+# Placeholder node creation has been removed as per requirements.
+# All nodes should be created during the extraction process, not automatically. 
