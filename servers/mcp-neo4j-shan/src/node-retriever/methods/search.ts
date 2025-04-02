@@ -99,7 +99,38 @@ export function processSearchResults(records: any[]): KnowledgeGraph {
       // and skip embedding fields which should not be returned to the client
       if (key !== 'name' && key !== 'nodeType' && key !== 'observations' && 
           key !== 'embedding' && !key.endsWith('Embedding')) {
-        (entity as any)[key] = entityNode.properties[key];
+        
+        const value = entityNode.properties[key];
+        
+        // Check if the value is a Neo4j date/time object with low/high properties
+        if (value && typeof value === 'object' && 
+            ('low' in value || 
+             (value.year && typeof value.year === 'object' && 'low' in value.year))) {
+          
+          // Handle direct Neo4j Integer objects
+          if ('low' in value && 'high' in value) {
+            (entity as any)[key] = value.low;
+          }
+          // Handle date/time objects with year, month, day etc. as Neo4j Integer objects
+          else if (value.year && typeof value.year === 'object' && 'low' in value.year) {
+            try {
+              const dateString = `${value.year.low}-${value.month?.low || 1}-${value.day?.low || 1}`;
+              const timeString = `${value.hour?.low || 0}:${value.minute?.low || 0}:${value.second?.low || 0}`;
+              (entity as any)[key] = `${dateString}T${timeString}`;
+            } catch (e) {
+              // If anything goes wrong with date formatting, use the original value
+              (entity as any)[key] = value;
+            }
+          }
+          // Otherwise use the original value
+          else {
+            (entity as any)[key] = value;
+          }
+        } 
+        // For regular values, copy as-is
+        else {
+          (entity as any)[key] = value;
+        }
       }
     }
     

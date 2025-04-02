@@ -99,3 +99,67 @@ const embedding = embeddingResult.records[0]?.get('embedding');
 2. Don't assume node embeddings exist in the database - always check
 3. Be cautious with embedding dimensions - ensure they match your vector index configuration
 4. Remember that OpenAI embedding API calls have usage costs - optimize where possible
+5. Never pass Neo4j node objects directly as parameters in Cypher queries - extract relevant properties like IDs instead
+6. Always exclude embedding fields from the final results returned to clients
+
+## Neo4j-Specific Considerations
+
+### 1. Handling Node Objects in Cypher Queries
+
+When working with node objects from previous query results:
+
+```typescript
+// ❌ INCORRECT: Passing Neo4j node objects directly as parameters
+const result = await session.executeRead(tx => tx.run(`
+  CALL apoc.path.subgraphAll($startNodes, {...})
+`, { startNodes }));
+
+// ✅ CORRECT: Extract node IDs and use them in the query
+const startNodeIds = startNodes.map(node => node.identity);
+const result = await session.executeRead(tx => tx.run(`
+  MATCH (startNode)
+  WHERE id(startNode) IN $startNodeIds
+  CALL apoc.path.subgraphAll(startNode, {...})
+`, { startNodeIds }));
+```
+
+### 2. Excluding Embedding Fields & Simplifying Neo4j Data Types
+
+When processing Neo4j nodes before returning to clients:
+
+```typescript
+// ❌ INCORRECT: Including all properties (with large embedding vectors)
+for (const key in entityNode.properties) {
+  if (key !== 'name' && key !== 'nodeType') {
+    entity[key] = entityNode.properties[key];
+  }
+}
+
+// ✅ CORRECT: Explicitly excluding embedding fields and simplifying Neo4j data types
+for (const key in entityNode.properties) {
+  if (key !== 'name' && key !== 'nodeType' && 
+      key !== 'embedding' && !key.endsWith('Embedding')) {
+      
+    const value = entityNode.properties[key];
+    
+    // Simplify Neo4j Integer objects
+    if (value && typeof value === 'object' && 'low' in value && 'high' in value) {
+      entity[key] = value.low; // Just use the 'low' part of Neo4j Integers
+    }
+    // Simplify Neo4j DateTime objects
+    else if (value && typeof value === 'object' && 
+             value.year && typeof value.year === 'object' && 'low' in value.year) {
+      // Format as ISO-like date string
+      const dateString = `${value.year.low}-${value.month.low}-${value.day.low}`;
+      const timeString = `${value.hour.low}:${value.minute.low}:${value.second.low}`;
+      entity[key] = `${dateString}T${timeString}`;
+    }
+    // Regular values
+    else {
+      entity[key] = value;
+    }
+  }
+}
+```
+
+These patterns help avoid common errors like "It is not allowed to pass nodes in query parameters" and prevent large embedding vectors from being included in API responses. They also simplify Neo4j's verbose date/time and integer representations to make the results more readable and user-friendly.
