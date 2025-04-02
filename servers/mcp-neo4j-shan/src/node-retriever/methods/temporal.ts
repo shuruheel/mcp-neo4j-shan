@@ -9,7 +9,7 @@ import { processSearchResults, vectorSearch } from './search.js';
  * @param neo4jDriver - Neo4j driver instance
  * @param startNodeName - The name of the node to start the temporal sequence from
  * @param direction - The direction of the temporal sequence: 'forward' (later events), 'backward' (earlier events), or 'both'
- * @param maxEvents - Maximum number of events to retrieve in the sequence
+ * @param maxEvents - DEPRECATED - Maximum number of events to retrieve (hardcoded to 27 internally)
  * @param nodeTypes - Types of nodes to include in the sequence (default: all types)
  * @returns A promise resolving to a KnowledgeGraph with the temporal sequence
  */
@@ -17,15 +17,14 @@ export async function getTemporalSequence(
   neo4jDriver: Neo4jDriver,
   startNodeName: string, 
   direction: 'forward' | 'backward' | 'both' = 'both',
-  maxEvents: number = 20,
+  maxEvents: number = 27, // Keep parameter for API compatibility but use hardcoded limit
   nodeTypes: string[] = [
     'Event', 'Concept', 'Entity', 'ScientificInsight', 
     'Law', 'Thought', 'ReasoningChain', 'ReasoningStep',
     'Attribute', 'Proposition', 'Emotion', 'Agent'
   ]
 ): Promise<KnowledgeGraph> {
-  // Ensure maxEvents is a valid integer for Neo4j LIMIT clause
-  maxEvents = Math.floor(maxEvents);
+  // We use a hardcoded limit of 27 nodes for consistency
   const session = neo4jDriver.session();
   
   try {
@@ -104,6 +103,7 @@ export async function getTemporalSequence(
       // Extract nodes from path
       WITH DISTINCT nodes(path) AS pathNodes
       UNWIND pathNodes AS node
+      WITH node
       
       // Ensure node meets type criteria
       WHERE (${typeFilter})
@@ -125,14 +125,13 @@ export async function getTemporalSequence(
       LIMIT 27
     `, {
       startNodeName,
-      maxEvents,
       relationshipFilter
     }));
     
     console.error(`Found ${result.records.length} nodes in temporal sequence`);
     
     // If we didn't find any temporal relationships, try using timestamp or date properties
-    if (result.records.length === 0 && (direction === 'both' || direction === 'forward')) {
+    if (result.records.length === 0) {
       console.error(`No temporal relationships found. Trying timestamp-based sequence.`);
       
       // Use vector embeddings to find semantically related events and sort by timestamp
@@ -153,7 +152,7 @@ export async function getTemporalSequence(
              END as indexName
         
         // Use vector search to find related nodes using embedding
-        CALL db.index.vector.queryNodes(indexName, $maxEvents, start.embedding)
+        CALL db.index.vector.queryNodes(indexName, 27, start.embedding)
         YIELD node, score
         WHERE score >= 0.7
           AND node <> start
@@ -172,7 +171,7 @@ export async function getTemporalSequence(
         // Order by time based on direction
         ORDER BY 
           CASE WHEN $direction = 'backward' THEN timeValue END DESC,
-          CASE WHEN $direction = 'forward' OR $direction = 'both' THEN timeValue END ASC,
+          CASE WHEN $direction IN ['forward', 'both'] THEN timeValue END ASC,
           score DESC
         
         // Get relationships for each node
@@ -190,7 +189,6 @@ export async function getTemporalSequence(
         LIMIT 27
       `, {
         startNodeName,
-        maxEvents,
         direction
       }));
       
@@ -201,9 +199,11 @@ export async function getTemporalSequence(
       }
     }
     
-    // Include the start node in the results
+    // If we have results from the temporal traversal, include the start node in them
     if (result.records.length > 0) {
-      const startNodeResult = await session.executeRead(tx => tx.run(`
+      // Get the start node and combine with the temporal sequence in a single transaction
+      const combinedResult = await session.executeRead(tx => tx.run(`
+        // First get the start node with its relationships
         MATCH (start {name: $startNodeName})
         
         OPTIONAL MATCH (start)-[outRel]->(connected)
@@ -211,6 +211,7 @@ export async function getTemporalSequence(
         
         OPTIONAL MATCH (other)-[inRel]->(start)
         
+        // Return start node as the first result
         RETURN 
           start as entity,
           outRels as relations,
@@ -218,7 +219,7 @@ export async function getTemporalSequence(
       `, { startNodeName }));
       
       // Combine the results
-      const combinedRecords = [...startNodeResult.records, ...result.records];
+      const combinedRecords = [...combinedResult.records, ...result.records];
       return processSearchResults(combinedRecords);
     }
     
