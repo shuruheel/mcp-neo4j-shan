@@ -2,7 +2,8 @@ import { Driver as Neo4jDriver } from 'neo4j-driver';
 import { KnowledgeGraph } from '../types/index.js';
 import { 
   robustSearch, 
-  searchNodesWithFuzzyMatching 
+  vectorSearch,
+  searchNodesWithVectorEmbeddings
 } from './methods/search.js';
 import { 
   exploreContextWeighted,
@@ -22,18 +23,17 @@ import {
 } from './methods/reasoning.js';
 
 /**
- * Neo4jRetriever: Main class for graph retrieval with cognitive-science based strategies
+ * Neo4jRetriever: Main class for graph retrieval using vector embeddings
  * 
- * This class implements retrieval methods that mirror human memory access patterns,
- * including weighted relationship traversal, context-enhanced relationships,
- * and various retrieval strategies like spreading activation and targeted search.
+ * This class implements efficient retrieval methods using Neo4j's vector search capabilities,
+ * combined with graph traversal for comprehensive knowledge exploration.
  */
 export class Neo4jRetriever {
   private neo4jDriver: Neo4jDriver;
   
   constructor(neo4jDriver: Neo4jDriver) {
     this.neo4jDriver = neo4jDriver;
-    console.error('Neo4jRetriever initialized with cognitive-science based retrieval strategies');
+    console.error('Neo4jRetriever initialized with vector embedding-based retrieval strategies');
   }
   
   /**
@@ -53,44 +53,68 @@ export class Neo4jRetriever {
   }
   
   /**
-   * Performs a robust search using multiple strategies
+   * Performs a search using vector embeddings
    * 
    * @param searchQuery Query string to search for
    * @returns Promise resolving to a KnowledgeGraph
    */
   async robustSearch(searchQuery: string): Promise<KnowledgeGraph> {
-    return robustSearch(this.neo4jDriver, searchQuery);
+    try {
+      console.error(`Generating embedding for search query: ${searchQuery}`);
+      const { generateQueryEmbedding } = await import('./methods/search.js');
+      const queryEmbedding = await generateQueryEmbedding(searchQuery);
+      return robustSearch(this.neo4jDriver, queryEmbedding);
+    } catch (error) {
+      console.error(`Error in robustSearch: ${error}`);
+      throw error;
+    }
   }
   
   /**
-   * Searches for nodes with fuzzy matching by node type
+   * Performs a targeted vector search for a specific node type
+   * 
+   * @param searchQuery Query string to search for
+   * @param nodeType Type of node to search for
+   * @param limit Maximum number of results to return
+   * @param threshold Similarity threshold (0-1)
+   * @returns Promise resolving to a KnowledgeGraph
+   */
+  async vectorSearch(
+    searchQuery: string,
+    nodeType?: string,
+    limit: number = 10,
+    threshold: number = 0.75
+  ): Promise<KnowledgeGraph> {
+    try {
+      console.error(`Generating embedding for vector search: ${searchQuery}`);
+      const { generateQueryEmbedding } = await import('./methods/search.js');
+      const queryEmbedding = await generateQueryEmbedding(searchQuery);
+      return vectorSearch(this.neo4jDriver, queryEmbedding, nodeType, limit, threshold);
+    } catch (error) {
+      console.error(`Error in vectorSearch: ${error}`);
+      throw error;
+    }
+  }
+  
+  /**
+   * Searches for nodes by type with vector embeddings
    * 
    * @param searchTerms Search terms for different node types
    * @returns Promise resolving to a KnowledgeGraph
    */
   async searchNodesByType(
     searchTerms: {
-      entities?: string[],
-      concepts?: string[],
-      events?: string[],
-      attributes?: string[],
-      propositions?: string[],
-      emotions?: string[],
-      agents?: string[],
-      scientificInsights?: string[],
-      laws?: string[],
-      locations?: string[],
-      thoughts?: string[],
-      reasoningChains?: string[],
-      reasoningSteps?: string[],
-      personTraits?: string[],
-      personalityTypes?: string[],
-      emotionalDispositions?: string[],
-      ethicalFrameworks?: string[],
-      fuzzyThreshold?: number
+      entities?: string,
+      concepts?: string,
+      persons?: string,
+      propositions?: string,
+      reasoningChains?: string,
+      thoughts?: string,
+      limit?: number,
+      threshold?: number
     }
   ): Promise<KnowledgeGraph> {
-    return searchNodesWithFuzzyMatching(this.neo4jDriver, searchTerms);
+    return searchNodesWithVectorEmbeddings(this.neo4jDriver, searchTerms);
   }
   
   /**
@@ -108,7 +132,8 @@ export class Neo4jRetriever {
       excludeTypes?: string[],
       maxDepth?: number,
       minWeight?: number,
-      includeRelationships?: string[]
+      includeRelationships?: string[],
+      threshold?: number
     } = {}
   ): Promise<KnowledgeGraph> {
     const maxDepth = options.maxDepth || 2;
@@ -123,13 +148,14 @@ export class Neo4jRetriever {
         maxNodes: options.maxNodes,
         includeTypes: options.includeTypes,
         excludeTypes: options.excludeTypes,
-        includeRelationships: options.includeRelationships
+        includeRelationships: options.includeRelationships,
+        threshold: options.threshold
       }
     );
   }
   
   /**
-   * Finds conceptual associations between nodes
+   * Finds conceptual associations between nodes using vector similarity
    * 
    * @param nodeName The central node to find associations for
    * @param options Configuration options
@@ -140,7 +166,8 @@ export class Neo4jRetriever {
     options: {
       maxAssociations?: number,
       minSharedConnections?: number,
-      nodeTypes?: string[]
+      nodeTypes?: string[],
+      threshold?: number
     } = {}
   ): Promise<KnowledgeGraph> {
     return findConceptualAssociations(this.neo4jDriver, nodeName, options);
@@ -183,15 +210,15 @@ export class Neo4jRetriever {
    * 
    * @param startNode Optional starting node
    * @param maxLength Maximum length of causal chains to retrieve
-   * @param includeProbable Whether to include probable causal relationships
+   * @param threshold Similarity threshold for vector search
    * @returns Promise resolving to a KnowledgeGraph
    */
   async traceCausalChains(
     startNode?: string,
     maxLength: number = 5,
-    includeProbable: boolean = true
+    threshold: number = 0.75
   ): Promise<KnowledgeGraph> {
-    return traceCausalChains(this.neo4jDriver, startNode, maxLength, includeProbable);
+    return traceCausalChains(this.neo4jDriver, startNode, maxLength, threshold);
   }
   
   /**
@@ -258,4 +285,4 @@ export class Neo4jRetriever {
   ): Promise<KnowledgeGraph> {
     return getReasoningAnalytics(this.neo4jDriver, filter);
   }
-} 
+}

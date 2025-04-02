@@ -1,11 +1,10 @@
 import { Driver as Neo4jDriver } from 'neo4j-driver';
-import { Entity, Relation, EnhancedRelation } from '../../types/index.js';
+import { Entity, Relation } from '../../types/index.js';
 import { KnowledgeGraph } from '../../types/index.js';
-import { processSearchResults } from './search.js';
+import { processSearchResults, vectorSearch } from './search.js';
 
 /**
  * Retrieves a temporal sequence of related events and concepts starting from a given node.
- * This implements the feature to visualize temporal sequences based on cognitive science principles.
  * 
  * @param neo4jDriver - Neo4j driver instance
  * @param startNodeName - The name of the node to start the temporal sequence from
@@ -25,10 +24,55 @@ export async function getTemporalSequence(
     'Attribute', 'Proposition', 'Emotion', 'Agent'
   ]
 ): Promise<KnowledgeGraph> {
+  // Ensure maxEvents is a valid integer for Neo4j LIMIT clause
+  maxEvents = Math.floor(maxEvents);
   const session = neo4jDriver.session();
   
   try {
     console.error(`Finding temporal sequence from "${startNodeName}" in direction: ${direction}`);
+    
+    // First check if the node exists by exact name
+    const nodeCheck = await session.executeRead(tx => tx.run(`
+      MATCH (n {name: $startNodeName})
+      RETURN n
+    `, { startNodeName }));
+    
+    if (nodeCheck.records.length === 0) {
+      console.error(`No exact match for node: ${startNodeName}. Using vector search.`);
+      
+      // Generate embedding for the search term
+      console.error(`Generating embedding for search term: ${startNodeName}`);
+      
+      try {
+        // Import the embedding generator
+        const { generateQueryEmbedding } = await import('./search.js');
+        
+        // Generate embedding for the search term
+        const queryEmbedding = await generateQueryEmbedding(startNodeName);
+        
+        // Now we can perform vector search with the embedding
+        const searchResult = await vectorSearch(
+          neo4jDriver,
+          queryEmbedding,
+          undefined, // search across all indexes
+          1,  // limit to top match
+          0.75 // threshold
+        );
+        
+        if (searchResult.entities.length === 0) {
+          console.error(`No node found matching: ${startNodeName}`);
+          return { entities: [], relations: [] };
+        }
+        
+        // Use the best matching node name
+        startNodeName = searchResult.entities[0].name;
+        console.error(`Using best matching node: ${startNodeName}`);
+      } catch (error) {
+        console.error(`Error generating embedding: ${error}`);
+        return { entities: [], relations: [] };
+      }
+      
+    }
     
     // Generate type filter
     const typeFilter = nodeTypes.map(type => `node:${type}`).join(' OR ');
@@ -43,15 +87,15 @@ export async function getTemporalSequence(
       relationshipFilter = 'FOLLOWS>|CAUSES>|NEXT>|AFTER>|<FOLLOWS|<CAUSES|<NEXT|<AFTER|PRECEDES>|CAUSED_BY>|PREVIOUS>|BEFORE>';
     }
     
-    // Use APOC path expansion procedure for more efficient and flexible path discovery
+    // Use APOC path expansion procedure for efficient path discovery
     const result = await session.executeRead(tx => tx.run(`
       // Start with the node by name
-      MATCH (start:Memory {name: $startNodeName})
+      MATCH (start {name: $startNodeName})
       
-      // Use APOC path expansion with proper relationship filter
+      // Use APOC path expansion with temporal relationship filter
       CALL apoc.path.expandConfig(start, {
         relationshipFilter: $relationshipFilter,
-        labelFilter: $labelFilter,
+        labelFilter: "",
         uniqueness: "NODE_GLOBAL",
         minLevel: 1,
         maxLevel: 3
@@ -65,44 +109,11 @@ export async function getTemporalSequence(
       WHERE (${typeFilter})
       
       // Get temporal relationship to start node
-      OPTIONAL MATCH (start)-[r1:FOLLOWS|PRECEDES|CAUSED_BY|CAUSES|NEXT|PREVIOUS|BEFORE|AFTER]->(node)
-      OPTIONAL MATCH (node)-[r2:FOLLOWS|PRECEDES|CAUSED_BY|CAUSES|NEXT|PREVIOUS|BEFORE|AFTER]->(start)
-      
-      // Calculate time position relative to start node
-      WITH start, node,
-           CASE 
-             WHEN (start)-[:FOLLOWS]->(node) THEN -1
-             WHEN (node)-[:FOLLOWS]->(start) THEN 1
-             WHEN (start)-[:PRECEDES]->(node) THEN 1
-             WHEN (node)-[:PRECEDES]->(start) THEN -1
-             WHEN (start)-[:CAUSED_BY]->(node) THEN -1
-             WHEN (node)-[:CAUSED_BY]->(start) THEN 1
-             WHEN (start)-[:CAUSES]->(node) THEN 1
-             WHEN (node)-[:CAUSES]->(start) THEN -1
-             WHEN (start)-[:NEXT]->(node) THEN 1
-             WHEN (node)-[:NEXT]->(start) THEN -1
-             WHEN (start)-[:PREVIOUS]->(node) THEN -1
-             WHEN (node)-[:PREVIOUS]->(start) THEN 1
-             WHEN (start)-[:BEFORE]->(node) THEN -1
-             WHEN (node)-[:BEFORE]->(start) THEN 1
-             WHEN (start)-[:AFTER]->(node) THEN 1
-             WHEN (node)-[:AFTER]->(start) THEN -1
-             // If no direct relationship, calculate based on timestamps or dates if available
-             WHEN node.timestamp IS NOT NULL AND start.timestamp IS NOT NULL THEN
-               CASE WHEN node.timestamp > start.timestamp THEN 1 ELSE -1 END
-             WHEN node.startDate IS NOT NULL AND start.startDate IS NOT NULL THEN
-               CASE WHEN node.startDate > start.startDate THEN 1 ELSE -1 END
-             ELSE 0
-           END as sequenceOrder
-      
-      // Order by temporal sequence
-      ORDER BY sequenceOrder
-      LIMIT $maxEvents
+      WITH node, $startNodeName as startNodeName
       
       // Get relationships for each node
-      WITH node, sequenceOrder
       OPTIONAL MATCH (node)-[outRel]->(connected)
-      WITH node, sequenceOrder, collect(outRel) as outRels
+      WITH node, collect(outRel) as outRels
       
       OPTIONAL MATCH (other)-[inRel]->(node)
       
@@ -110,21 +121,110 @@ export async function getTemporalSequence(
       RETURN 
         node as entity,
         outRels as relations,
-        collect(inRel) as inRelations,
-        sequenceOrder
-      ORDER BY sequenceOrder
+        collect(inRel) as inRelations
+      LIMIT 27
     `, {
       startNodeName,
       maxEvents,
-      relationshipFilter,
-      labelFilter: '+' + nodeTypes.join('|')
+      relationshipFilter
     }));
     
     console.error(`Found ${result.records.length} nodes in temporal sequence`);
     
-    // Also include the start node in the results
+    // If we didn't find any temporal relationships, try using timestamp or date properties
+    if (result.records.length === 0 && (direction === 'both' || direction === 'forward')) {
+      console.error(`No temporal relationships found. Trying timestamp-based sequence.`);
+      
+      // Use vector embeddings to find semantically related events and sort by timestamp
+      const timestampResult = await session.executeRead(tx => tx.run(`
+        // Start with the node
+        MATCH (start {name: $startNodeName})
+        
+        // Find the appropriate vector index for this node
+        WITH start,
+             CASE 
+               WHEN start:Concept THEN 'concept-embeddings'
+               WHEN start:Entity AND start.subType = 'Person' THEN 'person-embeddings' 
+               WHEN start:Entity THEN 'entity-embeddings'
+               WHEN start:Proposition THEN 'proposition-embeddings'
+               WHEN start:ReasoningChain THEN 'reasoningchain-embeddings'
+               WHEN start:Thought THEN 'thought-embeddings'
+               ELSE 'entity-embeddings'
+             END as indexName
+        
+        // Use vector search to find related nodes using embedding
+        CALL db.index.vector.queryNodes(indexName, $maxEvents, start.embedding)
+        YIELD node, score
+        WHERE score >= 0.7
+          AND node <> start
+          AND (${typeFilter})
+          AND (node.timestamp IS NOT NULL OR node.startDate IS NOT NULL)
+        
+        // Order by timestamp or date
+        WITH node, score, 
+          CASE 
+            WHEN node.timestamp IS NOT NULL THEN node.timestamp
+            WHEN node.startDate IS NOT NULL THEN node.startDate
+            ELSE null
+          END as timeValue
+        WHERE timeValue IS NOT NULL
+        
+        // Order by time based on direction
+        ORDER BY 
+          CASE WHEN $direction = 'backward' THEN timeValue END DESC,
+          CASE WHEN $direction = 'forward' OR $direction = 'both' THEN timeValue END ASC,
+          score DESC
+        
+        // Get relationships for each node
+        WITH node
+        OPTIONAL MATCH (node)-[outRel]->(connected)
+        WITH node, collect(outRel) as outRels
+        
+        OPTIONAL MATCH (other)-[inRel]->(node)
+        
+        // Return nodes with their relationships
+        RETURN 
+          node as entity,
+          outRels as relations,
+          collect(inRel) as inRelations
+        LIMIT 27
+      `, {
+        startNodeName,
+        maxEvents,
+        direction
+      }));
+      
+      if (timestampResult.records.length > 0) {
+        console.error(`Found ${timestampResult.records.length} nodes using timestamp-based sequence`);
+        
+        return processSearchResults(timestampResult.records);
+      }
+    }
+    
+    // Include the start node in the results
+    if (result.records.length > 0) {
+      const startNodeResult = await session.executeRead(tx => tx.run(`
+        MATCH (start {name: $startNodeName})
+        
+        OPTIONAL MATCH (start)-[outRel]->(connected)
+        WITH start, collect(outRel) as outRels
+        
+        OPTIONAL MATCH (other)-[inRel]->(start)
+        
+        RETURN 
+          start as entity,
+          outRels as relations,
+          collect(inRel) as inRelations
+      `, { startNodeName }));
+      
+      // Combine the results
+      const combinedRecords = [...startNodeResult.records, ...result.records];
+      return processSearchResults(combinedRecords);
+    }
+    
+    // Just return the start node if no sequence found
     const startNodeResult = await session.executeRead(tx => tx.run(`
-      MATCH (start:Memory {name: $startNodeName})
+      MATCH (start {name: $startNodeName})
       
       OPTIONAL MATCH (start)-[outRel]->(connected)
       WITH start, collect(outRel) as outRels
@@ -134,16 +234,10 @@ export async function getTemporalSequence(
       RETURN 
         start as entity,
         outRels as relations,
-        collect(inRel) as inRelations,
-        0 as sequenceOrder
-    `, {
-      startNodeName
-    }));
+        collect(inRel) as inRelations
+    `, { startNodeName }));
     
-    // Combine the results
-    const combinedRecords = [...startNodeResult.records, ...result.records];
-    
-    return processSearchResults(combinedRecords);
+    return processSearchResults(startNodeResult.records);
   } catch (error) {
     console.error(`Error retrieving temporal sequence: ${error}`);
     throw error;
@@ -165,6 +259,7 @@ export async function findTemporalGaps(
   domainFilter?: string,
   limit: number = 10
 ): Promise<KnowledgeGraph> {
+  // We'll use a hardcoded integer value (27) for Neo4j LIMIT clause
   const session = neo4jDriver.session();
   
   try {
@@ -175,6 +270,7 @@ export async function findTemporalGaps(
       ? 'AND (event.domain = $domainFilter OR exists((event)-[:RELATES_TO]->(:Concept {domain: $domainFilter})))' 
       : '';
     
+    // Find events without temporal relationships or timestamp/date information
     const result = await session.executeRead(tx => tx.run(`
       // Match events without temporal relationships
       MATCH (event:Event)
@@ -182,13 +278,13 @@ export async function findTemporalGaps(
         AND NOT exists(()-[:BEFORE|AFTER|FOLLOWS|PRECEDES|NEXT|PREVIOUS|CAUSES|CAUSED_BY]->(event))
         ${domainCondition}
       
-      // Check if event has timestamp/date properties but no temporal relationships
+      // Check if event has timestamp/date properties
       WITH event,
            (event.timestamp IS NULL AND event.startDate IS NULL) AS missingDateInfo
       
       // Order by those missing both relationships and date properties first
       ORDER BY missingDateInfo DESC
-      LIMIT $limit
+      LIMIT 27
       
       // Get relationships for these events
       WITH event
@@ -202,8 +298,8 @@ export async function findTemporalGaps(
         outRels as relations,
         collect(inRel) as inRelations
     `, {
-      domainFilter,
-      limit
+      domainFilter
+      // Using hardcoded LIMIT 27 in the query instead of parameter
     }));
     
     console.error(`Found ${result.records.length} events with temporal gaps`);
@@ -218,52 +314,79 @@ export async function findTemporalGaps(
 }
 
 /**
- * Identifies causal chains in the knowledge graph
- * 
- * Traces cause-effect relationships across multiple nodes to identify
- * chains of causality, providing insight into complex causal structures.
+ * Identifies causal chains in the knowledge graph using vector embeddings and relationships
  * 
  * @param neo4jDriver Neo4j driver instance
  * @param startNode Optional starting node for the causal chain
  * @param maxLength Maximum length of causal chains to retrieve
- * @param includeProbable Whether to include probable (lower confidence) causal relationships
+ * @param threshold Similarity threshold for vector search
  * @returns KnowledgeGraph with causal chains
  */
 export async function traceCausalChains(
   neo4jDriver: Neo4jDriver,
   startNode?: string,
   maxLength: number = 5,
-  includeProbable: boolean = true
+  threshold: number = 0.75
 ): Promise<KnowledgeGraph> {
+  // We'll use a fixed path length but keep the parameter for API compatibility
   const session = neo4jDriver.session();
   
   try {
     console.error(`Tracing causal chains${startNode ? ` from: ${startNode}` : ''}`);
     
-    // Build the query based on whether a start node is provided
-    let query;
-    let params: any = { 
-      maxLength, 
-      minWeight: includeProbable ? 0.3 : 0.7,
-      relationshipFilter: "CAUSES>|INFLUENCES>"
-    };
-    
+    // If a start node is provided
     if (startNode) {
-      // For specific start node using APOC path expansion
-      query = `
+      // Check if node exists with exact name
+      const nodeCheck = await session.executeRead(tx => tx.run(`
+        MATCH (n {name: $startNode})
+        RETURN n
+      `, { startNode }));
+      
+      if (nodeCheck.records.length === 0) {
+        console.error(`No exact match for node: ${startNode}. Using vector search.`);
+        
+        try {
+          // Import the embedding generator
+          const { generateQueryEmbedding } = await import('./search.js');
+          
+          // Generate embedding for the search term
+          const queryEmbedding = await generateQueryEmbedding(startNode);
+          
+          // Now we can perform vector search with the embedding
+          const searchResult = await vectorSearch(
+            neo4jDriver,
+            queryEmbedding,
+            undefined, // search across all indexes
+            1,  // limit to top match
+            threshold
+          );
+        
+          if (searchResult.entities.length === 0) {
+            console.error(`No node found matching: ${startNode}`);
+            return { entities: [], relations: [] };
+          }
+          
+          // Use the best matching node name
+          startNode = searchResult.entities[0].name;
+          console.error(`Using best matching node: ${startNode}`);
+        } catch (error) {
+          console.error(`Error generating embedding: ${error}`);
+          return { entities: [], relations: [] };
+        }
+      }
+      
+      // Find causal chains starting from this node using relationship traversal
+      const result = await session.executeRead(tx => tx.run(`
         // Start with specified node
-        MATCH (start:Memory {name: $startNode})
+        MATCH (start {name: $startNode})
         
         // Find causal chains using path expansion
         CALL apoc.path.expandConfig(start, {
-          relationshipFilter: $relationshipFilter,
+          relationshipFilter: "CAUSES>|INFLUENCES>|LEADS_TO>",
           minLevel: 1,
           maxLevel: $maxLength,
           uniqueness: "NODE_GLOBAL"
         }) YIELD path
-        
-        // Filter by relationship weight if needed
-        WHERE all(rel in relationships(path) WHERE rel.weight >= $minWeight)
         
         // Get path strength (product of weights)
         WITH path,
@@ -273,60 +396,82 @@ export async function traceCausalChains(
         // Order by strength and length
         ORDER BY chainStrength DESC, chainLength DESC
         
-        // Extract nodes and relationships
-        WITH nodes(path) as pathNodes
-        UNWIND pathNodes as node
+        // Extract nodes and relationships from each path
+        WITH nodes(path) as pathNodes, relationships(path) as pathRels
         
         // Process each node
-        WITH DISTINCT node
-        OPTIONAL MATCH (node)-[outRel]->(connected)
-        WITH node, collect(outRel) as outRels
+        UNWIND pathNodes as node
+        
+        // Return each node with its relationships along the path
+        WITH DISTINCT node, pathRels
+        
+        // Get outgoing relationships from this node that are part of the path
+        WITH node, [rel IN pathRels WHERE startNode(rel) = node] as outRels
+        
+        // Get all relationships for context
+        OPTIONAL MATCH (node)-[additionalRel]->(other)
+        WHERE NOT additionalRel IN outRels
+        
+        WITH node, outRels + collect(additionalRel) as allOutRels
         
         OPTIONAL MATCH (other)-[inRel]->(node)
         
         // Return as graph
         RETURN 
           node as entity,
-          outRels as relations,
+          allOutRels as relations,
           collect(inRel) as inRelations
-      `;
-      params.startNode = startNode;
-    } else {
-      // For general causal chain discovery
-      query = `
-        // Find chains of causal relationships
-        MATCH path = (start:Memory)-[:CAUSES|INFLUENCES*1..${maxLength}]->(end:Memory)
-        WHERE all(rel in relationships(path) WHERE rel.weight >= $minWeight)
-        
-        // Calculate chain strength
-        WITH path, 
-             reduce(s = 1.0, rel in relationships(path) | s * coalesce(rel.weight, 0.5)) as chainStrength,
-             length(path) as chainLength
-        ORDER BY chainStrength DESC, chainLength DESC
-        LIMIT 10
-        
-        // Extract nodes and relationships
-        WITH nodes(path) as pathNodes
-        UNWIND pathNodes as node
-        
-        // Process each node
-        WITH DISTINCT node
-        OPTIONAL MATCH (node)-[outRel]->(connected)
-        WITH node, collect(outRel) as outRels
-        
-        OPTIONAL MATCH (other)-[inRel]->(node)
-        
-        // Return as graph
-        RETURN 
-          node as entity,
-          outRels as relations,
-          collect(inRel) as inRelations
-      `;
+      `, { 
+        startNode,
+        maxLength
+      }));
+      
+      console.error(`Found ${result.records.length} nodes in causal chains from ${startNode}`);
+      
+      return processSearchResults(result.records);
     }
     
-    const result = await session.executeRead(tx => tx.run(query, params));
+    // If no start node provided, find significant causal chains across the knowledge graph
+    const result = await session.executeRead(tx => tx.run(`
+      // Find chains of causal relationships
+      MATCH path = (start:Memory)-[:CAUSES|INFLUENCES*1..${maxLength}]->(end:Memory)
+      
+      // Calculate chain strength
+      WITH path, 
+           reduce(s = 1.0, rel in relationships(path) | s * coalesce(rel.weight, 0.5)) as chainStrength,
+           length(path) as chainLength
+      
+      // Order by strength and length
+      ORDER BY chainStrength DESC, chainLength DESC
+      LIMIT 5
+      
+      // Extract nodes and relationships
+      WITH nodes(path) as pathNodes, relationships(path) as pathRels
+      
+      // Process each node
+      UNWIND pathNodes as node
+      
+      // Get outgoing relationships from this node that are part of the path
+      WITH DISTINCT node, pathRels
+      
+      WITH node, [rel IN pathRels WHERE startNode(rel) = node] as outRels
+      
+      // Get all relationships for context
+      OPTIONAL MATCH (node)-[additionalRel]->(other)
+      WHERE NOT additionalRel IN outRels
+      
+      WITH node, outRels + collect(additionalRel) as allOutRels
+      
+      OPTIONAL MATCH (other)-[inRel]->(node)
+      
+      // Return as graph
+      RETURN 
+        node as entity,
+        allOutRels as relations,
+        collect(inRel) as inRelations
+    `));
     
-    console.error(`Found ${result.records.length} nodes in causal chains`);
+    console.error(`Found ${result.records.length} nodes in significant causal chains`);
     
     return processSearchResults(result.records);
   } catch (error) {
@@ -335,4 +480,4 @@ export async function traceCausalChains(
   } finally {
     await session.close();
   }
-} 
+}

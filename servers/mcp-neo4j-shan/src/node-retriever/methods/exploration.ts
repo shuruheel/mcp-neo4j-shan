@@ -1,20 +1,14 @@
 import { Driver as Neo4jDriver } from 'neo4j-driver';
-import { KnowledgeGraph, Entity, Relation, RelationshipType } from '../../types/index.js';
-import { processSearchResults } from './search.js';
+import { KnowledgeGraph, Entity, Relation } from '../../types/index.js';
+import { processSearchResults, vectorSearch } from './search.js';
 
 /**
- * Explores the context around a node with prioritization based on relationship weights
- * 
- * This method is the primary way to explore the knowledge graph context, implementing
- * a cognitive-science based traversal strategy that mimics how human memory works:
- * - Stronger/more important connections are traversed first
- * - Relationship weights determine traversal cost (higher weight = lower cost)
- * - Weak connections require higher "cognitive effort" to traverse
+ * Explores the context around a node using vector embeddings and relationships
  * 
  * @param neo4jDriver - Neo4j driver instance
  * @param nodeName - The name of the node to explore context around
  * @param maxDepth - Maximum number of relationship hops to traverse (default: 2)
- * @param minWeight - Minimum relationship weight to include (default: 0.0, range: 0.0-1.0)
+ * @param options - Additional options for exploration
  * @returns A promise resolving to a KnowledgeGraph with nodes and relationships
  */
 export async function exploreContextWeighted(
@@ -27,7 +21,7 @@ export async function exploreContextWeighted(
     includeTypes?: string[],
     excludeTypes?: string[],
     includeRelationships?: string[],
-    fuzzyThreshold?: number  // New parameter for controlling fuzzy matching
+    threshold?: number
   } = {}
 ): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
@@ -36,188 +30,135 @@ export async function exploreContextWeighted(
   const nodeNames = Array.isArray(nodeName) ? nodeName : [nodeName];
   
   // Set default options
-  const maxNodes = options.maxNodes || 50;
-  const fuzzyThreshold = options.fuzzyThreshold || 0.7; // Default fuzzy matching threshold (70% similarity)
-  
-  // Default to include all node types if not specified
-  const includeTypes = options.includeTypes || [
-    'Entity', 'Concept', 'Event', 'ScientificInsight', 
-    'Law', 'Thought', 'ReasoningChain', 'ReasoningStep',
-    'Attribute', 'Proposition', 'Emotion', 'Agent'
-  ];
-  
-  const excludeTypes = options.excludeTypes || [];
-  const includeRelationships = options.includeRelationships || [];
-  
-  // Generate type filters for Cypher query
-  const labelFilter = generateTypeFilterQuery(includeTypes, excludeTypes);
-  const relationshipFilter = generateRelationshipFilterQuery(includeRelationships);
+  const maxNodes = Math.floor(options.maxNodes || 50); // Ensure integer value for LIMIT
+  const threshold = options.threshold || 0.75;
   
   try {
-    // First, let's try to find the nodes using fuzzy matching
-    console.error(`Searching for nodes using fuzzy matching with threshold ${fuzzyThreshold}: ${nodeNames.join(', ')}`);
+    console.error(`Exploring context for: ${nodeNames.join(', ')}`);
     
+    // First find the starting nodes - prioritize exact matches
     const findNodesQuery = `
-      // Collect all memory nodes
-      MATCH (n:Memory)
-      WHERE n.name IS NOT NULL
-      
-      // Filter to nodes that are fuzzy matches to our input names
-      WITH n, [searchName IN $nodeNames | 
-        apoc.text.fuzzyMatch(n.name, searchName) >= $fuzzyThreshold] AS matches
-      
-      // Keep nodes that matched at least one input name
-      WHERE ANY(matched IN matches WHERE matched = true)
-      
-      // Return the matched node along with its similarity to the best matching input
-      RETURN n, 
-        MAX([searchName IN $nodeNames | apoc.text.fuzzyMatch(n.name, searchName)]) AS similarity
-      ORDER BY similarity DESC
-      LIMIT $maxNodes
+      // Find nodes by exact name match
+      MATCH (n)
+      WHERE n.name IN $nodeNames
+      RETURN n
     `;
     
-    const matchingNodesResult = await session.executeRead(tx =>
-      tx.run(findNodesQuery, { 
-        nodeNames: nodeNames,
-        fuzzyThreshold: fuzzyThreshold
-      })
+    const exactMatchResult = await session.executeRead(tx => 
+      tx.run(findNodesQuery, { nodeNames })
     );
     
-    const matchedNodes = matchingNodesResult.records.map(record => record.get('n'));
+    let startNodes = exactMatchResult.records.map(record => record.get('n'));
     
-    // Log which nodes were found
-    if (matchedNodes.length > 0) {
-      console.error(`Found ${matchedNodes.length} matching nodes:`);
-      matchedNodes.forEach(node => {
-        const similarity = matchingNodesResult.records.find(r => 
-          r.get('n').identity.equals(node.identity)).get('similarity');
-        console.error(`- ${node.properties.name} (${node.properties.nodeType || 'Unknown'}, similarity: ${similarity.toFixed(2)})`);
-      });
-    } else {
-      console.error('No matching nodes found in the knowledge graph');
-      return { entities: [], relations: [] };
-    }
-    
-    // If we have multiple matched nodes, use the subgraphAll approach
-    if (matchedNodes.length > 1) {
-      console.error(`Exploring context for multiple fuzzy-matched nodes`);
+    // If no exact matches, use vector search
+    if (startNodes.length === 0) {
+      console.error('No exact name matches found, using vector search');
       
-      // Optimized Cypher query using APOC's subgraphAll
-      const query = `
-        // Use subgraphAll with the matched nodes
-        CALL apoc.path.subgraphAll($startNodes, {
-          relationshipFilter: ">|<",  // All relationships in any direction
-          labelFilter: "${labelFilter}",
-          maxLevel: $maxDepth,
-          limit: $maxNodes,
-          bfs: false  // Depth-first for better exploration
-        })
-        YIELD nodes, relationships
-        
-        // Filter relationships by weight
-        WITH 
-          nodes,
-          [rel IN relationships WHERE coalesce(rel.weight, 0.5) >= $minWeight] AS weightFilteredRels
-        
-        RETURN collect(distinct nodes) as nodes, collect(distinct weightFilteredRels) as relationships
-      `;
+      // Generate embedding for search
+      const { generateQueryEmbedding } = await import('./search.js');
+      const queryEmbedding = await generateQueryEmbedding(nodeNames.join(' '));
       
-      // Execute the optimized query with the matched nodes
-      const result = await session.executeRead(tx =>
-        tx.run(query, { 
-          startNodes: matchedNodes,  // Pass the actual node objects
-          maxDepth: maxDepth,
-          minWeight: minWeight,
-          maxNodes: maxNodes
-        })
+      const searchResults = await vectorSearch(
+        neo4jDriver, 
+        queryEmbedding, 
+        undefined,
+        27, // Use hardcoded value for LIMIT
+        threshold
       );
       
-      if (result.records.length === 0) {
-        console.error(`No subgraph found from the matched nodes`);
+      if (searchResults.entities.length === 0) {
+        console.error('No nodes found in the knowledge graph matching the search criteria');
         return { entities: [], relations: [] };
       }
       
-      // Process the results from the APOC procedure
-      const record = result.records[0];
+      // Get the found nodes from Neo4j to use as start nodes
+      const matchedNodeNames = searchResults.entities.map(entity => entity.name);
+      const vectorMatchResult = await session.executeRead(tx => 
+        tx.run(`
+          MATCH (n)
+          WHERE n.name IN $matchedNodeNames
+          RETURN n
+        `, { matchedNodeNames })
+      );
       
-      // The APOC procedure returns collections of nodes and relationships
-      // We need to flatten them
-      const nodesArray = record.get('nodes');
-      const relationshipsArray = record.get('relationships');
-      
-      // Flatten nested arrays if needed
-      const nodes = Array.isArray(nodesArray[0]) ? nodesArray.flat() : nodesArray;
-      const relationships = Array.isArray(relationshipsArray[0]) ? 
-        relationshipsArray.flat() : relationshipsArray;
-      
-      // Process into Entity[] and Relation[] format
-      return processExplorationResults([{ nodes, relationships }]);
+      startNodes = vectorMatchResult.records.map(record => record.get('n'));
     }
     
-    // If we only have one node, use the original implementation with the matched node
-    console.error(`Exploring context for single fuzzy-matched node: ${matchedNodes[0].properties.name}`);
+    console.error(`Found ${startNodes.length} starting nodes`);
     
-    // Enhanced Cypher query that uses relationship weights for traversal costs
-    const query = `
-      // Use variable-length path with weighted cost traversal
-      CALL apoc.path.expandConfig($startNode, {
-        relationshipFilter: "${relationshipFilter || '>'}"  // Use specific relationships or all outgoing
-        , labelFilter: "${labelFilter || '>Memory'}" // Use label filter or default to Memory nodes
-        , uniqueness: "NODE_GLOBAL"  // Avoid cycles
-        , bfs: false             // Depth-first for better exploration
-        , limit: $maxNodes       // Limit total results
-        , maxLevel: $maxDepth    // Maximum traversal depth
-        , relCostProperty: "weight"   // Use weight property as cost factor
-        , defaultRelCost: 1.0         // Default cost if weight is not specified
-        , costEvaluator: "relationship.weight < $minWeight ? 10000000 : 1/relationship.weight" // Make low-weight relationships very expensive
-      }) YIELD path
-      
-      // Extract nodes and relationships from the path with all their properties
-      WITH 
-        path,
-        [node IN nodes(path) | node] as pathNodes,
-        [rel IN relationships(path) | rel] as pathRels
-      
-      // Filter to only include relationships with weight >= minWeight
-      WITH 
-        pathNodes, 
-        [rel IN pathRels WHERE COALESCE(rel.weight, 0.5) >= $minWeight] as filteredRels
-      
-      // Return all path nodes and filtered relationships
-      WITH 
-        COLLECT(DISTINCT [n IN pathNodes | n]) as allNodeArrays,
-        COLLECT(DISTINCT [r IN filteredRels | r]) as allRelArrays
-      
-      // Flatten collections and return
-      RETURN 
-        CASE WHEN SIZE(allNodeArrays) > 0 THEN REDUCE(s = [], arr IN allNodeArrays | s + arr) ELSE [] END as nodes,
-        CASE WHEN SIZE(allRelArrays) > 0 THEN REDUCE(s = [], arr IN allRelArrays | s + arr) ELSE [] END as relationships
-    `;
+    // Get relationship filter if provided
+    const relationshipFilter = options.includeRelationships && options.includeRelationships.length > 0
+      ? options.includeRelationships.join('|')
+      : '>'; // Default to all outgoing relationships
     
-    // Execute the query with the matched node
-    const result = await session.executeRead(tx =>
-      tx.run(query, { 
-        startNode: matchedNodes[0],  // Pass the actual node object
-        maxDepth,
-        minWeight,
-        maxNodes
+    // Generate type filters
+    const includeTypes = options.includeTypes || [];
+    const excludeTypes = options.excludeTypes || [];
+    let labelFilter = '';
+    
+    // Add include filters
+    if (includeTypes.length > 0) {
+      labelFilter += includeTypes.map(type => `+${type}`).join('|');
+    }
+    
+    // Add exclude filters
+    if (excludeTypes.length > 0) {
+      if (labelFilter) labelFilter += '|';
+      labelFilter += excludeTypes.map(type => `-${type}`).join('|');
+    }
+    
+    if (!labelFilter) {
+      labelFilter = ''; // No default label filter
+    }
+    
+    // Extract node IDs from startNodes instead of passing node objects directly
+    const startNodeIds = startNodes.map(node => node.identity);
+    
+    // Get context using subgraph expansion with node IDs
+    const result = await session.executeRead(tx => tx.run(`
+      // First, get the nodes by their IDs
+      MATCH (startNode)
+      WHERE id(startNode) IN $startNodeIds
+      
+      // Use subgraphAll to get a complete subgraph with all relationships
+      CALL apoc.path.subgraphAll(startNode, {
+        relationshipFilter: $relationshipFilter,
+        labelFilter: $labelFilter,
+        maxLevel: $maxDepth,
+        limit: 27
       })
-    );
+      YIELD nodes, relationships
+      
+      // Filter relationships by weight if specified
+      WITH 
+        nodes,
+        [rel IN relationships WHERE coalesce(rel.weight, 0.5) >= $minWeight] AS filteredRels
+      
+      // Process each node to get related information
+      UNWIND nodes as node
+      
+      // Return node with outgoing and incoming relationships
+      WITH DISTINCT node, filteredRels
+      
+      RETURN 
+        node as entity,
+        [rel IN filteredRels WHERE startNode(rel) = node] as relations,
+        [rel IN filteredRels WHERE endNode(rel) = node] as inRelations
+    `, { 
+      startNodeIds,
+      relationshipFilter,
+      labelFilter,
+      maxDepth,
+      maxNodes,
+      minWeight
+    }));
     
-    // Process the result
-    if (result.records.length === 0) {
-      console.error(`No paths found from matched node: ${matchedNodes[0].properties.name}`);
-      return { entities: [], relations: [] };
-    }
+    console.error(`Context exploration found ${result.records.length} nodes`);
     
-    // Extract nodes and relationships from the result
-    const record = result.records[0];
-    const nodes = record.get('nodes') || [];
-    const relationships = record.get('relationships') || [];
-    
-    return processExplorationResults([{ nodes, relationships }]);
+    // Process the subgraph results
+    return processSearchResults(result.records);
   } catch (error) {
-    console.error(`Error exploring context: ${error.message}`);
+    console.error(`Error exploring context: ${error}`);
     throw error;
   } finally {
     await session.close();
@@ -225,215 +166,8 @@ export async function exploreContextWeighted(
 }
 
 /**
- * Generates a label filter query string for Cypher
- * @param includeTypes - Types to include
- * @param excludeTypes - Types to exclude
- * @returns Formatted label filter string for APOC procedures
- */
-function generateTypeFilterQuery(includeTypes: string[], excludeTypes: string[]): string {
-  let labelFilter = '';
-  
-  // Add include filters (whitelist with +)
-  if (includeTypes && includeTypes.length > 0) {
-    labelFilter += includeTypes.map(type => `+${type}`).join('|');
-  }
-  
-  // Add exclude filters (blacklist with -)
-  if (excludeTypes && excludeTypes.length > 0) {
-    if (labelFilter) labelFilter += '|';
-    labelFilter += excludeTypes.map(type => `-${type}`).join('|');
-  }
-  
-  return labelFilter || '>Memory'; // Default to Memory label if no filters
-}
-
-/**
- * Generates a relationship filter query string for Cypher
- * @param includeRelationships - Relationships to include
- * @returns Formatted relationship filter string for APOC procedures
- */
-function generateRelationshipFilterQuery(includeRelationships: string[]): string {
-  if (includeRelationships && includeRelationships.length > 0) {
-    return includeRelationships.join('|');
-  }
-  return '>'; // Default to all outgoing relationships
-}
-
-/**
- * Processes results from exploration queries into the KnowledgeGraph format
- * @param records - Records from Neo4j query result
- * @returns Knowledge graph with entities and relations
- */
-function processExplorationResults(records: any[]): KnowledgeGraph {
-  // Initialize result arrays
-  const entities: Entity[] = [];
-  const relations: Relation[] = [];
-  
-  // Track processed nodes and relationships to avoid duplicates
-  const processedNodeIds = new Set<string>();
-  const processedRelIds = new Set<string>();
-  
-  for (const record of records) {
-    // Handle both direct node objects and node arrays
-    const nodes = record.nodes || [];
-    const relationships = record.relationships || [];
-    
-    // Process nodes to Entity format
-    for (const node of nodes) {
-      if (!node) continue; // Skip null/undefined nodes
-      
-      const nodeId = typeof node.identity === 'object' ? node.identity.toString() : node.identity;
-      
-      if (processedNodeIds.has(nodeId)) continue; // Skip already processed nodes
-      processedNodeIds.add(nodeId);
-      
-      const entity: Entity = {
-        name: node.properties.name,
-        entityType: node.properties.nodeType || 'Entity',
-        observations: node.properties.observations || []
-      };
-      
-      // Add additional properties based on entity type
-      if (node.properties.nodeType === 'Entity') {
-        (entity as any).description = node.properties.description;
-        (entity as any).biography = node.properties.biography;
-        (entity as any).keyContributions = node.properties.keyContributions;
-        (entity as any).subType = node.properties.subType;
-        
-        // Handle Person-specific details if subType is 'Person'
-        if (node.properties.subType === 'Person' && node.properties.personDetails) {
-          try {
-            // Parse the personDetails JSON if it exists
-            let personDetails;
-            if (typeof node.properties.personDetails === 'string') {
-              try {
-                personDetails = JSON.parse(node.properties.personDetails);
-              } catch (parseError) {
-                console.error(`Error parsing personDetails JSON for ${node.properties.name}:`, parseError);
-                personDetails = null;
-              }
-            } else {
-              personDetails = node.properties.personDetails;
-            }
-            
-            // Add all person details properties to the entity only if personDetails is valid
-            if (personDetails && typeof personDetails === 'object') {
-              // Safely add properties with validation
-              const safeArrayAssign = (target: any, prop: string, value: any) => {
-                if (Array.isArray(value)) {
-                  target[prop] = value;
-                } else if (value === null || value === undefined) {
-                  target[prop] = [];
-                } else {
-                  console.warn(`Expected array for ${prop} but got ${typeof value} for entity ${node.properties.name}`);
-                  target[prop] = [];
-                }
-              };
-              
-              const safeObjectAssign = (target: any, prop: string, value: any) => {
-                if (value && typeof value === 'object' && !Array.isArray(value)) {
-                  target[prop] = value;
-                } else if (value === null || value === undefined) {
-                  target[prop] = {};
-                } else {
-                  console.warn(`Expected object for ${prop} but got ${typeof value} for entity ${node.properties.name}`);
-                  target[prop] = {};
-                }
-              };
-              
-              // Assign with validation
-              (entity as any).aliases = personDetails.aliases || [];
-              safeArrayAssign(entity as any, 'personalityTraits', personDetails.personalityTraits);
-              safeObjectAssign(entity as any, 'cognitiveStyle', personDetails.cognitiveStyle);
-              (entity as any).emotionalDisposition = personDetails.emotionalDisposition || null;
-              safeArrayAssign(entity as any, 'emotionalTriggers', personDetails.emotionalTriggers);
-              (entity as any).interpersonalStyle = personDetails.interpersonalStyle || null;
-              safeObjectAssign(entity as any, 'powerDynamics', personDetails.powerDynamics);
-              safeArrayAssign(entity as any, 'loyalties', personDetails.loyalties);
-              safeArrayAssign(entity as any, 'coreValues', personDetails.coreValues);
-              (entity as any).ethicalFramework = personDetails.ethicalFramework || null;
-              safeArrayAssign(entity as any, 'psychologicalDevelopment', personDetails.psychologicalDevelopment);
-              safeObjectAssign(entity as any, 'narrativeTreatment', personDetails.narrativeTreatment);
-              (entity as any).modelConfidence = personDetails.modelConfidence || null;
-              (entity as any).personEvidenceStrength = personDetails.evidenceStrength || null;
-            }
-          } catch (e) {
-            console.error(`Error processing personDetails for ${node.properties.name}:`, e);
-          }
-        }
-      } 
-      else if (node.properties.nodeType === 'Event') {
-        (entity as any).startDate = node.properties.startDate;
-        (entity as any).endDate = node.properties.endDate;
-        (entity as any).location = node.properties.location;
-        (entity as any).participants = node.properties.participants;
-        (entity as any).outcome = node.properties.outcome;
-      } 
-      else if (node.properties.nodeType === 'Concept') {
-        (entity as any).definition = node.properties.definition;
-        (entity as any).domain = node.properties.domain;
-        (entity as any).examples = node.properties.examples;
-      }
-      // Add all other properties generically
-      for (const key in node.properties) {
-        if (!entity.hasOwnProperty(key) && key !== 'name' && key !== 'entityType' && key !== 'observations') {
-          (entity as any)[key] = node.properties[key];
-        }
-      }
-      
-      entities.push(entity);
-    }
-    
-    // Process relationships to Relation format
-    for (const rel of relationships) {
-      if (!rel) continue; // Skip null/undefined relationships
-      
-      const relId = typeof rel.identity === 'object' ? rel.identity.toString() : rel.identity;
-      
-      if (processedRelIds.has(relId)) continue; // Skip already processed relationships
-      processedRelIds.add(relId);
-      
-      // Get source and target nodes
-      const sourceNode = nodes.find(n => 
-        (n.identity.equals && n.identity.equals(rel.start)) || 
-        n.identity === rel.start
-      );
-      
-      const targetNode = nodes.find(n => 
-        (n.identity.equals && n.identity.equals(rel.end)) || 
-        n.identity === rel.end
-      );
-      
-      if (!sourceNode || !targetNode) {
-        console.error(`Could not find nodes for relationship: ${rel.type}`);
-        continue;
-      }
-      
-      const relation: Relation = {
-        from: sourceNode.properties.name,
-        to: targetNode.properties.name,
-        relationType: rel.type
-      };
-      
-      // Add all additional properties
-      for (const key in rel.properties) {
-        if (key !== 'from' && key !== 'to' && key !== 'relationType') {
-          (relation as any)[key] = rel.properties[key];
-        }
-      }
-      
-      relations.push(relation);
-    }
-  }
-  
-  // Log the results
-  console.error(`Found ${entities.length} entities and ${relations.length} relations`);
-  
-  return { entities, relations };
-}
-
-/**
  * Find conceptual associations between nodes based on sharing common connections
+ * or semantic similarity using vector embeddings
  */
 export async function findConceptualAssociations(
   neo4jDriver: Neo4jDriver,
@@ -441,14 +175,16 @@ export async function findConceptualAssociations(
   options: {
     maxAssociations?: number,
     minSharedConnections?: number,
-    nodeTypes?: string[]
+    nodeTypes?: string[],
+    threshold?: number
   } = {}
 ): Promise<KnowledgeGraph> {
   const session = neo4jDriver.session();
   
   // Set default options
   const maxAssociations = options.maxAssociations || 10;
-  const minSharedConnections = options.minSharedConnections || 2;
+  const minSharedConnections = options.minSharedConnections || 1;
+  const threshold = options.threshold || 0.75;
   const nodeTypes = options.nodeTypes || [
     'Entity', 'Concept', 'Event', 'ScientificInsight', 
     'Law', 'Thought', 'ReasoningChain', 'ReasoningStep',
@@ -457,44 +193,120 @@ export async function findConceptualAssociations(
   
   try {
     console.error(`Finding conceptual associations for node: ${nodeName}`);
-    console.error(`Max associations: ${maxAssociations}, Min shared: ${minSharedConnections}`);
-    console.error(`Node types: ${nodeTypes.join(', ')}`);
     
-    const typeFilter = nodeTypes.map(type => `association:${type}`).join(' OR ');
+    // First find the node to get its properties
+    const findNodeResult = await session.executeRead(tx => tx.run(`
+      MATCH (source {name: $nodeName})
+      RETURN source
+    `, { nodeName }));
     
+    if (findNodeResult.records.length === 0) {
+      console.error(`Node not found: ${nodeName}`);
+      return { entities: [], relations: [] };
+    }
+    
+    const sourceNode = findNodeResult.records[0].get('source');
+    const nodeType = sourceNode.properties.nodeType;
+    
+    // Get the corresponding vector index based on the node type
+    const vectorIndex = getVectorIndexForNodeType(nodeType);
+    
+    // First get the embedding from the node
+    const embeddingResult = await session.executeRead(tx => tx.run(`
+      MATCH (n {name: $nodeName})
+      RETURN n.embedding as embedding
+    `, { nodeName }));
+    
+    const embedding = embeddingResult.records[0]?.get('embedding');
+    
+    // Check if we found an embedding
+    if (!embedding) {
+      console.error(`Error: Node '${nodeName}' doesn't have an embedding vector. Cannot perform vector search.`);
+      // Return empty result if no embedding is found
+      return { entities: [], relations: [] };
+    }
+    
+    console.error(`Found embedding for node '${nodeName}', using for vector search`);
+    
+    // Use the embedding for vector search
     const result = await session.executeRead(tx => tx.run(`
-      // Start with the source node
-      MATCH (source:Memory {name: $nodeName})
+      // Use vector search based on node similarity with embedding
+      CALL db.index.vector.queryNodes($vectorIndex, $maxAssociations, $nodeEmbedding)
+      YIELD node, score
+      WHERE score >= $threshold AND node.name <> $nodeName
       
-      // Find all nodes that share connections with the source node
-      MATCH (source)-[r1]-(shared)-[r2]-(association:Memory)
-      WHERE association <> source
-        AND (${typeFilter})
+      // Keep only nodes with specified types
+      WITH node, score
+      WHERE (${nodeTypes.map(type => `node:${type}`).join(' OR ')})
       
-      // Group by association and count shared connections
-      WITH association, collect(DISTINCT shared) AS sharedNodes, count(DISTINCT shared) AS sharedCount
-      WHERE sharedCount >= $minSharedConnections
+      // Get relationships
+      OPTIONAL MATCH (node)-[outRel]->(connected)
+      WITH node, score, collect(outRel) as outRels
       
-      // Get relationships for the associated nodes
-      OPTIONAL MATCH (association)-[outRel]->(connected)
-      WITH association, sharedNodes, sharedCount, collect(outRel) as outRels
+      OPTIONAL MATCH (other)-[inRel]->(node)
       
-      OPTIONAL MATCH (other)-[inRel]->(association)
-      
+      // Return results
       RETURN 
-        association as entity, 
+        node as entity, 
         outRels as relations,
         collect(inRel) as inRelations,
-        sharedCount as associationStrength,
-        [node in sharedNodes | node.name] as sharedConcepts
+        score as associationStrength
       ORDER BY associationStrength DESC
-      LIMIT $maxAssociations
+      LIMIT 27
     `, {
       nodeName,
-      minSharedConnections
+      vectorIndex,
+      nodeEmbedding: embedding,
+      maxAssociations,
+      threshold
     }));
     
-    console.error(`Found ${result.records.length} conceptual associations`);
+    console.error(`Found ${result.records.length} conceptual associations using vector similarity`);
+    
+    // If not enough results from vector search, find associated nodes through shared connections
+    if (result.records.length < maxAssociations) {
+      const remainingCount = maxAssociations - result.records.length;
+      console.error(`Looking for ${remainingCount} more associations through shared connections`);
+      
+      const sharedConnectionResult = await session.executeRead(tx => tx.run(`
+        // Start with the source node
+        MATCH (source:Memory {name: $nodeName})
+        
+        // Find all nodes that share connections with the source node
+        MATCH (source)-[r1]-(shared)-[r2]-(association:Memory)
+        WHERE association <> source
+          AND (${nodeTypes.map(type => `association:${type}`).join(' OR ')})
+        
+        // Group by association and count shared connections
+        WITH association, collect(DISTINCT shared) AS sharedNodes, count(DISTINCT shared) AS sharedCount
+        WHERE sharedCount >= $minSharedConnections
+        
+        // Get relationships for the associated nodes
+        OPTIONAL MATCH (association)-[outRel]->(connected)
+        WITH association, sharedNodes, sharedCount, collect(outRel) as outRels
+        
+        OPTIONAL MATCH (other)-[inRel]->(association)
+        
+        RETURN 
+          association as entity, 
+          outRels as relations,
+          collect(inRel) as inRelations,
+          sharedCount as associationStrength,
+          [node in sharedNodes | node.name] as sharedConcepts
+        ORDER BY associationStrength DESC
+        LIMIT 27
+      `, {
+        nodeName,
+        minSharedConnections
+        // We're not using remainingCount in the query anymore since we're using a hardcoded LIMIT
+      }));
+      
+      console.error(`Found ${sharedConnectionResult.records.length} additional conceptual associations through shared connections`);
+      
+      // Combine results from both approaches
+      const combinedResults = result.records.concat(sharedConnectionResult.records);
+      return processSearchResults(combinedResults);
+    }
     
     return processSearchResults(result.records);
   } catch (error) {
@@ -506,7 +318,7 @@ export async function findConceptualAssociations(
 }
 
 /**
- * Find the shortest cognitive path between two nodes
+ * Find the shortest path between two nodes
  */
 export async function findCognitivePath(
   neo4jDriver: Neo4jDriver,
@@ -528,9 +340,7 @@ export async function findCognitivePath(
   ];
   
   try {
-    console.error(`Finding cognitive path from "${startNodeName}" to "${endNodeName}"`);
-    console.error(`Max path length: ${maxPathLength}`);
-    console.error(`Include types: ${includeTypes.join(', ')}`);
+    console.error(`Finding path from "${startNodeName}" to "${endNodeName}"`);
     
     const typeFilter = includeTypes.map(type => `node:${type}`).join(' OR ');
     
@@ -539,12 +349,11 @@ export async function findCognitivePath(
       MATCH (start:Memory {name: $startNodeName})
       MATCH (end:Memory {name: $endNodeName})
       
-      // Find shortest path, considering relationship weights as costs
-      // Use relationship weights to influence traversal cost (lower weight = higher cost)
+      // Find shortest path
       CALL apoc.algo.dijkstra(
         start, 
         end, 
-        "CONNECTS|RELATES_TO|PART_OF|BELONGS_TO|PRECEDES|FOLLOWS|HAS_ATTRIBUTE|DESCRIBES|HAS_PROPOSITION|FEELS|CREATED_BY|USED_FOR", 
+        null, // Use any relationship type
         "weight", 
         $maxPathLength
       ) YIELD path, weight
@@ -552,23 +361,28 @@ export async function findCognitivePath(
       // Ensure all nodes in path match the type filter
       WHERE all(node in nodes(path) WHERE (${typeFilter}))
       
-      // Collect all nodes and relationships in the path
-      WITH nodes(path) as pathNodes, relationships(path) as pathRels, weight as pathWeight
+      // Extract nodes and relationships from the path
+      WITH nodes(path) as pathNodes, relationships(path) as pathRels, weight
       
+      // Process each node
       UNWIND pathNodes as node
       
-      // Get relationships for each node in the path
-      WITH DISTINCT node, pathRels, pathWeight
-      OPTIONAL MATCH (node)-[outRel]->(connected)
-      WITH node, pathRels, pathWeight, collect(outRel) as outRels
+      WITH DISTINCT node, pathRels, weight
       
-      OPTIONAL MATCH (other)-[inRel]->(node)
+      // Get outgoing relationships from this node
+      WITH node, pathRels, weight,
+           [rel IN pathRels WHERE startNode(rel) = node] as outRels
       
+      // Get incoming relationships to this node
+      WITH node, outRels, weight,
+           [rel IN pathRels WHERE endNode(rel) = node] as inRels
+      
+      // Return node with its relationships
       RETURN 
         node as entity, 
         outRels as relations,
-        collect(inRel) as inRelations,
-        pathWeight as pathCost
+        inRels as inRelations,
+        weight as pathCost
       ORDER BY id(node)  // Preserve path order
     `, {
       startNodeName,
@@ -585,4 +399,25 @@ export async function findCognitivePath(
   } finally {
     await session.close();
   }
-} 
+}
+
+/**
+ * Helper function to get the appropriate vector index based on node type
+ */
+function getVectorIndexForNodeType(nodeType: string): string {
+  switch (nodeType) {
+    case 'Concept':
+      return 'concept-embeddings';
+    case 'Entity':
+      return 'entity-embeddings';
+    case 'Proposition':
+      return 'proposition-embeddings';
+    case 'ReasoningChain':
+      return 'reasoningchain-embeddings';
+    case 'Thought':
+      return 'thought-embeddings';
+    default:
+      // Default to entity embeddings for unknown types
+      return 'entity-embeddings';
+  }
+}
