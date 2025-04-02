@@ -19,8 +19,8 @@ export async function main() {
   
   // Initialize Neo4j connection
   const neo4jDriver = connectToNeo4j(
-    'neo4j+s://c37b3de9.databases.neo4j.io',
-    Neo4jAuth.basic('neo4j', 'lljC9tKYmLwquSKOvLPv3Qaw0QBxOTccviBkUIGqRR0')
+    'neo4j+s://x.databases.neo4j.io',
+    Neo4jAuth.basic('neo4j', 'pwd')
   )
   
   console.error('Connected to Neo4j database');
