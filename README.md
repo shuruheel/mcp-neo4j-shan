@@ -92,10 +92,7 @@ A sophisticated knowledge graph memory system that stores interconnected informa
   - **Attribute**: Qualities or properties that can be assigned to entities
   - **Proposition**: Objectively verifiable assertions, facts, or claims with truth values
   - **Emotion**: Emotional states and feelings with intensity and valence ratings
-  - **Agent**: Cognitive entities capable of action, belief and knowledge representation
   - **Thought**: Subjective interpretations, analyses, and personal perspectives
-  - **ScientificInsight**: Research findings with supporting evidence and methodologies
-  - **Law**: Established principles, rules, or regularities with conditions and exceptions
   - **Location**: Physical or virtual places with geographical coordinates and containment hierarchies
   - **ReasoningChain**: Structured representations of logical reasoning processes
   - **ReasoningStep**: Individual steps in a reasoning process with formal notation
@@ -134,13 +131,6 @@ A sophisticated knowledge graph memory system that stores interconnected informa
     - Stepwise reasoning capture with premises, inferences, and conclusions
     - Location hierarchies with spatial containment relationships
 
-  - **Advanced Cypher Queries**: Uses sophisticated Neo4j query patterns:
-    - Parametrized MERGE operations for deduplication and efficient updates
-    - Dynamic property setting based on node type
-    - Temporal data handling with Neo4j's datetime functions
-    - Multi-relationship pattern matching for complex knowledge structures
-    - Path-finding algorithms for cognitive traversal patterns
-
 - **Cognitively-Inspired Retrieval Methods**:
   - **Spreading Activation Retrieval**: The `Neo4jRetriever` class implements retrieval patterns modeled after human memory:
     - Weighted relationship traversal prioritizing stronger connections
@@ -166,21 +156,16 @@ A sophisticated knowledge graph memory system that stores interconnected informa
       - **Weighted relationship prioritization**: Focuses on stronger connections based on relationship weights
       - **Node type filtering**: Targets specific node types to deliver more relevant context
     - `get_temporal_sequence`: Visualizes how events and concepts unfold over time
-    - `find_conceptual_associations`: Discovers semantically related concepts based on shared connections (not tested)
-    - `find_cognitive_path`: Traces pathways between nodes with custom traversal rules (not tested)
   
   - **Knowledge Creation**:
     - `create_nodes`: Adds new information to the graph with specialized node types
     - `create_relations`: Establishes meaningful connections between nodes with metadata
     - `create_thought`: Captures subjective interpretations and analyses
-    - `create_location`: Defines geographical or virtual places
   
   - **Reasoning and Analysis**:
     - `create_reasoning_chain`: Creates structured representations of logical reasoning with well-defined steps
     - `create_reasoning_step`: Adds individual steps to reasoning chains
     - `get_reasoning_chain`: Retrieves reasoning chains with their steps and generates narratives
-    - `find_reasoning_chains_with_similar_conclusion`: Finds related reasoning on similar topics (not tested)
-    - `get_reasoning_analytics`: Analyzes reasoning patterns across domains and methodologies (not tested)
 
 ## Installation and Setup
 
