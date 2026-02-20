@@ -17,6 +17,27 @@ export interface KnowledgeGraph {
   relations: Relation[];
 }
 
+export interface Source {
+  name: string;
+  sourceType: 'chat_message' | 'web_page' | 'pdf' | 'email' | 'transcript' | 'document' | 'api_payload';
+  title?: string;
+  uri?: string;
+  collectedAt?: string;
+  contentHash?: string;
+  metadataJson?: string;
+}
+
+export interface EmotionalEvent {
+  name: string;
+  timestamp: string;
+  valence: number;
+  arousal: number;
+  intensity: number;
+  confidence: number;
+  label?: string;
+  notes?: string;
+}
+
 // The KnowledgeGraphMemory interface contains all operations to interact with the knowledge graph
 export interface KnowledgeGraphMemory {
 
@@ -25,7 +46,7 @@ export interface KnowledgeGraphMemory {
   createRelations(relations: Relation[]): Promise<Relation[]>;
 
   addObservations(observations: { entityName: string; contents: string[] }[]): Promise<{ entityName: string; addedObservations: string[] }[]>;
-  
+
   deleteEntities(entityNames: string[]): Promise<void>;
 
   deleteObservations(deletions: { entityName: string; observations: string[] }[]): Promise<void>;
@@ -40,4 +61,3 @@ export interface KnowledgeGraphMemory {
   openNodes(names: string[]): Promise<KnowledgeGraph>;
 
 }
-

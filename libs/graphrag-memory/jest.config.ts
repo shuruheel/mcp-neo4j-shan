@@ -1,4 +1,4 @@
-export default {
+module.exports = {
   displayName: 'graphrag-memory',
   preset: '../../jest.preset.js',
   testEnvironment: 'node',
