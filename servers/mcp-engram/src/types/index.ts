@@ -4,7 +4,7 @@ import {
   Relation as BaseRelation,
   Source,
   EmotionalEvent,
-} from '@mcp/graphrag-memory';
+} from '@mcp-engram/graphrag-memory';
 
 export type { Source, EmotionalEvent };
 

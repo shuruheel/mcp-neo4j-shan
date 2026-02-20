@@ -1,5 +1,5 @@
 {
-  "name": "@neo4j/graphrag-memory",
+  "name": "@mcp-engram/graphrag-memory",
   "version": "0.0.1",
   "dependencies": {},
   "type": "commonjs",

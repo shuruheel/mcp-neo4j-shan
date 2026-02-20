@@ -15,7 +15,7 @@
     "skipDefaultLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@mcp/graphrag-memory": ["libs/graphrag-memory/src/index.ts"]
+      "@mcp-engram/graphrag-memory": ["libs/graphrag-memory/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]

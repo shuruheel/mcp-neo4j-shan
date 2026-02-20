@@ -1,5 +1,5 @@
 {
-  "name": "@mcp-neo4j/source",
+  "name": "@mcp-engram/source",
   "$schema": "node_modules/nx/schemas/project-schema.json",
   "targets": {}
 }

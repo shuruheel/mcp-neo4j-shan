@@ -1,0 +1,23 @@
+{
+  "name": "mcp-engram",
+  "version": "2.0.0",
+  "description": "MCP server for cognitive knowledge graphs — models thought, emotion, reasoning, and episodic memory",
+  "license": "MIT",
+  "bin": {
+    "mcp-engram": "./main.js"
+  },
+  "keywords": ["mcp", "knowledge-graph", "sqlite", "cognitive", "memory", "engram"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shuruheel/mcp-engram"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": ["main.js"],
+  "type": "module",
+  "main": "./main.js",
+  "dependencies": {
+    "better-sqlite3": "^12.0.0"
+  }
+}

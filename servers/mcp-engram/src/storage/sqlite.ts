@@ -155,10 +155,10 @@ export class SqliteBackend implements StorageBackend {
   constructor(dbPath?: string) {
     this.dbPath =
       dbPath ??
-      process.env.MCP_MEMORY_DB_PATH ??
+      process.env.MCP_ENGRAM_DB_PATH ??
       path.join(
         process.env.HOME ?? process.env.USERPROFILE ?? '.',
-        '.mcp-memory',
+        '.mcp-engram',
         'knowledge.db'
       );
   }

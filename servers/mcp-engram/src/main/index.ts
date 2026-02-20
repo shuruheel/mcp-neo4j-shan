@@ -10,18 +10,18 @@ import { setupTools } from './tools.js';
 import { SYSTEM_PROMPT, TOOL_PROMPTS } from './prompts.js';
 
 export async function main() {
-  console.error('Starting mcp-memory server...');
+  console.error('Starting mcp-engram server...');
 
   const dbPath =
-    process.env.MCP_MEMORY_DB_PATH ??
-    path.join(os.homedir(), '.mcp-memory', 'knowledge.db');
+    process.env.MCP_ENGRAM_DB_PATH ??
+    path.join(os.homedir(), '.mcp-engram', 'knowledge.db');
 
   const storage = new SqliteBackend(dbPath);
   storage.initialize();
   console.error(`Database opened at ${dbPath}`);
 
   const server = new Server(
-    { name: 'mcp-memory', version: '2.0.0' },
+    { name: 'mcp-engram', version: '2.0.0' },
     { capabilities: { tools: {}, prompts: {} } }
   );
 

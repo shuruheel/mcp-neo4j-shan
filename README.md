@@ -1,15 +1,21 @@
-# MCP Memory — Semantic Knowledge Graph
+# MCP Engram — Cognitive Knowledge Graph
 
-A Model Context Protocol (MCP) server for building and exploring a cognitive neuroscience-inspired knowledge graph. Backed by SQLite — zero infrastructure, single file on disk, works offline.
+A Model Context Protocol (MCP) server for building and exploring a cognitive neuroscience-inspired knowledge graph. Models thought, emotion, reasoning, and episodic memory after the structure of the human mind. Backed by SQLite — zero infrastructure, single file on disk, works offline.
 
 ## Quick Start
 
 ```bash
-npm install
-npx nx build mcp-memory
+npx mcp-engram
 ```
 
-The server stores its database at `~/.mcp-memory/knowledge.db` by default. No external services required.
+Or install globally:
+
+```bash
+npm install -g mcp-engram
+mcp-engram
+```
+
+The server stores its database at `~/.mcp-engram/knowledge.db` by default. No external services required.
 
 ## Architecture
 
@@ -36,41 +42,31 @@ Entity, Event, Concept, Attribute, Proposition, Emotion, Agent, ScientificInsigh
 
 - **SQLite** with WAL mode for concurrent reads
 - **FTS5** virtual table for full-text search with BM25 ranking
-- **Recursive CTEs** for graph traversal (replaces APOC procedures)
+- **Recursive CTEs** for graph traversal
 - Single `nodes` table for all types, `edges` table with UNIQUE constraint, plus `aliases` and `observations` tables
 - Complex objects stored as JSON in a `properties` column
 
 ## Installation
 
-### Prerequisites
+### From npm
 
-- [Node.js](https://nodejs.org/) v18+
-- [npm](https://www.npmjs.com/) v9+
+```bash
+npx mcp-engram
+```
 
-### Build
+### From source
 
 ```bash
 npm install
-npx nx build mcp-memory
-```
-
-### Run
-
-```bash
-npx nx serve mcp-memory
-```
-
-### Test
-
-```bash
-npx nx test mcp-memory
+npx nx build mcp-engram
+node dist/servers/mcp-engram/main.js
 ```
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MCP_MEMORY_DB_PATH` | No | `~/.mcp-memory/knowledge.db` | Path to the SQLite database file |
+| `MCP_ENGRAM_DB_PATH` | No | `~/.mcp-engram/knowledge.db` | Path to the SQLite database file |
 
 ## Integrating with Claude Desktop
 
@@ -86,11 +82,9 @@ Add the server to your Claude Desktop config:
 ```json
 {
   "mcpServers": {
-    "mcp-memory": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/mcp-neo4j-shan/dist/servers/mcp-memory/main/index.js"
-      ]
+    "mcp-engram": {
+      "command": "npx",
+      "args": ["mcp-engram"]
     }
   }
 }
@@ -101,33 +95,13 @@ Add the server to your Claude Desktop config:
 ## Project Structure
 
 ```
-servers/mcp-memory/          # MCP server (TypeScript, ESM)
+servers/mcp-engram/          # MCP server (TypeScript, ESM)
   src/main/                  # Server bootstrap, tool handlers, prompts
   src/storage/               # SQLite backend, FTS, schema, validation
   src/types/                 # TypeScript interfaces and enums
 
 libs/graphrag-memory/        # Shared type library (Entity, Relation, etc.)
-
-clients/knowledge-processor/ # Python extraction pipeline (separate setup)
 ```
-
-## Clients
-
-### knowledge-processor
-
-A Python pipeline for extracting structured knowledge from large text corpora and ingesting it into the knowledge graph.
-
-- Processes books, articles, and documents into entities, events, concepts, and relationships
-- Uses GPT-4o for extraction and GPT-4.5 for profile generation
-- Supports checkpointing for resumable processing
-
-```bash
-cd clients/knowledge-processor
-pip install -r requirements.txt
-python kg_main.py
-```
-
-See `clients/knowledge-processor/` for details.
 
 ## Development
 
@@ -139,10 +113,10 @@ npx nx run-many -t build
 npx nx run-many -t test
 
 # Lint
-npx nx lint mcp-memory
+npx nx lint mcp-engram
 
 # Build specific project
-npx nx build mcp-memory
+npx nx build mcp-engram
 npx nx build graphrag-memory
 ```
 

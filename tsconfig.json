@@ -18,7 +18,7 @@
     "skipDefaultLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@neo4j/graphrag-memory": [
+      "@mcp-engram/graphrag-memory": [
         "libs/graphrag-memory/src/index.ts"
       ]
     }

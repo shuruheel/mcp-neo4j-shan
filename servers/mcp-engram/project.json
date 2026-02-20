@@ -1,7 +1,7 @@
 {
-  "name": "mcp-memory",
+  "name": "mcp-engram",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "servers/mcp-memory/src",
+  "sourceRoot": "servers/mcp-engram/src",
   "projectType": "application",
   "tags": [],
   "targets": {
@@ -11,18 +11,21 @@
       "defaultConfiguration": "production",
       "options": {
         "platform": "node",
-        "outputPath": "dist/servers/mcp-memory",
+        "outputPath": "dist/servers/mcp-engram",
         "format": ["esm"],
         "bundle": true,
-        "main": "servers/mcp-memory/src/main.ts",
-        "tsConfig": "servers/mcp-memory/tsconfig.app.json",
-        "assets": ["servers/mcp-memory/src/assets"],
-        "generatePackageJson": true,
+        "main": "servers/mcp-engram/src/main.ts",
+        "tsConfig": "servers/mcp-engram/tsconfig.app.json",
+        "assets": ["servers/mcp-engram/src/assets", "servers/mcp-engram/package.json"],
+        "generatePackageJson": false,
         "external": ["better-sqlite3"],
         "esbuildOptions": {
           "sourcemap": true,
           "outExtension": {
             ".js": ".js"
+          },
+          "banner": {
+            "js": "#!/usr/bin/env node"
           }
         }
       },
@@ -33,6 +36,9 @@
             "sourcemap": false,
             "outExtension": {
               ".js": ".js"
+            },
+            "banner": {
+              "js": "#!/usr/bin/env node"
             }
           }
         }
@@ -43,15 +49,15 @@
       "defaultConfiguration": "development",
       "dependsOn": ["build"],
       "options": {
-        "buildTarget": "mcp-memory:build",
+        "buildTarget": "mcp-engram:build",
         "runBuildTargetDependencies": false
       },
       "configurations": {
         "development": {
-          "buildTarget": "mcp-memory:build:development"
+          "buildTarget": "mcp-engram:build:development"
         },
         "production": {
-          "buildTarget": "mcp-memory:build:production"
+          "buildTarget": "mcp-engram:build:production"
         }
       }
     }

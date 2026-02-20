@@ -1,9 +1,0 @@
-python-dotenv
-langchain-openai
-langchain-community
-langchain-text-splitters
-tqdm
-neo4j
-rapidfuzz
-spacy
-numpy
