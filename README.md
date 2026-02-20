@@ -48,6 +48,14 @@ Entity, Event, Concept, Attribute, Proposition, Emotion, Agent, ScientificInsigh
 
 ## Installation
 
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) v18+
+- A C/C++ toolchain for compiling the `better-sqlite3` native module:
+  - **Mac**: Xcode Command Line Tools (`xcode-select --install`)
+  - **Linux**: `build-essential` (`apt install build-essential`)
+  - **Windows**: Visual Studio Build Tools
+
 ### From npm
 
 ```bash

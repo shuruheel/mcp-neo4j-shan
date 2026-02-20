@@ -16,7 +16,12 @@
         "bundle": true,
         "main": "servers/mcp-engram/src/main.ts",
         "tsConfig": "servers/mcp-engram/tsconfig.app.json",
-        "assets": ["servers/mcp-engram/src/assets", "servers/mcp-engram/package.json"],
+        "assets": [
+          "servers/mcp-engram/src/assets",
+          "servers/mcp-engram/package.json",
+          "LICENSE",
+          "README.md"
+        ],
         "generatePackageJson": false,
         "external": ["better-sqlite3"],
         "esbuildOptions": {
