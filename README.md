@@ -21,7 +21,7 @@ The server stores its database at `~/.mcp-engram/knowledge.db` by default. No ex
 
 ### How It Works
 
-The MCP server exposes 8 tools that let an LLM build, search, and traverse a knowledge graph:
+The MCP server exposes 10 tools that let an LLM build, search, and traverse a knowledge graph:
 
 | Tool | Purpose |
 |---|---|
@@ -29,10 +29,12 @@ The MCP server exposes 8 tools that let an LLM build, search, and traverse a kno
 | `explore_context` | Weighted graph traversal around given nodes |
 | `create_nodes` | Create or upsert nodes of any type |
 | `create_relations` | Create edges with context, weight, and confidence |
-| `add_sources` | Record provenance (Source nodes + DERIVED_FROM links) |
+| `add_sources` | Record provenance (Source nodes + DERIVED_FROM links) with optional `reliability` scores |
 | `get_temporal_sequence` | Follow chronological chains (NEXT, BEFORE, CAUSES) |
 | `create_reasoning_chain` | Build structured multi-step reasoning |
 | `get_reasoning_chain` | Retrieve reasoning chains by name or topic |
+| `detect_conflicts` | Find CONTRADICTS edges between nodes |
+| `assess_claims` | Evaluate claim reliability using source trustworthiness and conflict detection |
 
 ### Node Types (15)
 
@@ -45,6 +47,18 @@ Entity, Event, Concept, Attribute, Proposition, Emotion, Agent, ScientificInsigh
 - **Recursive CTEs** for graph traversal
 - Single `nodes` table for all types, `edges` table with UNIQUE constraint, plus `aliases` and `observations` tables
 - Complex objects stored as JSON in a `properties` column
+
+### Conflict Detection & Confidence Propagation
+
+Source nodes can carry a `reliability` score (0.0–1.0, default 1.0) representing trustworthiness. When you assess claims, effective confidence is computed at query time:
+
+```
+effectiveConfidence = storedConfidence × avg(source reliabilities)
+```
+
+This means a high-confidence claim backed only by a low-reliability source gets dampened, while claims with no linked sources pass through unchanged. Confidence is never mutated — it is always computed on read, so changing a source's reliability instantly affects all derived claims.
+
+Conflicts are detected by scanning for explicit `CONTRADICTS` edges. When recording opposing claims, create a CONTRADICTS relation between them so `detect_conflicts` and `assess_claims` can surface them.
 
 ## Installation
 

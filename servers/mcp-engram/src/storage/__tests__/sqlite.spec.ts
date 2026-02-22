@@ -1,5 +1,5 @@
 import { SqliteBackend } from '../sqlite';
-import type { Entity, Relation } from '../../types';
+import type { Entity } from '../../types';
 let backend: SqliteBackend;
 beforeEach(() => {
   backend = new SqliteBackend(':memory:');
@@ -476,5 +476,175 @@ describe('validateProvenance', () => {
     ]);
     const result = backend.validateProvenance('SomeEntity');
     expect(result.valid).toBe(true);
+  });
+});
+// ---- conflict detection ----
+describe('detectConflicts', () => {
+  it('detects explicit CONTRADICTS edges', () => {
+    backend.createNodes([
+      { name: 'P1', entityType: 'Proposition', observations: [], statement: 'Earth is flat', truthValue: true },
+      { name: 'P2', entityType: 'Proposition', observations: [], statement: 'Earth is round', truthValue: true },
+    ]);
+    backend.createRelations([
+      { from: 'P1', to: 'P2', relationType: 'contradicts' },
+    ]);
+    const conflicts = backend.detectConflicts();
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].type).toBe('explicit');
+    expect(conflicts[0].nodeA.name).toBe('P1');
+    expect(conflicts[0].nodeB.name).toBe('P2');
+  });
+  it('scopes to specified nodeNames', () => {
+    backend.createNodes([
+      { name: 'A', entityType: 'Proposition', observations: [] },
+      { name: 'B', entityType: 'Proposition', observations: [] },
+      { name: 'C', entityType: 'Proposition', observations: [] },
+      { name: 'D', entityType: 'Proposition', observations: [] },
+    ]);
+    backend.createRelations([
+      { from: 'A', to: 'B', relationType: 'contradicts' },
+      { from: 'C', to: 'D', relationType: 'contradicts' },
+    ]);
+    const conflicts = backend.detectConflicts(['A', 'B']);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].nodeA.name).toBe('A');
+  });
+  it('returns empty when no conflicts exist', () => {
+    backend.createNodes([
+      { name: 'X', entityType: 'Proposition', observations: [] },
+    ]);
+    const conflicts = backend.detectConflicts();
+    expect(conflicts).toHaveLength(0);
+  });
+  it('detects uppercase CONTRADICTS edges', () => {
+    backend.createNodes([
+      { name: 'U1', entityType: 'Proposition', observations: [] },
+      { name: 'U2', entityType: 'Proposition', observations: [] },
+    ]);
+    backend.createRelations([
+      { from: 'U1', to: 'U2', relationType: 'CONTRADICTS' },
+    ]);
+    const conflicts = backend.detectConflicts();
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].type).toBe('explicit');
+  });
+  it('deduplicates bidirectional CONTRADICTS edges', () => {
+    backend.createNodes([
+      { name: 'Bi1', entityType: 'Proposition', observations: [] },
+      { name: 'Bi2', entityType: 'Proposition', observations: [] },
+    ]);
+    backend.createRelations([
+      { from: 'Bi1', to: 'Bi2', relationType: 'contradicts' },
+      { from: 'Bi2', to: 'Bi1', relationType: 'contradicts' },
+    ]);
+    const conflicts = backend.detectConflicts();
+    expect(conflicts).toHaveLength(1);
+  });
+});
+// ---- effective confidence ----
+describe('computeEffectiveConfidence', () => {
+  it('passes through stored confidence when no sources exist', () => {
+    backend.createNodes([
+      { name: 'Claim', entityType: 'Proposition', observations: [], confidence: 0.8 },
+    ]);
+    const result = backend.computeEffectiveConfidence('Claim');
+    expect(result.effectiveConfidence).toBe(0.8);
+    expect(result.sources).toHaveLength(0);
+  });
+  it('dampens confidence with a low-reliability source', () => {
+    backend.createNodes([
+      { name: 'Claim', entityType: 'Proposition', observations: [], confidence: 0.8 },
+      { name: 'BadSource', entityType: 'Source', observations: [], sourceType: 'web_page', reliability: 0.5 },
+    ]);
+    backend.createRelations([
+      { from: 'Claim', to: 'BadSource', relationType: 'DERIVED_FROM' },
+    ]);
+    const result = backend.computeEffectiveConfidence('Claim');
+    expect(result.effectiveConfidence).toBeCloseTo(0.4); // 0.8 * 0.5
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0].reliability).toBe(0.5);
+  });
+  it('averages reliability across multiple sources', () => {
+    backend.createNodes([
+      { name: 'Claim', entityType: 'Proposition', observations: [], confidence: 1.0 },
+      { name: 'S1', entityType: 'Source', observations: [], sourceType: 'pdf', reliability: 0.8 },
+      { name: 'S2', entityType: 'Source', observations: [], sourceType: 'web_page', reliability: 0.4 },
+    ]);
+    backend.createRelations([
+      { from: 'Claim', to: 'S1', relationType: 'DERIVED_FROM' },
+      { from: 'Claim', to: 'S2', relationType: 'DERIVED_FROM' },
+    ]);
+    const result = backend.computeEffectiveConfidence('Claim');
+    expect(result.effectiveConfidence).toBeCloseTo(0.6); // 1.0 * avg(0.8, 0.4) = 0.6
+    expect(result.sources).toHaveLength(2);
+  });
+  it('defaults reliability to 1.0 when not set', () => {
+    backend.createNodes([
+      { name: 'Claim', entityType: 'Proposition', observations: [], confidence: 0.9 },
+      { name: 'PlainSource', entityType: 'Source', observations: [], sourceType: 'document' },
+    ]);
+    backend.createRelations([
+      { from: 'Claim', to: 'PlainSource', relationType: 'DERIVED_FROM' },
+    ]);
+    const result = backend.computeEffectiveConfidence('Claim');
+    expect(result.effectiveConfidence).toBeCloseTo(0.9); // 0.9 * 1.0
+    expect(result.sources[0].reliability).toBe(1.0);
+  });
+  it('works with CITES edges', () => {
+    backend.createNodes([
+      { name: 'Insight', entityType: 'ScientificInsight', observations: [], confidence: 0.7 },
+      { name: 'Paper', entityType: 'Source', observations: [], sourceType: 'pdf', reliability: 0.9 },
+    ]);
+    backend.createRelations([
+      { from: 'Insight', to: 'Paper', relationType: 'CITES' },
+    ]);
+    const result = backend.computeEffectiveConfidence('Insight');
+    expect(result.effectiveConfidence).toBeCloseTo(0.63); // 0.7 * 0.9
+    expect(result.sources).toHaveLength(1);
+  });
+  it('returns zero for nonexistent node', () => {
+    const result = backend.computeEffectiveConfidence('DoesNotExist');
+    expect(result.effectiveConfidence).toBe(0);
+    expect(result.sources).toHaveLength(0);
+  });
+});
+// ---- assess claims ----
+describe('assessClaims', () => {
+  it('assesses claims found by query', () => {
+    backend.createNodes([
+      { name: 'Climate Change Real', entityType: 'Proposition', observations: [], statement: 'Climate change is real', confidence: 0.95, truthValue: true },
+      { name: 'ReliableSource', entityType: 'Source', observations: [], sourceType: 'pdf', reliability: 0.9 },
+    ]);
+    backend.createRelations([
+      { from: 'Climate Change Real', to: 'ReliableSource', relationType: 'DERIVED_FROM' },
+    ]);
+    const result = backend.assessClaims('climate');
+    expect(result.assessments.length).toBeGreaterThanOrEqual(1);
+    expect(result.summary).toContain('Assessed');
+  });
+  it('assesses specific nodeNames', () => {
+    backend.createNodes([
+      { name: 'P1', entityType: 'Proposition', observations: [], confidence: 0.8 },
+      { name: 'P2', entityType: 'Proposition', observations: [], confidence: 0.6 },
+    ]);
+    const result = backend.assessClaims('', ['P1', 'P2']);
+    expect(result.assessments).toHaveLength(2);
+  });
+  it('returns empty for no matches', () => {
+    const result = backend.assessClaims('xyznonexistent');
+    expect(result.assessments).toHaveLength(0);
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.summary).toContain('No matching claims');
+  });
+});
+// ---- source reliability ----
+describe('source reliability', () => {
+  it('stores and retrieves reliability in properties JSON', () => {
+    backend.createNodes([
+      { name: 'MySource', entityType: 'Source', observations: [], sourceType: 'web_page', reliability: 0.7 },
+    ]);
+    const node = backend.getNodeByName('MySource');
+    expect(node).not.toBeNull();
+    expect(node!.reliability).toBe(0.7);
   });
 });

@@ -9,6 +9,8 @@ TOOL USAGE WORKFLOW:
 6. Use \`create_reasoning_chain\` to capture structured multi-step reasoning.
 7. Use \`get_reasoning_chain\` to retrieve and examine reasoning chains.
 8. Use \`get_temporal_sequence\` to explore chronological event sequences.
+9. Use \`detect_conflicts\` to find contradictions between claims in the graph.
+10. Use \`assess_claims\` to evaluate claim reliability by factoring in source trustworthiness and detecting conflicts.
 
 NODE TYPES (15):
 Entity, Event, Concept, Attribute, Proposition, Emotion, Agent, ScientificInsight, Law, Location, Thought, ReasoningChain, ReasoningStep, Source, EmotionalEvent
@@ -41,4 +43,10 @@ export const TOOL_PROMPTS: Record<string, string> = {
 
   get_temporal_sequence:
     'Follow temporal relations (NEXT, BEFORE, AFTER, CAUSES) to build chronological sequences. Specify direction: forward, backward, or both.',
+
+  detect_conflicts:
+    'Find contradictions in the knowledge graph by scanning for CONTRADICTS edges. Always create CONTRADICTS relations when recording opposing claims. Optionally scope to specific node names.',
+
+  assess_claims:
+    'Evaluate claim reliability by computing effective confidence = stored confidence × average source reliability. Also detects conflicts. Use to audit knowledge quality and flag dubious claims.',
 };

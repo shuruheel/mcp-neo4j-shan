@@ -14,6 +14,8 @@ import type {
   ValidationResult,
   ReasoningChainInput,
   ReasoningStepInput,
+  ConflictPair,
+  AssessClaimsResult,
 } from '../types/index.js';
 
 // ---- helpers ----
@@ -717,6 +719,174 @@ export class SqliteBackend implements StorageBackend {
 
   validateProvenance(nodeName: string): ValidationResult {
     return validateProvenanceImpl(this.db, nodeName);
+  }
+
+  // ---------- conflict detection & confidence propagation ----------
+
+  detectConflicts(nodeNames?: string[]): ConflictPair[] {
+    const conflicts: ConflictPair[] = [];
+
+    // Find explicit CONTRADICTS edges (deduplicated for bidirectional pairs)
+    let rows: Record<string, unknown>[];
+    if (nodeNames?.length) {
+      const placeholders = nodeNames.map(() => '?').join(',');
+      rows = this.db
+        .prepare(
+          `SELECT DISTINCT
+             CASE WHEN from_node < to_node THEN from_node ELSE to_node END AS node_a,
+             CASE WHEN from_node < to_node THEN to_node ELSE from_node END AS node_b
+           FROM edges
+           WHERE relation_type IN ('contradicts', 'CONTRADICTS')
+             AND (from_node IN (${placeholders}) OR to_node IN (${placeholders}))`
+        )
+        .all(...nodeNames, ...nodeNames) as Record<string, unknown>[];
+    } else {
+      rows = this.db
+        .prepare(
+          `SELECT DISTINCT
+             CASE WHEN from_node < to_node THEN from_node ELSE to_node END AS node_a,
+             CASE WHEN from_node < to_node THEN to_node ELSE from_node END AS node_b
+           FROM edges
+           WHERE relation_type IN ('contradicts', 'CONTRADICTS')`
+        )
+        .all() as Record<string, unknown>[];
+    }
+
+    if (rows.length === 0) return conflicts;
+
+    // Bulk fetch entities
+    const allNames = new Set<string>();
+    for (const row of rows) {
+      allNames.add(row.node_a as string);
+      allNames.add(row.node_b as string);
+    }
+    const entityMap = new Map<string, Entity>();
+    for (const e of this.getNodesByNames([...allNames])) {
+      entityMap.set(e.name, e);
+    }
+
+    for (const row of rows) {
+      const a = entityMap.get(row.node_a as string);
+      const b = entityMap.get(row.node_b as string);
+      if (a && b) {
+        conflicts.push({
+          nodeA: a,
+          nodeB: b,
+          type: 'explicit',
+          reason: `CONTRADICTS edge between "${a.name}" and "${b.name}"`,
+        });
+      }
+    }
+
+    return conflicts;
+  }
+
+  computeEffectiveConfidence(nodeName: string): {
+    effectiveConfidence: number;
+    sources: Array<{ source: Entity; reliability: number }>;
+  } {
+    const node = this.getNodeByName(nodeName);
+    if (!node) {
+      return { effectiveConfidence: 0, sources: [] };
+    }
+
+    const storedConfidence = node.confidence ?? 1.0;
+
+    // Find Source nodes linked via DERIVED_FROM or CITES edges
+    const sourceRows = this.db
+      .prepare(
+        `SELECT n.* FROM edges e
+         JOIN nodes n ON n.name = e.to_node AND n.node_type = 'Source'
+         WHERE e.from_node = ?
+           AND e.relation_type IN ('derivedFrom', 'cites', 'DERIVED_FROM', 'CITES')`
+      )
+      .all(nodeName) as Record<string, unknown>[];
+
+    const sources: Array<{ source: Entity; reliability: number }> = [];
+    for (const row of sourceRows) {
+      const sourceEntity = rowToEntity(row);
+      const reliability = sourceEntity.reliability ?? 1.0;
+      sources.push({ source: sourceEntity, reliability });
+    }
+
+    let effectiveConfidence: number;
+    if (sources.length === 0) {
+      effectiveConfidence = storedConfidence;
+    } else {
+      const avgReliability =
+        sources.reduce((sum, s) => sum + s.reliability, 0) / sources.length;
+      effectiveConfidence = storedConfidence * avgReliability;
+    }
+
+    return { effectiveConfidence, sources };
+  }
+
+  assessClaims(query: string, nodeNames?: string[]): AssessClaimsResult {
+    // 1. Get nodes to assess
+    let entities: Entity[];
+    if (nodeNames?.length) {
+      entities = this.getNodesByNames(nodeNames);
+    } else {
+      const graph = this.searchNodes(query, {
+        nodeTypes: ['Proposition', 'ScientificInsight', 'Thought'],
+      });
+      entities = graph.entities;
+    }
+
+    if (entities.length === 0) {
+      return { assessments: [], conflicts: [], summary: 'No matching claims found.' };
+    }
+
+    // 2. Detect conflicts scoped to found nodes
+    const names = entities.map((e) => e.name);
+    const conflicts = this.detectConflicts(names);
+
+    // 3. Compute effective confidence for each node
+    const conflictsByNode = new Map<string, ConflictPair[]>();
+    for (const c of conflicts) {
+      for (const n of [c.nodeA.name, c.nodeB.name]) {
+        if (!conflictsByNode.has(n)) conflictsByNode.set(n, []);
+        conflictsByNode.get(n)!.push(c);
+      }
+    }
+
+    const assessments = entities.map((node) => {
+      const { effectiveConfidence, sources } =
+        this.computeEffectiveConfidence(node.name);
+      return {
+        node,
+        storedConfidence: node.confidence ?? 1.0,
+        effectiveConfidence,
+        sources,
+        conflicts: conflictsByNode.get(node.name) ?? [],
+      };
+    });
+
+    // 4. Build summary
+    const conflictCount = conflicts.length;
+    const lowConfidence = assessments.filter(
+      (a) => a.effectiveConfidence < 0.5
+    ).length;
+    const parts: string[] = [
+      `Assessed ${assessments.length} claim(s).`,
+    ];
+    if (conflictCount > 0) {
+      parts.push(`Found ${conflictCount} conflict(s).`);
+    }
+    if (lowConfidence > 0) {
+      parts.push(
+        `${lowConfidence} claim(s) have effective confidence below 0.5.`
+      );
+    }
+    if (conflictCount === 0 && lowConfidence === 0) {
+      parts.push('No conflicts or low-confidence claims detected.');
+    }
+
+    return {
+      assessments,
+      conflicts,
+      summary: parts.join(' '),
+    };
   }
 
   // ---------- private helpers ----------

@@ -183,6 +183,11 @@ export function setupTools(server: Server, storage: StorageBackend): void {
                 title: { type: 'string' },
                 uri: { type: 'string' },
                 collectedAt: { type: 'string' },
+                reliability: {
+                  type: 'number',
+                  description:
+                    'Source trustworthiness from 0.0 to 1.0 (default 1.0)',
+                },
               },
               required: ['name', 'sourceType'],
             },
@@ -308,6 +313,44 @@ export function setupTools(server: Server, storage: StorageBackend): void {
         },
       },
     },
+    {
+      name: 'detect_conflicts',
+      description:
+        'Detect conflicting claims in the knowledge graph by finding CONTRADICTS edges between nodes.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          nodeNames: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Optional list of node names to scope the conflict search. If omitted, searches the entire graph.',
+          },
+        },
+      },
+    },
+    {
+      name: 'assess_claims',
+      description:
+        'Assess the reliability of claims by computing effective confidence scores that factor in source trustworthiness, and detecting conflicts between claims.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description:
+              'Search query to find claims (Propositions, ScientificInsights, Thoughts) to assess.',
+          },
+          nodeNames: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Optional specific node names to assess instead of searching by query.',
+          },
+        },
+        required: ['query'],
+      },
+    },
   ];
 
   // Register tool list
@@ -377,6 +420,7 @@ export function setupTools(server: Server, storage: StorageBackend): void {
               description: (s.title as string) ?? undefined,
               uri: s.uri as string | undefined,
               collectedAt: s.collectedAt as string | undefined,
+              reliability: s.reliability as number | undefined,
             }) as Entity
         );
         storage.createNodes(sources);
@@ -470,6 +514,49 @@ export function setupTools(server: Server, storage: StorageBackend): void {
             (args.limit as number) ?? 3
           );
         }
+        break;
+      }
+
+      case 'detect_conflicts': {
+        const conflicts = storage.detectConflicts(
+          args.nodeNames as string[] | undefined
+        );
+        result = {
+          conflictCount: conflicts.length,
+          conflicts: conflicts.map((c) => ({
+            nodeA: c.nodeA.name,
+            nodeB: c.nodeB.name,
+            type: c.type,
+            reason: c.reason,
+          })),
+        };
+        break;
+      }
+
+      case 'assess_claims': {
+        const assessment = storage.assessClaims(
+          args.query as string,
+          args.nodeNames as string[] | undefined
+        );
+        result = {
+          summary: assessment.summary,
+          assessments: assessment.assessments.map((a) => ({
+            node: a.node.name,
+            storedConfidence: a.storedConfidence,
+            effectiveConfidence: a.effectiveConfidence,
+            sources: a.sources.map((s) => ({
+              name: s.source.name,
+              reliability: s.reliability,
+            })),
+            conflictCount: a.conflicts.length,
+          })),
+          conflicts: assessment.conflicts.map((c) => ({
+            nodeA: c.nodeA.name,
+            nodeB: c.nodeB.name,
+            type: c.type,
+            reason: c.reason,
+          })),
+        };
         break;
       }
 

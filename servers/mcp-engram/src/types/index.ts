@@ -275,6 +275,7 @@ export interface Entity extends BaseEntity {
   collectedAt?: string;
   contentHash?: string;
   metadataJson?: string;
+  reliability?: number; // 0.0-1.0 source trustworthiness (default 1.0)
 
   // EmotionalEvent (when entityType === 'EmotionalEvent')
   arousal?: number;
@@ -296,6 +297,29 @@ export interface Relation extends BaseRelation {
 export interface KnowledgeGraph extends BaseKnowledgeGraph {
   entities: Entity[];
   relations: Relation[];
+}
+
+// ---------- Conflict detection & confidence propagation ----------
+
+export interface ConflictPair {
+  nodeA: Entity;
+  nodeB: Entity;
+  type: 'explicit';
+  reason: string;
+}
+
+export interface ClaimAssessment {
+  node: Entity;
+  storedConfidence: number;
+  effectiveConfidence: number;
+  sources: Array<{ source: Entity; reliability: number }>;
+  conflicts: ConflictPair[];
+}
+
+export interface AssessClaimsResult {
+  assessments: ClaimAssessment[];
+  conflicts: ConflictPair[];
+  summary: string;
 }
 
 // ---------- Storage backend abstraction ----------
@@ -373,4 +397,12 @@ export interface StorageBackend {
 
   // Validation
   validateProvenance(nodeName: string): ValidationResult;
+
+  // Conflict detection & confidence propagation
+  detectConflicts(nodeNames?: string[]): ConflictPair[];
+  computeEffectiveConfidence(nodeName: string): {
+    effectiveConfidence: number;
+    sources: Array<{ source: Entity; reliability: number }>;
+  };
+  assessClaims(query: string, nodeNames?: string[]): AssessClaimsResult;
 }
