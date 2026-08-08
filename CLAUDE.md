@@ -25,7 +25,7 @@ npx nx serve mcp-engram
 # Test
 npx nx test graphrag-memory          # Library tests
 npx nx test mcp-engram               # Server tests
-npx nx test mcp-engram -- --testPathPattern="sqlite"  # Run single test file by pattern
+npx nx test mcp-engram -- --testPathPatterns=sqlite   # Run single test file by pattern (Jest 30: flag is plural)
 
 # Lint
 npx nx lint mcp-engram
@@ -66,6 +66,13 @@ npx nx run-many -t lint
 - Recursive CTEs for graph traversal
 - WAL mode for concurrent read performance
 - 15 node types: Entity, Event, Concept, Attribute, Proposition, Emotion, Thought, ScientificInsight, Law, Location, ReasoningChain, ReasoningStep, Agent, Source, EmotionalEvent
+
+### Build & Publishing
+
+- esbuild bundles the server into a single ESM `dist/servers/mcp-engram/main.js` with a `#!/usr/bin/env node` shebang
+- `better-sqlite3` is the only unbundled dependency (native module, marked `external` in `servers/mcp-engram/project.json`)
+- `generatePackageJson` is false: the published `package.json` is `servers/mcp-engram/package.json`, copied into dist as a build asset. The npm version lives there, and any new runtime dependency that can't be bundled must be added to its `dependencies` by hand
+- Publishing a GitHub release triggers `.github/workflows/publish.yml`, which builds and runs `npm publish` from `dist/servers/mcp-engram` (package name: `mcp-engram`)
 
 ### Environment Variables
 
