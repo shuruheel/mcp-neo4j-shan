@@ -3,6 +3,7 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -15,14 +16,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
+
+      # Trusted publishing (OIDC) requires npm >= 11.5.1
+      - run: npm install -g npm@latest
 
       - run: npm ci
 
       - run: npx nx build mcp-engram
 
-      - run: npm publish --provenance --access public
+      - run: npm publish --access public
         working-directory: dist/servers/mcp-engram
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
