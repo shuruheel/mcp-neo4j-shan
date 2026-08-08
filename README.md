@@ -27,12 +27,21 @@ The MCP server exposes 8 tools that let an LLM build, search, and traverse a kno
 |---|---|
 | `search_nodes` | Full-text search across all nodes (FTS5) |
 | `explore_context` | Weighted graph traversal around given nodes |
-| `create_nodes` | Create or upsert nodes of any type |
+| `create_nodes` | Create or merge-update nodes of any type |
 | `create_relations` | Create edges with context, weight, and confidence |
 | `add_sources` | Record provenance (Source nodes + DERIVED_FROM links) |
 | `get_temporal_sequence` | Follow chronological chains (NEXT, BEFORE, CAUSES) |
 | `create_reasoning_chain` | Build structured multi-step reasoning |
 | `get_reasoning_chain` | Retrieve reasoning chains by name or topic |
+
+Every tool declares an input schema (validated), an output schema, and behavior
+annotations (read-only vs. write), and returns machine-readable
+`structuredContent` alongside a JSON text block. Writes **merge**: re-creating
+an existing node or edge updates the fields you provide and preserves the ones
+you don't.
+
+The server also exposes MCP prompts — a `system` prompt with the overall
+tool-usage workflow, plus per-tool usage guidance under each tool's name.
 
 ### Node Types (15)
 
