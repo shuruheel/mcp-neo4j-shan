@@ -12,8 +12,10 @@ export function setupTools(server: Server, storage: StorageBackend): void {
   const tools = [
     {
       name: 'search_nodes',
+      title: 'Search Knowledge Graph',
       description:
         'Full-text search across all nodes in the knowledge graph. Returns matching nodes ranked by relevance with their relationships.',
+      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {
         type: 'object',
         properties: {
@@ -33,8 +35,10 @@ export function setupTools(server: Server, storage: StorageBackend): void {
     },
     {
       name: 'explore_context',
+      title: 'Explore Graph Context',
       description:
         'Explore the knowledge graph neighborhood around one or more nodes. Uses weighted traversal to surface the most important connections.',
+      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {
         type: 'object',
         properties: {
@@ -61,8 +65,15 @@ export function setupTools(server: Server, storage: StorageBackend): void {
     },
     {
       name: 'create_nodes',
+      title: 'Create or Update Nodes',
       description:
-        'Create or update nodes in the knowledge graph. Supports all node types: Entity, Event, Concept, Attribute, Proposition, Emotion, Agent, ScientificInsight, Law, Location, Thought, ReasoningChain, ReasoningStep, Source, EmotionalEvent.',
+        'Create or update nodes in the knowledge graph. Supports all node types: Entity, Event, Concept, Attribute, Proposition, Emotion, Agent, ScientificInsight, Law, Location, Thought, ReasoningChain, ReasoningStep, Source, EmotionalEvent. Note: re-creating an existing node overwrites its fields.',
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         type: 'object',
         properties: {
@@ -123,8 +134,15 @@ export function setupTools(server: Server, storage: StorageBackend): void {
     },
     {
       name: 'create_relations',
+      title: 'Create or Update Relations',
       description:
         'Create or update relationships between nodes. Always include context describing why nodes are connected.',
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         type: 'object',
         properties: {
@@ -157,8 +175,15 @@ export function setupTools(server: Server, storage: StorageBackend): void {
     },
     {
       name: 'add_sources',
+      title: 'Add Provenance Sources',
       description:
         'Create Source nodes and optionally link them to existing nodes via DERIVED_FROM edges.',
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         type: 'object',
         properties: {
@@ -206,8 +231,10 @@ export function setupTools(server: Server, storage: StorageBackend): void {
     },
     {
       name: 'get_temporal_sequence',
+      title: 'Get Temporal Sequence',
       description:
         'Retrieve a chronological sequence of nodes connected by temporal relations (NEXT, BEFORE, AFTER, CAUSES, etc.).',
+      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {
         type: 'object',
         properties: {
@@ -223,8 +250,15 @@ export function setupTools(server: Server, storage: StorageBackend): void {
     },
     {
       name: 'create_reasoning_chain',
+      title: 'Create Reasoning Chain',
       description:
         'Create a structured reasoning chain with ordered steps. Each step represents a logical move (premise, inference, evidence, etc.).',
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         type: 'object',
         properties: {
@@ -296,8 +330,10 @@ export function setupTools(server: Server, storage: StorageBackend): void {
     },
     {
       name: 'get_reasoning_chain',
+      title: 'Get Reasoning Chain',
       description:
         'Retrieve a reasoning chain by name, or find chains related to given topics.',
+      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {
         type: 'object',
         properties: {

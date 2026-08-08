@@ -1,6 +1,9 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { GetPromptRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  GetPromptRequestSchema,
+  ListPromptsRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 
 import * as os from 'os';
 import * as path from 'path';
@@ -27,12 +30,30 @@ export async function main() {
 
   setupTools(server, storage);
 
+  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+    prompts: [
+      {
+        name: 'system',
+        description:
+          'Workflow guidance for building and exploring the knowledge graph',
+      },
+      ...Object.keys(TOOL_PROMPTS).map((name) => ({
+        name,
+        description: `Usage guidance for the ${name} tool`,
+      })),
+    ],
+  }));
+
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-    const promptName = request.params.name || 'system';
-    const promptContent = TOOL_PROMPTS[promptName] || SYSTEM_PROMPT;
+    const promptName = request.params.name;
+    const promptContent =
+      promptName === 'system' ? SYSTEM_PROMPT : TOOL_PROMPTS[promptName];
+    if (!promptContent) {
+      throw new Error(`Unknown prompt: ${promptName}`);
+    }
     return {
       messages: [
-        { role: 'system', content: { type: 'text', text: promptContent } },
+        { role: 'user', content: { type: 'text', text: promptContent } },
       ],
     };
   });
