@@ -44,7 +44,7 @@ export async function main() {
   storage.initialize();
   console.error(`Database opened at ${dbPath}`);
 
-  const server = new McpServer({ name: 'mcp-engram', version: '2.0.0' });
+  const server = new McpServer({ name: 'mcp-engram', version: '2.1.0' });
 
   setupTools(server, storage);
   setupPrompts(server);

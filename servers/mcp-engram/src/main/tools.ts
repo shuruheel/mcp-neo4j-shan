@@ -49,9 +49,11 @@ const graphOutput = {
 };
 
 const READ_ONLY = { readOnlyHint: true, openWorldHint: false };
+// Writes merge onto existing rows (absent fields are preserved), so they are
+// additive rather than destructive.
 const WRITE = {
   readOnlyHint: false,
-  destructiveHint: true,
+  destructiveHint: false,
   idempotentHint: true,
   openWorldHint: false,
 };
@@ -144,7 +146,7 @@ export function setupTools(server: McpServer, storage: StorageBackend): void {
     {
       title: 'Create or Update Nodes',
       description:
-        'Create or update nodes in the knowledge graph. Supports all node types: Entity, Event, Concept, Attribute, Proposition, Emotion, Agent, ScientificInsight, Law, Location, Thought, ReasoningChain, ReasoningStep, Source, EmotionalEvent. Note: re-creating an existing node overwrites its fields.',
+        'Create or update nodes in the knowledge graph. Supports all node types: Entity, Event, Concept, Attribute, Proposition, Emotion, Agent, ScientificInsight, Law, Location, Thought, ReasoningChain, ReasoningStep, Source, EmotionalEvent. Re-creating an existing node merges: provided fields are updated, absent fields are preserved.',
       inputSchema: {
         nodes: z.array(
           z.looseObject({

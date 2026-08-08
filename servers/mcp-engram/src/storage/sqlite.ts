@@ -63,6 +63,13 @@ function buildSearchText(entity: Entity): string {
   return parts.join(' ');
 }
 
+/** Fields explicitly provided on an incoming entity (null/undefined dropped). */
+function definedFields(entity: Entity): Partial<Entity> {
+  return Object.fromEntries(
+    Object.entries(entity).filter(([, v]) => v !== undefined && v !== null)
+  ) as Partial<Entity>;
+}
+
 /** Split an Entity into DB columns + a properties JSON blob. */
 function entityToRow(entity: Entity) {
   const nodeType = entity.entityType;
@@ -209,10 +216,19 @@ export class SqliteBackend implements StorageBackend {
       'INSERT OR IGNORE INTO aliases (alias, canonical_name) VALUES (?, ?)'
     );
 
+    const selectExisting = this.db.prepare('SELECT * FROM nodes WHERE name = ?');
+
     const tx = this.db.transaction((entities: Entity[]) => {
       for (const entity of entities) {
-        const row = entityToRow(entity);
-        upsert.run(row);
+        // Merge onto the existing node so a sparse re-create doesn't drop
+        // fields; incoming values win, absent ones are preserved.
+        const existing = selectExisting.get(entity.name) as
+          | Record<string, unknown>
+          | undefined;
+        const merged = existing
+          ? ({ ...rowToEntity(existing), ...definedFields(entity) } as Entity)
+          : entity;
+        upsert.run(entityToRow(merged));
 
         // observations
         if (entity.observations?.length) {
@@ -245,9 +261,31 @@ export class SqliteBackend implements StorageBackend {
         properties = excluded.properties
     `);
 
+    const selectExisting = this.db.prepare(
+      'SELECT confidence, weight, context, properties FROM edges WHERE from_node = ? AND to_node = ? AND relation_type = ?'
+    );
+
     const tx = this.db.transaction((rels: Relation[]) => {
       for (const rel of rels) {
-        const props: Record<string, unknown> = {};
+        // Merge onto the existing edge so a sparse re-create doesn't drop
+        // confidence, weight, context, or properties.
+        const existing = selectExisting.get(
+          rel.from,
+          rel.to,
+          rel.relationType
+        ) as
+          | {
+              confidence: number | null;
+              weight: number | null;
+              context: string | null;
+              properties: string;
+            }
+          | undefined;
+
+        const props: Record<string, unknown> =
+          existing && typeof existing.properties === 'string'
+            ? (JSON.parse(existing.properties) as Record<string, unknown>)
+            : {};
         for (const [k, v] of Object.entries(rel)) {
           if (
             [
@@ -267,9 +305,9 @@ export class SqliteBackend implements StorageBackend {
           from: rel.from,
           to: rel.to,
           relationType: rel.relationType,
-          confidence: rel.confidenceScore ?? null,
-          weight: rel.weight ?? 0.5,
-          context: rel.context ?? null,
+          confidence: rel.confidenceScore ?? existing?.confidence ?? null,
+          weight: rel.weight ?? existing?.weight ?? 0.5,
+          context: rel.context ?? existing?.context ?? null,
           properties: JSON.stringify(props),
         });
       }
