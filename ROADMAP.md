@@ -5,13 +5,11 @@ roughly ordered within each section; nothing here is a commitment.
 
 ## Protocol & SDK
 
-- **Structured tool output** — add `outputSchema` to tools and return
-  `structuredContent` alongside the current JSON-stringified text blocks, so
-  clients can consume results programmatically without parsing.
-- **Migrate to the SDK's high-level `McpServer` API** (`registerTool` /
-  `registerPrompt`) — replaces the low-level `Server` + `setRequestHandler`
-  wiring in `src/main/`, adds input validation, and tracks spec changes
-  automatically.
+- ~~**Structured tool output**~~ — done: all tools declare `outputSchema` and
+  return `structuredContent` alongside the JSON text blocks.
+- ~~**Migrate to the SDK's high-level `McpServer` API**~~ — done: tools and
+  prompts are registered via `registerTool` / `registerPrompt` with zod
+  schemas and input validation.
 - **Track spec 2026-07-28** — the stateless protocol core (`server/discover`,
   `resultType`, `_meta`-carried version/capabilities) is handled by the SDK;
   keep the SDK current and re-test against new client releases. Roots,
