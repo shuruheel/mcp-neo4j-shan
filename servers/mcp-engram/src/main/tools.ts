@@ -1,547 +1,416 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
-import type { StorageBackend, Entity, Relation } from '../types/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import type {
+  StorageBackend,
+  Entity,
+  KnowledgeGraph,
+  Relation,
+} from '../types/index.js';
 import { RelationshipType } from '../types/index.js';
 
-export function setupTools(server: Server, storage: StorageBackend): void {
+const SOURCE_TYPES = [
+  'chat_message',
+  'web_page',
+  'pdf',
+  'email',
+  'transcript',
+  'document',
+  'api_payload',
+] as const;
+
+const STEP_TYPES = [
+  'premise',
+  'inference',
+  'evidence',
+  'counterargument',
+  'rebuttal',
+  'conclusion',
+] as const;
+
+const METHODOLOGIES = [
+  'deductive',
+  'inductive',
+  'abductive',
+  'analogical',
+  'mixed',
+] as const;
+
+// Loose schemas: nodes carry many type-specific optional fields that are
+// stored in the properties JSON blob, so unknown keys must pass through.
+const nodeOutput = z.looseObject({ name: z.string() });
+const relationOutput = z.looseObject({
+  from: z.string(),
+  to: z.string(),
+  relationType: z.string(),
+});
+const graphOutput = {
+  entities: z.array(nodeOutput),
+  relations: z.array(relationOutput),
+};
+
+const READ_ONLY = { readOnlyHint: true, openWorldHint: false };
+const WRITE = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+function graphResult(graph: KnowledgeGraph) {
+  return {
+    content: [
+      { type: 'text' as const, text: JSON.stringify(graph, null, 2) },
+    ],
+    structuredContent: graph as unknown as Record<string, unknown>,
+  };
+}
+
+function errorResult(message: string) {
+  return {
+    content: [{ type: 'text' as const, text: message }],
+    isError: true,
+  };
+}
+
+export function setupTools(server: McpServer, storage: StorageBackend): void {
   console.error('Setting up knowledge graph tools');
 
-  const tools = [
+  server.registerTool(
+    'search_nodes',
     {
-      name: 'search_nodes',
       title: 'Search Knowledge Graph',
       description:
         'Full-text search across all nodes in the knowledge graph. Returns matching nodes ranked by relevance with their relationships.',
-      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Search query' },
-          nodeTypes: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Optional filter by node types',
-          },
-          limit: {
-            type: 'number',
-            description: 'Max results (default 20)',
-          },
-        },
-        required: ['query'],
+        query: z.string().describe('Search query'),
+        nodeTypes: z
+          .array(z.string())
+          .optional()
+          .describe('Optional filter by node types'),
+        limit: z.number().optional().describe('Max results (default 20)'),
       },
+      outputSchema: graphOutput,
+      annotations: READ_ONLY,
     },
+    async ({ query, nodeTypes, limit }) =>
+      graphResult(storage.searchNodes(query, { nodeTypes, limit }))
+  );
+
+  server.registerTool(
+    'explore_context',
     {
-      name: 'explore_context',
       title: 'Explore Graph Context',
       description:
         'Explore the knowledge graph neighborhood around one or more nodes. Uses weighted traversal to surface the most important connections.',
-      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {
-        type: 'object',
-        properties: {
-          entities: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Entity node names to explore (up to 3)',
-          },
-          concepts: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Concept node names to explore (up to 3)',
-          },
-          maxDepth: {
-            type: 'number',
-            description: 'Max traversal depth (default 2)',
-          },
-          minWeight: {
-            type: 'number',
-            description: 'Minimum edge weight to follow (default 0.0)',
-          },
-        },
+        entities: z
+          .array(z.string())
+          .optional()
+          .describe('Entity node names to explore (up to 3)'),
+        concepts: z
+          .array(z.string())
+          .optional()
+          .describe('Concept node names to explore (up to 3)'),
+        maxDepth: z.number().optional().describe('Max traversal depth (default 2)'),
+        minWeight: z
+          .number()
+          .optional()
+          .describe('Minimum edge weight to follow (default 0.0)'),
       },
+      outputSchema: graphOutput,
+      annotations: READ_ONLY,
     },
+    async ({ entities, concepts, maxDepth, minWeight }) => {
+      const nodeNames = [
+        ...(entities ?? []).slice(0, 3),
+        ...(concepts ?? []).slice(0, 3),
+      ];
+      if (nodeNames.length === 0) {
+        return errorResult(
+          'No nodes specified. Provide at least one entity or concept name.'
+        );
+      }
+      return graphResult(
+        storage.exploreContext(nodeNames, {
+          maxDepth: maxDepth ?? 2,
+          minWeight: minWeight ?? 0.0,
+        })
+      );
+    }
+  );
+
+  server.registerTool(
+    'create_nodes',
     {
-      name: 'create_nodes',
       title: 'Create or Update Nodes',
       description:
         'Create or update nodes in the knowledge graph. Supports all node types: Entity, Event, Concept, Attribute, Proposition, Emotion, Agent, ScientificInsight, Law, Location, Thought, ReasoningChain, ReasoningStep, Source, EmotionalEvent. Note: re-creating an existing node overwrites its fields.',
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
       inputSchema: {
-        type: 'object',
-        properties: {
-          nodes: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                name: { type: 'string' },
-                entityType: { type: 'string' },
-                observations: {
-                  type: 'array',
-                  items: { type: 'string' },
-                },
-                description: { type: 'string' },
-                subType: { type: 'string' },
-                confidence: { type: 'number' },
-                source: { type: 'string' },
-                statement: { type: 'string' },
-                content: { type: 'string' },
-                thoughtContent: { type: 'string' },
-                definition: { type: 'string' },
-                domain: { type: 'string' },
-                hypothesis: { type: 'string' },
-                conclusion: { type: 'string' },
-                stance: {
-                  type: 'string',
-                  enum: ['support', 'oppose', 'uncertain', 'mixed'],
-                },
-                sourceType: {
-                  type: 'string',
-                  enum: [
-                    'chat_message',
-                    'web_page',
-                    'pdf',
-                    'email',
-                    'transcript',
-                    'document',
-                    'api_payload',
-                  ],
-                },
-                uri: { type: 'string' },
-                collectedAt: { type: 'string' },
-                contentHash: { type: 'string' },
-                timestamp: { type: 'string' },
-                valence: { type: 'number' },
-                arousal: { type: 'number' },
-                intensity: { type: 'number' },
-                label: { type: 'string' },
-                notes: { type: 'string' },
-              },
-              required: ['name', 'entityType'],
-            },
-          },
-        },
-        required: ['nodes'],
+        nodes: z.array(
+          z.looseObject({
+            name: z.string(),
+            entityType: z.string(),
+            observations: z.array(z.string()).optional(),
+            aliases: z.array(z.string()).optional(),
+            description: z.string().optional(),
+            subType: z.string().optional(),
+            confidence: z.number().optional(),
+            source: z.string().optional(),
+            statement: z.string().optional(),
+            content: z.string().optional(),
+            thoughtContent: z.string().optional(),
+            definition: z.string().optional(),
+            domain: z.string().optional(),
+            hypothesis: z.string().optional(),
+            conclusion: z.string().optional(),
+            stance: z.enum(['support', 'oppose', 'uncertain', 'mixed']).optional(),
+            sourceType: z.enum(SOURCE_TYPES).optional(),
+            uri: z.string().optional(),
+            collectedAt: z.string().optional(),
+            contentHash: z.string().optional(),
+            timestamp: z.string().optional(),
+            valence: z.number().optional(),
+            arousal: z.number().optional(),
+            intensity: z.number().optional(),
+            label: z.string().optional(),
+            notes: z.string().optional(),
+          })
+        ),
       },
+      outputSchema: {
+        created: z.number(),
+        nodes: z.array(z.string()),
+      },
+      annotations: WRITE,
     },
+    async ({ nodes }) => {
+      const created = storage.createNodes(nodes as Entity[]);
+      const result = { created: created.length, nodes: created.map((n) => n.name) };
+      return {
+        content: [
+          { type: 'text' as const, text: JSON.stringify(result, null, 2) },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    'create_relations',
     {
-      name: 'create_relations',
       title: 'Create or Update Relations',
       description:
         'Create or update relationships between nodes. Always include context describing why nodes are connected.',
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
       inputSchema: {
-        type: 'object',
-        properties: {
-          relations: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                from: { type: 'string' },
-                to: { type: 'string' },
-                relationType: { type: 'string' },
-                relationshipType: {
-                  type: 'string',
-                  enum: Object.values(RelationshipType),
-                },
-                context: { type: 'string' },
-                confidenceScore: { type: 'number' },
-                weight: { type: 'number' },
-                sources: {
-                  type: 'array',
-                  items: { type: 'string' },
-                },
-              },
-              required: ['from', 'to', 'relationType'],
-            },
-          },
-        },
-        required: ['relations'],
+        relations: z.array(
+          z.looseObject({
+            from: z.string(),
+            to: z.string(),
+            relationType: z.string(),
+            relationshipType: z
+              .enum(Object.values(RelationshipType) as [string, ...string[]])
+              .optional(),
+            context: z.string().optional(),
+            confidenceScore: z.number().optional(),
+            weight: z.number().optional(),
+            sources: z.array(z.string()).optional(),
+          })
+        ),
       },
+      outputSchema: { created: z.number() },
+      annotations: WRITE,
     },
+    async ({ relations }) => {
+      const created = storage.createRelations(relations as Relation[]);
+      const result = { created: created.length };
+      return {
+        content: [
+          { type: 'text' as const, text: JSON.stringify(result, null, 2) },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    'add_sources',
     {
-      name: 'add_sources',
       title: 'Add Provenance Sources',
       description:
         'Create Source nodes and optionally link them to existing nodes via DERIVED_FROM edges.',
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
       inputSchema: {
-        type: 'object',
-        properties: {
-          sources: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                name: { type: 'string' },
-                sourceType: {
-                  type: 'string',
-                  enum: [
-                    'chat_message',
-                    'web_page',
-                    'pdf',
-                    'email',
-                    'transcript',
-                    'document',
-                    'api_payload',
-                  ],
-                },
-                title: { type: 'string' },
-                uri: { type: 'string' },
-                collectedAt: { type: 'string' },
-              },
-              required: ['name', 'sourceType'],
-            },
-          },
-          derivedFrom: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                nodeName: { type: 'string' },
-                sourceName: { type: 'string' },
-              },
-              required: ['nodeName', 'sourceName'],
-            },
-            description:
-              'Link existing nodes to these sources via DERIVED_FROM',
-          },
-        },
-        required: ['sources'],
+        sources: z.array(
+          z.looseObject({
+            name: z.string(),
+            sourceType: z.enum(SOURCE_TYPES),
+            title: z.string().optional(),
+            uri: z.string().optional(),
+            collectedAt: z.string().optional(),
+          })
+        ),
+        derivedFrom: z
+          .array(
+            z.object({
+              nodeName: z.string(),
+              sourceName: z.string(),
+            })
+          )
+          .optional()
+          .describe('Link existing nodes to these sources via DERIVED_FROM'),
       },
+      outputSchema: { created: z.number(), linked: z.number() },
+      annotations: WRITE,
     },
+    async ({ sources, derivedFrom }) => {
+      const sourceNodes = sources.map(
+        (s) =>
+          ({
+            name: s.name,
+            entityType: 'Source',
+            observations: [],
+            sourceType: s.sourceType,
+            description: s.title ?? undefined,
+            uri: s.uri,
+            collectedAt: s.collectedAt,
+          }) as Entity
+      );
+      storage.createNodes(sourceNodes);
+
+      let linked = 0;
+      if (derivedFrom?.length) {
+        const relations: Relation[] = derivedFrom.map((d) => ({
+          from: d.nodeName,
+          to: d.sourceName,
+          relationType: 'DERIVED_FROM',
+          weight: 1.0,
+        }));
+        linked = storage.createRelations(relations).length;
+      }
+
+      const result = { created: sourceNodes.length, linked };
+      return {
+        content: [
+          { type: 'text' as const, text: JSON.stringify(result, null, 2) },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    'get_temporal_sequence',
     {
-      name: 'get_temporal_sequence',
       title: 'Get Temporal Sequence',
       description:
         'Retrieve a chronological sequence of nodes connected by temporal relations (NEXT, BEFORE, AFTER, CAUSES, etc.).',
-      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {
-        type: 'object',
-        properties: {
-          startNodeName: { type: 'string' },
-          direction: {
-            type: 'string',
-            enum: ['forward', 'backward', 'both'],
-          },
-          maxEvents: { type: 'number' },
-        },
-        required: ['startNodeName'],
+        startNodeName: z.string(),
+        direction: z.enum(['forward', 'backward', 'both']).optional(),
+        maxEvents: z.number().optional(),
       },
+      outputSchema: graphOutput,
+      annotations: READ_ONLY,
     },
+    async ({ startNodeName, direction, maxEvents }) =>
+      graphResult(
+        storage.getTemporalSequence(startNodeName, {
+          direction: direction ?? 'both',
+          maxEvents: maxEvents ?? 10,
+        })
+      )
+  );
+
+  server.registerTool(
+    'create_reasoning_chain',
     {
-      name: 'create_reasoning_chain',
       title: 'Create Reasoning Chain',
       description:
         'Create a structured reasoning chain with ordered steps. Each step represents a logical move (premise, inference, evidence, etc.).',
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
       inputSchema: {
-        type: 'object',
-        properties: {
-          chainName: { type: 'string' },
-          description: { type: 'string' },
-          conclusion: { type: 'string' },
-          confidenceScore: { type: 'number' },
-          methodology: {
-            type: 'string',
-            enum: [
-              'deductive',
-              'inductive',
-              'abductive',
-              'analogical',
-              'mixed',
-            ],
-          },
-          domain: { type: 'string' },
-          sourceThought: { type: 'string' },
-          tags: { type: 'array', items: { type: 'string' } },
-          steps: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                name: { type: 'string' },
-                content: { type: 'string' },
-                stepNumber: { type: 'number' },
-                stepType: {
-                  type: 'string',
-                  enum: [
-                    'premise',
-                    'inference',
-                    'evidence',
-                    'counterargument',
-                    'rebuttal',
-                    'conclusion',
-                  ],
-                },
-                confidence: { type: 'number' },
-                evidenceType: { type: 'string' },
-                supportingReferences: {
-                  type: 'array',
-                  items: { type: 'string' },
-                },
-                previousSteps: {
-                  type: 'array',
-                  items: { type: 'string' },
-                },
-              },
-              required: [
-                'name',
-                'content',
-                'stepNumber',
-                'stepType',
-                'confidence',
-              ],
-            },
-          },
-        },
-        required: [
-          'chainName',
-          'description',
-          'conclusion',
-          'confidenceScore',
-          'steps',
-        ],
+        chainName: z.string(),
+        description: z.string(),
+        conclusion: z.string(),
+        confidenceScore: z.number(),
+        methodology: z.enum(METHODOLOGIES).optional(),
+        domain: z.string().optional(),
+        sourceThought: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        steps: z.array(
+          z.object({
+            name: z.string(),
+            content: z.string(),
+            stepNumber: z.number(),
+            stepType: z.enum(STEP_TYPES),
+            confidence: z.number(),
+            evidenceType: z.string().optional(),
+            supportingReferences: z.array(z.string()).optional(),
+            previousSteps: z.array(z.string()).optional(),
+          })
+        ),
       },
+      outputSchema: {
+        success: z.boolean(),
+        message: z.string(),
+        chainName: z.string(),
+      },
+      annotations: WRITE,
     },
+    async (args) => {
+      const chain = storage.createReasoningChain(
+        {
+          name: args.chainName,
+          description: args.description,
+          conclusion: args.conclusion,
+          confidenceScore: args.confidenceScore,
+          methodology: args.methodology ?? 'mixed',
+          domain: args.domain,
+          sourceThought: args.sourceThought,
+          tags: args.tags,
+        },
+        args.steps
+      );
+      const result = {
+        success: true,
+        message: `Created reasoning chain "${chain.name}"`,
+        chainName: chain.name,
+      };
+      return {
+        content: [
+          { type: 'text' as const, text: JSON.stringify(result, null, 2) },
+        ],
+        structuredContent: result,
+      };
+    }
+  );
+
+  server.registerTool(
+    'get_reasoning_chain',
     {
-      name: 'get_reasoning_chain',
       title: 'Get Reasoning Chain',
       description:
         'Retrieve a reasoning chain by name, or find chains related to given topics.',
-      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: {
-        type: 'object',
-        properties: {
-          chainName: { type: 'string' },
-          entities: { type: 'array', items: { type: 'string' } },
-          concepts: { type: 'array', items: { type: 'string' } },
-          limit: { type: 'number' },
-        },
+        chainName: z.string().optional(),
+        entities: z.array(z.string()).optional(),
+        concepts: z.array(z.string()).optional(),
+        limit: z.number().optional(),
       },
+      outputSchema: graphOutput,
+      annotations: READ_ONLY,
     },
-  ];
-
-  // Register tool list
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
-
-  // Register tool handler
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    if (!args) throw new Error(`No arguments provided for tool: ${name}`);
-
-    let result: unknown;
-
-    switch (name) {
-      case 'search_nodes': {
-        const graph = storage.searchNodes(args.query as string, {
-          nodeTypes: args.nodeTypes as string[] | undefined,
-          limit: args.limit as number | undefined,
-        });
-        result = graph;
-        break;
+    async ({ chainName, entities, concepts, limit }) => {
+      if (chainName) {
+        return graphResult(storage.getReasoningChain(chainName));
       }
-
-      case 'explore_context': {
-        const nodeNames: string[] = [];
-        if (Array.isArray(args.entities))
-          nodeNames.push(...(args.entities as string[]).slice(0, 3));
-        if (Array.isArray(args.concepts))
-          nodeNames.push(...(args.concepts as string[]).slice(0, 3));
-
-        if (nodeNames.length === 0) {
-          result =
-            'No nodes specified. Provide at least one entity or concept name.';
-          break;
-        }
-
-        const graph = storage.exploreContext(nodeNames, {
-          maxDepth: (args.maxDepth as number) || 2,
-          minWeight: (args.minWeight as number) || 0.0,
-        });
-        result = graph;
-        break;
-      }
-
-      case 'create_nodes': {
-        const created = storage.createNodes(args.nodes as Entity[]);
-        result = {
-          created: created.length,
-          nodes: created.map((n) => n.name),
-        };
-        break;
-      }
-
-      case 'create_relations': {
-        const created = storage.createRelations(args.relations as Relation[]);
-        result = { created: created.length };
-        break;
-      }
-
-      case 'add_sources': {
-        const sources = (args.sources as Record<string, unknown>[]).map(
-          (s) =>
-            ({
-              name: s.name as string,
-              entityType: 'Source',
-              observations: [],
-              sourceType: s.sourceType as string,
-              description: (s.title as string) ?? undefined,
-              uri: s.uri as string | undefined,
-              collectedAt: s.collectedAt as string | undefined,
-            }) as Entity
+      const topics = [...(entities ?? []), ...(concepts ?? [])];
+      if (topics.length === 0) {
+        return errorResult(
+          'Provide chainName, entities, or concepts to find reasoning chains.'
         );
-        storage.createNodes(sources);
-
-        if (Array.isArray(args.derivedFrom)) {
-          const relations: Relation[] = (
-            args.derivedFrom as { nodeName: string; sourceName: string }[]
-          ).map((d) => ({
-            from: d.nodeName,
-            to: d.sourceName,
-            relationType: 'DERIVED_FROM',
-            weight: 1.0,
-          }));
-          storage.createRelations(relations);
-        }
-
-        result = { created: sources.length };
-        break;
       }
-
-      case 'get_temporal_sequence': {
-        const graph = storage.getTemporalSequence(
-          args.startNodeName as string,
-          {
-            direction:
-              (args.direction as 'forward' | 'backward' | 'both') || 'both',
-            maxEvents: (args.maxEvents as number) || 10,
-          }
-        );
-        result = graph;
-        break;
-      }
-
-      case 'create_reasoning_chain': {
-        const steps = (
-          (args.steps as ReasoningStepInputRaw[]) ?? []
-        ).map((s) => ({
-          name: s.name,
-          content: s.content,
-          stepNumber: s.stepNumber,
-          stepType: s.stepType,
-          confidence: s.confidence,
-          evidenceType: s.evidenceType,
-          supportingReferences: s.supportingReferences,
-          previousSteps: s.previousSteps,
-        }));
-
-        const chain = storage.createReasoningChain(
-          {
-            name: args.chainName as string,
-            description: args.description as string,
-            conclusion: args.conclusion as string,
-            confidenceScore: args.confidenceScore as number,
-            methodology:
-              (args.methodology as
-                | 'deductive'
-                | 'inductive'
-                | 'abductive'
-                | 'analogical'
-                | 'mixed') ?? 'mixed',
-            domain: args.domain as string | undefined,
-            sourceThought: args.sourceThought as string | undefined,
-            tags: args.tags as string[] | undefined,
-          },
-          steps
-        );
-
-        result = {
-          success: true,
-          message: `Created reasoning chain "${chain.name}"`,
-          chainName: chain.name,
-        };
-        break;
-      }
-
-      case 'get_reasoning_chain': {
-        if (args.chainName) {
-          result = storage.getReasoningChain(args.chainName as string);
-        } else {
-          const topics: string[] = [
-            ...((args.entities as string[]) ?? []),
-            ...((args.concepts as string[]) ?? []),
-          ];
-          if (topics.length === 0) {
-            result =
-              'Provide chainName, entities, or concepts to find reasoning chains.';
-            break;
-          }
-          result = storage.findReasoningChains(
-            topics,
-            (args.limit as number) ?? 3
-          );
-        }
-        break;
-      }
-
-      default:
-        throw new Error(`Unknown tool: ${name}`);
+      return graphResult(storage.findReasoningChains(topics, limit ?? 3));
     }
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text:
-            typeof result === 'string'
-              ? result
-              : JSON.stringify(result, null, 2),
-        },
-      ],
-    };
-  });
+  );
 
   console.error('All tools have been registered successfully');
-}
-
-interface ReasoningStepInputRaw {
-  name: string;
-  content: string;
-  stepNumber: number;
-  stepType:
-    | 'premise'
-    | 'inference'
-    | 'evidence'
-    | 'counterargument'
-    | 'rebuttal'
-    | 'conclusion';
-  confidence: number;
-  evidenceType?: string;
-  supportingReferences?: string[];
-  previousSteps?: string[];
 }

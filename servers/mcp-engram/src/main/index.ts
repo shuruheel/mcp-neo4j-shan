@@ -1,9 +1,5 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  GetPromptRequestSchema,
-  ListPromptsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
 
 import * as os from 'os';
 import * as path from 'path';
@@ -11,6 +7,31 @@ import * as path from 'path';
 import { SqliteBackend } from '../storage/index.js';
 import { setupTools } from './tools.js';
 import { SYSTEM_PROMPT, TOOL_PROMPTS } from './prompts.js';
+
+function setupPrompts(server: McpServer): void {
+  server.registerPrompt(
+    'system',
+    {
+      description:
+        'Workflow guidance for building and exploring the knowledge graph',
+    },
+    async () => ({
+      messages: [
+        { role: 'user', content: { type: 'text', text: SYSTEM_PROMPT } },
+      ],
+    })
+  );
+
+  for (const [name, text] of Object.entries(TOOL_PROMPTS)) {
+    server.registerPrompt(
+      name,
+      { description: `Usage guidance for the ${name} tool` },
+      async () => ({
+        messages: [{ role: 'user', content: { type: 'text', text } }],
+      })
+    );
+  }
+}
 
 export async function main() {
   console.error('Starting mcp-engram server...');
@@ -23,40 +44,10 @@ export async function main() {
   storage.initialize();
   console.error(`Database opened at ${dbPath}`);
 
-  const server = new Server(
-    { name: 'mcp-engram', version: '2.0.0' },
-    { capabilities: { tools: {}, prompts: {} } }
-  );
+  const server = new McpServer({ name: 'mcp-engram', version: '2.0.0' });
 
   setupTools(server, storage);
-
-  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
-    prompts: [
-      {
-        name: 'system',
-        description:
-          'Workflow guidance for building and exploring the knowledge graph',
-      },
-      ...Object.keys(TOOL_PROMPTS).map((name) => ({
-        name,
-        description: `Usage guidance for the ${name} tool`,
-      })),
-    ],
-  }));
-
-  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-    const promptName = request.params.name;
-    const promptContent =
-      promptName === 'system' ? SYSTEM_PROMPT : TOOL_PROMPTS[promptName];
-    if (!promptContent) {
-      throw new Error(`Unknown prompt: ${promptName}`);
-    }
-    return {
-      messages: [
-        { role: 'user', content: { type: 'text', text: promptContent } },
-      ],
-    };
-  });
+  setupPrompts(server);
 
   process.on('SIGINT', () => {
     storage.close();
