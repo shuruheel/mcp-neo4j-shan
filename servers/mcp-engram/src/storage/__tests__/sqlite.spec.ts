@@ -65,6 +65,73 @@ describe('createNodes', () => {
     expect(result!.observations).toContain('v1');
     expect(result!.observations).toContain('v2');
   });
+  it('merges on conflict: sparse re-create preserves existing fields', () => {
+    backend.createNodes([
+      {
+        name: 'Marie Curie',
+        entityType: 'Entity',
+        observations: [],
+        description: 'Physicist and chemist',
+        subType: 'Person',
+        confidence: 0.9,
+        biography: 'Pioneer of radioactivity research',
+      } as Entity,
+    ]);
+    // Re-create with only a new field — nothing else provided
+    backend.createNodes([
+      {
+        name: 'Marie Curie',
+        entityType: 'Entity',
+        observations: [],
+        source: 'conversation',
+      } as Entity,
+    ]);
+    const result = backend.getNodeByName('Marie Curie');
+    expect(result!.description).toBe('Physicist and chemist');
+    expect(result!.subType).toBe('Person');
+    expect(result!.confidence).toBe(0.9);
+    expect((result as Entity).biography).toBe(
+      'Pioneer of radioactivity research'
+    );
+    expect((result as Entity).source).toBe('conversation');
+  });
+  it('merges on conflict: incoming values win over existing ones', () => {
+    backend.createNodes([
+      {
+        name: 'B',
+        entityType: 'Entity',
+        observations: [],
+        description: 'old',
+        confidence: 0.9,
+      },
+    ]);
+    backend.createNodes([
+      {
+        name: 'B',
+        entityType: 'Entity',
+        observations: [],
+        description: 'new',
+      },
+    ]);
+    const result = backend.getNodeByName('B');
+    expect(result!.description).toBe('new');
+    expect(result!.confidence).toBe(0.9);
+  });
+  it('merged fields remain searchable via FTS', () => {
+    backend.createNodes([
+      {
+        name: 'C',
+        entityType: 'Concept',
+        observations: [],
+        definition: 'quantum entanglement phenomenon',
+      } as Entity,
+    ]);
+    backend.createNodes([
+      { name: 'C', entityType: 'Concept', observations: [], domain: 'physics' } as Entity,
+    ]);
+    const graph = backend.searchNodes('entanglement');
+    expect(graph.entities.map((e) => e.name)).toContain('C');
+  });
   it('creates all 15 node types', () => {
     const types = [
       'Entity',
@@ -128,6 +195,32 @@ describe('deleteNodes', () => {
 });
 // ---- relations ----
 describe('createRelations', () => {
+  it('merges on conflict: sparse re-create preserves weight and context', () => {
+    backend.createNodes([
+      { name: 'A', entityType: 'Entity', observations: [] },
+      { name: 'B', entityType: 'Concept', observations: [] },
+    ]);
+    backend.createRelations([
+      {
+        from: 'A',
+        to: 'B',
+        relationType: 'SUPPORTS',
+        context: 'A supports B strongly',
+        weight: 0.9,
+        confidenceScore: 0.8,
+      },
+    ]);
+    // Re-create the same edge without context/weight/confidence
+    backend.createRelations([{ from: 'A', to: 'B', relationType: 'SUPPORTS' }]);
+    const graph = backend.exploreContext(['A'], { maxDepth: 1 });
+    const rel = graph.relations.find(
+      (r) => r.from === 'A' && r.to === 'B' && r.relationType === 'SUPPORTS'
+    );
+    expect(rel).toBeDefined();
+    expect(rel!.context).toBe('A supports B strongly');
+    expect(rel!.weight).toBe(0.9);
+    expect(rel!.confidenceScore ?? (rel as any).confidence).toBe(0.8);
+  });
   it('creates and retrieves relations', () => {
     backend.createNodes([
       { name: 'A', entityType: 'Entity', observations: [] },

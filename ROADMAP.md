@@ -18,11 +18,9 @@ roughly ordered within each section; nothing here is a commitment.
 
 ## Tool design
 
-- **Merge-not-overwrite upserts** — `createNodes`/`createRelations` currently
-  replace field values on conflict (`= excluded.*`), so re-creating a node with
-  sparser data silently discards prior fields. Switch to COALESCE-style merge
-  semantics, then relax the `destructiveHint: true` annotations on the write
-  tools to `false` (they become genuinely additive).
+- ~~**Merge-not-overwrite upserts**~~ — done: node and edge re-creates merge
+  onto the existing row (provided fields win, absent fields are preserved),
+  and the write tools are annotated `destructiveHint: false`.
 - **Consolidate `relationType` / `relationshipType`** in `create_relations` —
   two overlapping fields (free string + enum) confuse models filling the
   schema. Keep one; accept the enum values as suggestions, not a closed set.
