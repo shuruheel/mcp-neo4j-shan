@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/shuruheel-mcp-engram-badge.png)](https://mseep.ai/app/shuruheel-mcp-engram)
+
 # MCP Engram — Cognitive Knowledge Graph
 
 A Model Context Protocol (MCP) server for building and exploring a cognitive neuroscience-inspired knowledge graph. Models thought, emotion, reasoning, and episodic memory after the structure of the human mind. Backed by SQLite — zero infrastructure, single file on disk, works offline.
